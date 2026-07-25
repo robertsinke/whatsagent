@@ -68,6 +68,11 @@ In production there is no Vite proxy — the backend serves the SPA and API from
 
 Restarting the app resumes the same session — it does not re-pair. Re-pair only when the UI shows `qr_expired` or `logged_out` (use the regenerate-pairing affordance). Avoid frequent re-pairing; that is the main ban risk, not ordinary message traffic.
 
+`npm install` applies a local Baileys compatibility shim for the current
+WhatsApp Desktop pairing identity. The runtime also resolves the live WhatsApp
+Web protocol version with a tested fallback. `npm run check` fails if a Baileys
+upgrade changes the patched layout, so the shim cannot silently disappear.
+
 ## Draft providers (subscription CLIs)
 
 Provider choice is a setting (`provider`: `claude` | `codex` | `ollama`, optional `provider_model`). Defaults to Claude.

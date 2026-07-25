@@ -9,8 +9,14 @@ import { openDatabase, type AppDatabase } from './store/db.js';
 import { getDraft } from './store/drafts.js';
 import { getMessage, upsertMessage } from './store/messages.js';
 import { enqueueDraftOutbox, getOutbox } from './store/outbox.js';
-import { createApp, resolveOutboxDryRun, type App } from './index.js';
+import {
+	createApp,
+	HISTORY_SYNC_COMPLETE_SETTING,
+	resolveOutboxDryRun,
+	type App
+} from './index.js';
 import type { Memory } from './agent/memory/memory.js';
+import { getSetting, setSetting } from './store/settings.js';
 
 class FakeChannel implements Channel {
 	readonly listeners = new Set<ChannelEventListener>();
@@ -120,6 +126,7 @@ describe('live draft scheduler wiring', () => {
 			messages: 1
 		});
 		await vi.waitFor(() => expect(draft).toHaveBeenCalledTimes(1));
+		expect(getSetting(db!, HISTORY_SYNC_COMPLETE_SETTING)).toBe('true');
 		expect(getDraft(db!, 'alice@s.whatsapp.net')?.basis_msg_id).toBe('history-basis');
 		const queued = enqueueDraftOutbox(db!, {
 			chatJid: 'alice@s.whatsapp.net',
@@ -162,5 +169,29 @@ describe('live draft scheduler wiring', () => {
 		});
 		await vi.waitFor(() => expect(draft).toHaveBeenCalledTimes(3));
 		expect(getDraft(db!, 'alice@s.whatsapp.net')?.basis_msg_id).toBe('reconnect-history');
+	});
+});
+
+describe('restart recovery', () => {
+	it('restores ready status from a persisted completed history sync', async () => {
+		dataDir = mkdtempSync(join(tmpdir(), 'whatsagent-runtime-'));
+		db = openDatabase({ dataDir });
+		setSetting(db, HISTORY_SYNC_COMPLETE_SETTING, 'true');
+		const channel = new FakeChannel();
+		const sessionStatuses: string[] = [];
+		app = createApp({
+			db,
+			channel,
+			port: 0,
+			staticDir: null
+		});
+		app.events.subscribe((event) => {
+			if (event.type === 'session') sessionStatuses.push(event.session.status);
+		});
+
+		await app.start();
+		channel.emit({ type: 'connection', state: 'connected' });
+
+		expect(sessionStatuses.at(-1)).toBe('ready');
 	});
 });

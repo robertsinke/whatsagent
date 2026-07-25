@@ -9,7 +9,9 @@ import { upsertMessage } from '../../store/messages.js';
 import type { ChannelEvent } from '../channel.js';
 import { createSqliteAuthStore, type SqliteAuthStore } from './auth-store.js';
 import {
+	WA_WEB_VERSION_FALLBACK,
 	WhatsAppConnection,
+	resolveWhatsAppWebVersion,
 	type SocketFactory,
 	type WhatsAppSocket
 } from './connection.js';
@@ -68,6 +70,7 @@ describe('WhatsApp connection', () => {
 		const connection = new WhatsAppConnection(database, {
 			authStore,
 			socketFactory: fake.factory,
+			waVersion: WA_WEB_VERSION_FALLBACK,
 			reconnectDelayMs: 10
 		});
 		const events: ChannelEvent[] = [];
@@ -117,6 +120,7 @@ describe('WhatsApp connection', () => {
 		const connection = new WhatsAppConnection(database, {
 			authStore,
 			socketFactory: fake.factory,
+			waVersion: WA_WEB_VERSION_FALLBACK,
 			onError
 		});
 		const events: ChannelEvent[] = [];
@@ -164,12 +168,14 @@ describe('WhatsApp connection', () => {
 				saveCreds: async () => undefined,
 				clear: async () => undefined
 			},
-			socketFactory: fake.factory
+			socketFactory: fake.factory,
+			waVersion: WA_WEB_VERSION_FALLBACK
 		});
 		await connection.start();
 
 		const config = fake.configs[0]!;
 		expect(config.browser).toEqual(['Mac OS', 'Desktop', '14.4.1']);
+		expect(config.version).toEqual(WA_WEB_VERSION_FALLBACK);
 		expect(config.syncFullHistory).toBe(true);
 		expect(
 			await config.getMessage?.({ id: 'stored-id', remoteJid: 'alice@s.whatsapp.net' })
@@ -184,7 +190,8 @@ describe('WhatsApp connection', () => {
 		const connection = new WhatsAppConnection(database, {
 			// Factory, not a fixed instance: a reset must re-read the emptied tables.
 			createAuthStore: () => createSqliteAuthStore(database, key),
-			socketFactory: fake.factory
+			socketFactory: fake.factory,
+			waVersion: WA_WEB_VERSION_FALLBACK
 		});
 
 		await connection.start();
@@ -211,5 +218,59 @@ describe('WhatsApp connection', () => {
 		expect(fake.configs).toHaveLength(2);
 		// A rebuilt store means `initAuthCreds()`, not the cleared-but-cached object.
 		expect(after).not.toBe(before);
+	});
+
+	it('backs off repeated reconnects and resets the delay after pairing resumes', async () => {
+		vi.useFakeTimers();
+		const database = openTempDb();
+		const fake = fakeSocketFactory();
+		const connection = new WhatsAppConnection(database, {
+			authStore: createSqliteAuthStore(database, Buffer.alloc(32, 3)),
+			socketFactory: fake.factory,
+			waVersion: WA_WEB_VERSION_FALLBACK,
+			reconnectDelayMs: 10,
+			maxReconnectDelayMs: 40
+		});
+
+		await connection.start();
+		fake.sockets[0]!.emit('connection.update', { connection: 'close' });
+
+		await vi.advanceTimersByTimeAsync(9);
+		expect(fake.sockets).toHaveLength(1);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(fake.sockets).toHaveLength(2);
+
+		fake.sockets[1]!.emit('connection.update', { connection: 'close' });
+		await vi.advanceTimersByTimeAsync(19);
+		expect(fake.sockets).toHaveLength(2);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(fake.sockets).toHaveLength(3);
+
+		fake.sockets[2]!.emit('connection.update', { connection: 'close' });
+		await vi.advanceTimersByTimeAsync(40);
+		expect(fake.sockets).toHaveLength(4);
+
+		fake.sockets[3]!.emit('connection.update', { qr: 'fresh-qr' });
+		fake.sockets[3]!.emit('connection.update', { connection: 'close' });
+		await vi.advanceTimersByTimeAsync(10);
+		expect(fake.sockets).toHaveLength(5);
+	});
+
+	it('uses the live WhatsApp Web version and falls back when lookup fails', async () => {
+		const live: [number, number, number] = [2, 3000, 9999999999];
+		await expect(
+			resolveWhatsAppWebVersion(async () => ({ version: live }))
+		).resolves.toEqual(live);
+		await expect(
+			resolveWhatsAppWebVersion(async () => ({
+				version: [0, 0, 0],
+				error: new Error('offline')
+			}))
+		).resolves.toEqual(WA_WEB_VERSION_FALLBACK);
+		await expect(
+			resolveWhatsAppWebVersion(async () => {
+				throw new Error('offline');
+			})
+		).resolves.toEqual(WA_WEB_VERSION_FALLBACK);
 	});
 });

@@ -2,10 +2,12 @@ import makeWASocket, {
 	Browsers,
 	BufferJSON,
 	DisconnectReason,
+	fetchLatestWaWebVersion,
 	type GroupMetadata,
 	type UserFacingSocketConfig,
 	type WAMessage,
-	type WAMessageKey
+	type WAMessageKey,
+	type WAVersion
 } from 'baileys';
 import type { AppDatabase } from '../../store/db.js';
 import { getMessage } from '../../store/messages.js';
@@ -35,6 +37,27 @@ export type WhatsAppSocket = Partial<WhatsAppSendSocket> & {
 
 export type SocketFactory = (config: UserFacingSocketConfig) => WhatsAppSocket;
 
+/**
+ * Baileys' rc13 bundled version currently gets rejected before WhatsApp emits
+ * the first pairing QR. Runtime startup resolves the live web version; this is
+ * the last live-tested value used only when that lookup is unavailable.
+ */
+export const WA_WEB_VERSION_FALLBACK: WAVersion = [2, 3000, 1043856522];
+
+type WhatsAppVersionFetcher = () => Promise<{ version: WAVersion; error?: unknown }>;
+
+export async function resolveWhatsAppWebVersion(
+	fetchVersion: WhatsAppVersionFetcher = () =>
+		fetchLatestWaWebVersion({ signal: AbortSignal.timeout(10_000) })
+): Promise<WAVersion> {
+	try {
+		const result = await fetchVersion();
+		return result.error ? WA_WEB_VERSION_FALLBACK : result.version;
+	} catch {
+		return WA_WEB_VERSION_FALLBACK;
+	}
+}
+
 export type WhatsAppConnectionOptions = {
 	socketFactory?: SocketFactory;
 	authStore?: SqliteAuthStore;
@@ -43,7 +66,10 @@ export type WhatsAppConnectionOptions = {
 	 * used, since a reset must produce a store reading the now-empty tables.
 	 */
 	createAuthStore?: () => SqliteAuthStore;
+	waVersion?: WAVersion;
+	resolveWaVersion?: () => Promise<WAVersion>;
 	reconnectDelayMs?: number;
+	maxReconnectDelayMs?: number;
 	groupCacheSize?: number;
 	onError?: (error: Error) => void;
 };
@@ -105,7 +131,10 @@ export class WhatsAppConnection implements Channel {
 	readonly #socketFactory: SocketFactory;
 	readonly #createAuthStore: () => SqliteAuthStore;
 	#authStore: SqliteAuthStore;
+	#waVersion?: WAVersion;
+	readonly #resolveWaVersion: () => Promise<WAVersion>;
 	readonly #reconnectDelayMs: number;
+	readonly #maxReconnectDelayMs: number;
 	readonly #groupCache: GroupMetadataCache;
 	readonly #onError?: (error: Error) => void;
 	readonly #getStoredMessage: ReturnType<typeof createStoredMessageLoader>;
@@ -116,6 +145,7 @@ export class WhatsAppConnection implements Channel {
 	#reconnectTimer?: ReturnType<typeof setTimeout>;
 	#detachIngest?: () => void;
 	#running = false;
+	#reconnectAttempt = 0;
 	#state?: ChannelConnectionState;
 
 	constructor(db: AppDatabase, options: WhatsAppConnectionOptions = {}) {
@@ -129,7 +159,13 @@ export class WhatsAppConnection implements Channel {
 				? () => options.authStore!
 				: () => createSqliteAuthStore(db, loadKeychainEncryptionKey()));
 		this.#authStore = this.#createAuthStore();
-		this.#reconnectDelayMs = options.reconnectDelayMs ?? 1_000;
+		this.#waVersion = options.waVersion;
+		this.#resolveWaVersion = options.resolveWaVersion ?? resolveWhatsAppWebVersion;
+		this.#reconnectDelayMs = options.reconnectDelayMs ?? 5_000;
+		this.#maxReconnectDelayMs = Math.max(
+			this.#reconnectDelayMs,
+			options.maxReconnectDelayMs ?? 60_000
+		);
 		this.#groupCache = new GroupMetadataCache(options.groupCacheSize);
 		this.#onError = options.onError;
 		this.#getStoredMessage = createStoredMessageLoader(db);
@@ -143,7 +179,7 @@ export class WhatsAppConnection implements Channel {
 	async start(): Promise<void> {
 		if (this.#running) return;
 		this.#running = true;
-		this.#connect();
+		await this.#connect();
 	}
 
 	async stop(): Promise<void> {
@@ -192,15 +228,18 @@ export class WhatsAppConnection implements Channel {
 		);
 	}
 
-	#connect(): void {
+	async #connect(): Promise<void> {
 		if (!this.#running) return;
 		this.#setState('connecting');
 
 		try {
+			const version = this.#waVersion ?? (this.#waVersion = await this.#resolveWaVersion());
+			if (!this.#running) return;
 			this.#detachIngest?.();
 			const socket = this.#socketFactory({
 				auth: this.#authStore.state,
 				browser: Browsers.macOS('Desktop'),
+				version,
 				syncFullHistory: true,
 				getMessage: this.#getStoredMessage,
 				cachedGroupMetadata: async (jid) => this.#groupCache.get(jid)
@@ -243,9 +282,15 @@ export class WhatsAppConnection implements Channel {
 		lastDisconnect?: { error?: unknown };
 		qr?: string;
 	}): void {
-		if (update.qr) this.#emit({ type: 'pairing-needed', qr: update.qr });
+		if (update.qr) {
+			this.#reconnectAttempt = 0;
+			this.#emit({ type: 'pairing-needed', qr: update.qr });
+		}
 		if (update.connection === 'connecting') this.#setState('connecting');
-		if (update.connection === 'open') this.#setState('connected');
+		if (update.connection === 'open') {
+			this.#reconnectAttempt = 0;
+			this.#setState('connected');
+		}
 		if (update.connection !== 'close') return;
 
 		this.#socket = undefined;
@@ -262,10 +307,15 @@ export class WhatsAppConnection implements Channel {
 
 	#scheduleReconnect(): void {
 		if (!this.#running || this.#reconnectTimer) return;
+		const delay = Math.min(
+			this.#reconnectDelayMs * 2 ** Math.min(this.#reconnectAttempt, 10),
+			this.#maxReconnectDelayMs
+		);
+		this.#reconnectAttempt += 1;
 		this.#reconnectTimer = setTimeout(() => {
 			this.#reconnectTimer = undefined;
-			this.#connect();
-		}, this.#reconnectDelayMs);
+			void this.#connect();
+		}, delay);
 	}
 
 	#setState(state: ChannelConnectionState): void {

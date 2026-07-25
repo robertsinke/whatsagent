@@ -35,11 +35,12 @@ import { createDraftProvider, type DraftProviderName } from './providers/index.j
 import type { DraftProvider } from './providers/provider.js';
 import { getDraft } from './store/drafts.js';
 import { getChat } from './store/chats.js';
-import { getSetting, listSettings } from './store/settings.js';
+import { getSetting, listSettings, setSetting } from './store/settings.js';
 import { cancelStaleDraftOutbox } from './store/outbox.js';
 
 const DEFAULT_PORT = 8787;
 const DEFAULT_HOST = '127.0.0.1';
+export const HISTORY_SYNC_COMPLETE_SETTING = 'whatsapp_history_sync_complete';
 
 export type CreateAppOptions = {
 	db?: AppDatabase;
@@ -98,8 +99,10 @@ export function createApp(options: CreateAppOptions = {}): App {
 	const dataDir = options.dataDir ?? options.dbOptions?.dataDir ?? getDefaultDataDir();
 	const events = options.events ?? new EventBus();
 	const connection = createConnectionStatus();
+	let historySyncComplete = getSetting(db, HISTORY_SYNC_COMPLETE_SETTING) === 'true';
 	// D5 — derived pairing/sync view, pushed on every transition (QR rotations included).
 	const session = createSessionState({
+		initialSyncComplete: historySyncComplete,
 		onChange: (view) => events.emit({ type: 'session', session: view })
 	});
 	const ingestHooks = createIngestEventHooks(events);
@@ -277,9 +280,18 @@ export function createApp(options: CreateAppOptions = {}): App {
 				if (event.type === 'connection') {
 					connection.setState(event.state);
 					events.emit({ type: 'connection', state: event.state });
-					if (event.state === 'connected') pacer?.wake();
-					else pacer?.setDraftsPaused(true);
+					if (event.state === 'connected') {
+						pacer?.wake();
+						if (historySyncComplete) {
+							pacer?.setDraftsPaused(false);
+							completeHistorySync();
+						}
+					} else {
+						pacer?.setDraftsPaused(true);
+					}
 				} else if (event.type === 'pairing-needed') {
+					historySyncComplete = false;
+					setSetting(db, HISTORY_SYNC_COMPLETE_SETTING, 'false');
 					connection.setQr(event.qr);
 					events.emit({ type: 'pairing-needed', qr: event.qr });
 				} else if (event.type === 'sync-progress') {
@@ -291,8 +303,15 @@ export function createApp(options: CreateAppOptions = {}): App {
 						messagesSynced: view.messagesSynced,
 						complete: view.complete
 					});
-					if (event.isLatest) completeHistorySync();
-					if (event.isLatest) pacer?.setDraftsPaused(false);
+					if (event.isLatest) {
+						historySyncComplete = true;
+						setSetting(db, HISTORY_SYNC_COMPLETE_SETTING, 'true');
+						completeHistorySync();
+						pacer?.setDraftsPaused(false);
+					}
+				} else if (event.type === 'logged-out') {
+					historySyncComplete = false;
+					setSetting(db, HISTORY_SYNC_COMPLETE_SETTING, 'false');
 				} else if (event.type === 'message-committed') {
 					ingestHooks.onMessageIngested(event.message);
 					if (!event.message.from_me) {

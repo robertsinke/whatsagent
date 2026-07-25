@@ -10,7 +10,7 @@ type Harness = {
 };
 
 /** Fake clock + timer so QR rotation/expiry is deterministic and leak-free. */
-function harness(qrTtlMs = 20_000): Harness {
+function harness(qrTtlMs = 60_000, initialSyncComplete = false): Harness {
 	let clock = 1_000_000;
 	let nextHandle = 1;
 	const timers = new Map<number, { fireAt: number; fn: () => void }>();
@@ -18,6 +18,7 @@ function harness(qrTtlMs = 20_000): Harness {
 
 	const session = createSessionState({
 		qrTtlMs,
+		initialSyncComplete,
 		now: () => clock,
 		onChange: (view) => views.push(view),
 		setTimer: (fn, ms) => {
@@ -81,7 +82,7 @@ describe('session status derivation (D5)', () => {
 	it('goes to qr_expired when a QR is not refreshed within its TTL', () => {
 		const h = harness();
 		h.feed({ type: 'pairing-needed', qr: 'qr-1' });
-		h.advance(20_000);
+		h.advance(60_000);
 
 		const view = h.session.get();
 		expect(view.status).toBe('qr_expired');
@@ -124,6 +125,15 @@ describe('session status derivation (D5)', () => {
 			{ type: 'connection', state: 'connected' }
 		);
 		expect(h.session.get().status).toBe('ready');
+	});
+
+	it('restores prior sync completion and connects straight to ready after restart', () => {
+		const h = harness(60_000, true);
+		h.feed({ type: 'connection', state: 'connected' });
+		expect(h.session.get()).toMatchObject({
+			status: 'ready',
+			sync: { complete: true }
+		});
 	});
 
 	it('separates disconnected (auto-reconnects) from logged_out (terminal)', () => {

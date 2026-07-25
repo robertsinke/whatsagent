@@ -38,12 +38,18 @@ export type SessionView = {
 	sync: SyncView;
 };
 
-/** WhatsApp rotates the pairing QR at roughly this cadence. */
-export const QR_TTL_MS = 20_000;
+/**
+ * Baileys keeps the first pairing QR for 60 seconds, then rotates later QRs
+ * every 20 seconds. Using the longer initial lifetime avoids declaring the QR
+ * expired during the 40-second gap before Baileys emits its first refresh.
+ */
+export const QR_TTL_MS = 60_000;
 
 export type SessionStateOptions = {
 	qrTtlMs?: number;
 	now?: () => number;
+	/** Restored from SQLite after a prior terminal history-sync batch. */
+	initialSyncComplete?: boolean;
 	/** Called on every state transition — wire to the WS EventBus. */
 	onChange?: (view: SessionView) => void;
 	/** Injected for tests; defaults to `setTimeout`. */
@@ -68,7 +74,11 @@ export function createSessionState(options: SessionStateOptions = {}): SessionSt
 	let status: SessionStatus = 'initializing';
 	let qr: string | null = null;
 	let qrExpiresAt: number | null = null;
-	let sync: SyncView = { chatsSynced: 0, messagesSynced: 0, complete: false };
+	let sync: SyncView = {
+		chatsSynced: 0,
+		messagesSynced: 0,
+		complete: options.initialSyncComplete ?? false
+	};
 	/** A QR was shown this connect attempt — lets us call `connecting` "pairing". */
 	let sawQr = false;
 	let expiryTimer: unknown;
