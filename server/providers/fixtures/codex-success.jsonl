@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"fixture-thread"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item-1","type":"agent_message","text":"{\"kind\":\"draft\",\"text\":\"I'll check and let you know.\"}"}}
+{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":12}}

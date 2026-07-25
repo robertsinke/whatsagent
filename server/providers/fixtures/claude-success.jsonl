@@ -1,0 +1,6 @@
+{"type":"system","subtype":"init","session_id":"fixture-session"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Error: this is quoted conversation text, not a process failure"}]}}
+{"type":"system","subtype":"api_retry","attempt":1,"max_retries":3,"retry_delay_ms":100}
+{"type":"system","subtype":"api_retry","attempt":2,"max_retries":3,"retry_delay_ms":200}
+{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","isUsingOverage":false}}
+{"type":"result","subtype":"success","is_error":false,"result":"{\"kind\":\"draft\",\"text\":\"Sounds good, see you then.\"}"}

@@ -1,0 +1,253 @@
+import { spawn as nodeSpawn } from 'node:child_process';
+
+export interface Turn {
+	role: 'user' | 'assistant';
+	content: string;
+}
+
+export interface DraftInput {
+	system: string;
+	conversation: Turn[];
+}
+
+export type DraftResult =
+	| { kind: 'draft'; text: string }
+	| { kind: 'no_reply_needed'; reason: string };
+
+export interface DraftProvider {
+	draft(input: DraftInput): Promise<DraftResult>;
+}
+
+export type ProviderErrorCode =
+	| 'invalid_response'
+	| 'process_exit'
+	| 'rate_limit'
+	| 'spawn_failed'
+	| 'timeout'
+	| 'unavailable';
+
+export class ProviderError extends Error {
+	constructor(
+		public readonly code: ProviderErrorCode,
+		message: string,
+		public readonly retryable = false,
+		public readonly retryAfterMs?: number,
+		options?: ErrorOptions
+	) {
+		super(message, options);
+		this.name = 'ProviderError';
+	}
+}
+
+export interface ChildProcessLike {
+	stdout: { on(event: 'data', listener: (chunk: Buffer | string) => void): unknown };
+	stderr: { on(event: 'data', listener: (chunk: Buffer | string) => void): unknown };
+	stdin: {
+		write(data: string): unknown;
+		end(): unknown;
+		on?(event: 'error', listener: (error: Error) => void): unknown;
+	};
+	on(event: 'error', listener: (error: Error) => void): unknown;
+	on(event: 'close', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
+	kill(signal?: NodeJS.Signals): unknown;
+}
+
+export type SpawnProcess = (
+	command: string,
+	args: readonly string[],
+	options: { env: NodeJS.ProcessEnv; stdio: ['pipe', 'pipe', 'pipe'] }
+) => ChildProcessLike;
+
+export const spawnProcess: SpawnProcess = (command, args, options) =>
+	nodeSpawn(command, args, options);
+
+export function sanitizedEnv(
+	parentEnv: NodeJS.ProcessEnv,
+	keysToStrip: readonly string[]
+): NodeJS.ProcessEnv {
+	const stripped = new Set(keysToStrip);
+	const env: NodeJS.ProcessEnv = {};
+
+	for (const [key, value] of Object.entries(parentEnv)) {
+		if (!stripped.has(key) && value !== undefined) env[key] = value;
+	}
+
+	return env;
+}
+
+export function buildPrompt(input: DraftInput): string {
+	const conversation = input.conversation
+		.map((turn) => `${turn.role === 'user' ? 'Contact' : 'Owner'}: ${turn.content}`)
+		.join('\n');
+
+	return `${conversation}\n\nReturn JSON only, matching exactly one of these shapes:\n{"kind":"draft","text":"...","reason":null}\n{"kind":"no_reply_needed","text":null,"reason":"..."}`;
+}
+
+export function parseDraftResult(value: unknown): DraftResult {
+	let parsed = value;
+	if (typeof value === 'string') {
+		try {
+			parsed = JSON.parse(value);
+		} catch (cause) {
+			throw new ProviderError('invalid_response', 'Provider returned invalid JSON', false, undefined, {
+				cause
+			});
+		}
+	}
+
+	if (!parsed || typeof parsed !== 'object') {
+		throw new ProviderError('invalid_response', 'Provider returned an invalid draft verdict');
+	}
+
+	const result = parsed as Record<string, unknown>;
+	if (result.kind === 'draft' && typeof result.text === 'string' && result.text.trim()) {
+		return { kind: 'draft', text: result.text };
+	}
+	if (
+		result.kind === 'no_reply_needed' &&
+		typeof result.reason === 'string' &&
+		result.reason.trim()
+	) {
+		return { kind: 'no_reply_needed', reason: result.reason };
+	}
+
+	throw new ProviderError('invalid_response', 'Provider returned an invalid draft verdict');
+}
+
+export async function withSingleRetry<T>(
+	operation: () => Promise<T>,
+	sleep: (milliseconds: number) => Promise<void>
+): Promise<T> {
+	try {
+		return await operation();
+	} catch (error) {
+		if (!(error instanceof ProviderError) || !error.retryable) throw error;
+		await sleep(error.retryAfterMs ?? 250);
+		return operation();
+	}
+}
+
+export function runJsonLinesProcess(options: {
+	command: string;
+	args: readonly string[];
+	env: NodeJS.ProcessEnv;
+	stdin: string;
+	timeoutMs: number;
+	killGraceMs?: number;
+	spawn?: SpawnProcess;
+	onEvent: (event: Record<string, unknown>) => void;
+}): Promise<void> {
+	return new Promise((resolve, reject) => {
+		let child: ChildProcessLike;
+		try {
+			child = (options.spawn ?? spawnProcess)(options.command, options.args, {
+				env: options.env,
+				stdio: ['pipe', 'pipe', 'pipe']
+			});
+		} catch (cause) {
+			reject(new ProviderError('spawn_failed', `Failed to spawn ${options.command}`, true, 250, { cause }));
+			return;
+		}
+
+		let settled = false;
+		let timeoutError: ProviderError | undefined;
+		let stdout = '';
+		let stderr = '';
+		let killTimer: ReturnType<typeof setTimeout> | undefined;
+		const finish = (error?: ProviderError) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timeout);
+			if (killTimer) clearTimeout(killTimer);
+			if (error) reject(error);
+			else resolve();
+		};
+		const processLine = (line: string) => {
+			if (settled || !line.trim()) return;
+			try {
+				const event = JSON.parse(line) as unknown;
+				if (event && typeof event === 'object') options.onEvent(event as Record<string, unknown>);
+			} catch (cause) {
+				child.kill('SIGTERM');
+				finish(
+					cause instanceof ProviderError
+						? cause
+						: new ProviderError('invalid_response', 'Provider emitted invalid JSONL', false, undefined, {
+								cause
+							})
+				);
+			}
+		};
+		const timeout = setTimeout(() => {
+			timeoutError = new ProviderError('timeout', `${options.command} timed out`, true, 250);
+			child.kill('SIGTERM');
+			killTimer = setTimeout(() => {
+				child.kill('SIGKILL');
+				finish(timeoutError);
+			}, options.killGraceMs ?? 1_000);
+		}, options.timeoutMs);
+
+		child.stdout.on('data', (chunk) => {
+			stdout += chunk.toString();
+			const lines = stdout.split('\n');
+			stdout = lines.pop() ?? '';
+			for (const line of lines) processLine(line);
+		});
+		child.stderr.on('data', (chunk) => {
+			stderr += chunk.toString();
+		});
+		child.stdin.on?.('error', (cause) => {
+			finish(
+				new ProviderError('process_exit', `Failed to write to ${options.command} stdin`, true, 250, {
+					cause
+				})
+			);
+		});
+		child.on('error', (cause) => {
+			finish(new ProviderError('spawn_failed', `Failed to run ${options.command}`, true, 250, { cause }));
+		});
+		child.on('close', (code, signal) => {
+			if (stdout) processLine(stdout);
+			if (settled) return;
+			if (timeoutError) {
+				finish(timeoutError);
+				return;
+			}
+			if (code !== 0) {
+				const detail = stderr.trim() || `signal ${signal ?? 'unknown'}`;
+				finish(
+					new ProviderError(
+						'process_exit',
+						`${options.command} exited with code ${code ?? 'null'}: ${detail}`,
+						true,
+						250
+					)
+				);
+				return;
+			}
+			finish();
+		});
+
+		try {
+			child.stdin.write(options.stdin);
+			child.stdin.end();
+		} catch (cause) {
+			finish(
+				new ProviderError('process_exit', `Failed to write to ${options.command} stdin`, true, 250, {
+					cause
+				})
+			);
+		}
+	});
+}
+
+export const draftResultSchema = {
+	type: 'object',
+	properties: {
+		kind: { type: 'string', enum: ['draft', 'no_reply_needed'] },
+		text: { type: ['string', 'null'] },
+		reason: { type: ['string', 'null'] }
+	},
+	required: ['kind', 'text', 'reason'],
+	additionalProperties: false
+} as const;
