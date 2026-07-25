@@ -40,7 +40,7 @@
 		<Sheet.Header>
 			<Sheet.Title>Outbox</Sheet.Title>
 			<Sheet.Description>
-				Every send — typed or approved — waits here. Queued items can still be cancelled.
+				Approved drafts are paced. Typed sends jump the queue but use the same sender.
 			</Sheet.Description>
 		</Sheet.Header>
 
@@ -50,7 +50,7 @@
 					<div class="tray-top">
 						<span class="tray-name">{chatName(row.chat_jid)}</span>
 						<Badge variant={row.status === 'sent' ? 'secondary' : 'outline'} class="tray-status">
-							{row.status}
+							{row.source} · {row.status}
 						</Badge>
 					</div>
 					<p class="tray-text">{row.text}</p>

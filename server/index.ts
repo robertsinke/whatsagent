@@ -3,7 +3,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { Channel } from './channels/channel.js';
+import { WhatsAppConnection } from './channels/whatsapp/connection.js';
 import { downloadAndCacheMedia } from './channels/whatsapp/media.js';
+import {
+	createWhatsAppSendTransport,
+	type WhatsAppSendTransport
+} from './channels/whatsapp/send.js';
 import {
 	getDefaultDataDir,
 	openDatabase,
@@ -20,6 +25,16 @@ import {
 import { createRequestHandler } from './api/routes.js';
 import { createSessionState } from './api/session.js';
 import { buildAllowedOrigins, validateOriginAndHost } from './api/security.js';
+import { DraftScheduler } from './agent/scheduler.js';
+import type { Memory } from './agent/memory/memory.js';
+import { NullMemory } from './agent/memory/null-memory.js';
+import { OutboxPacer, type OutboxPacerOptions } from './outbox/pacer.js';
+import { createDraftProvider, type DraftProviderName } from './providers/index.js';
+import type { DraftProvider } from './providers/provider.js';
+import { getDraft } from './store/drafts.js';
+import { getChat } from './store/chats.js';
+import { getSetting, listSettings } from './store/settings.js';
+import { cancelStaleDraftOutbox } from './store/outbox.js';
 
 const DEFAULT_PORT = 8787;
 const DEFAULT_HOST = '127.0.0.1';
@@ -37,6 +52,14 @@ export type CreateAppOptions = {
 	downloadMedia?: (messageId: string) => Promise<unknown>;
 	/** App-data dir (media cache root). Defaults to the DB's data dir. */
 	dataDir?: string;
+	/** Supplying a provider mounts the U8 scheduler into the live runtime. */
+	draftProvider?: DraftProvider;
+	providerName?: string;
+	memory?: Memory;
+	draftDebounceMs?: number;
+	/** Supplying a transport mounts and starts the sole WhatsApp send path. */
+	outboxTransport?: WhatsAppSendTransport;
+	outboxPacer?: Omit<OutboxPacerOptions, 'db' | 'transport' | 'onUpdated'>;
 };
 
 export type App = {
@@ -69,6 +92,36 @@ export function createApp(options: CreateAppOptions = {}): App {
 		onChange: (view) => events.emit({ type: 'session', session: view })
 	});
 	const ingestHooks = createIngestEventHooks(events);
+	const scheduler = options.draftProvider
+		? new DraftScheduler({
+				db,
+				provider: options.draftProvider,
+				providerName: options.providerName ?? 'claude',
+				memory: options.memory ?? new NullMemory(),
+				debounceMs: options.draftDebounceMs,
+				hooks: {
+					onDraftUpdated: (draft) => events.emit({ type: 'draft-updated', draft }),
+					onDraftRemoved: (chatJid) => events.emit({ type: 'draft-removed', chat_jid: chatJid }),
+					onChatUpdated: (chat) => events.emit({ type: 'chat-updated', chat })
+				}
+			})
+		: undefined;
+	let schedulerStarted = false;
+	const pacer = options.outboxTransport
+		? new OutboxPacer({
+				...options.outboxPacer,
+				db,
+				transport: options.outboxTransport,
+				draftsPaused: true,
+				onUpdated: (outbox) => {
+					events.emit({ type: 'outbox-updated', outbox });
+					const draft = getDraft(db, outbox.chat_jid);
+					if (draft) events.emit({ type: 'draft-updated', draft });
+					const chat = getChat(db, outbox.chat_jid);
+					if (chat) events.emit({ type: 'chat-updated', chat });
+				}
+			})
+		: undefined;
 
 	const downloadMedia =
 		options.downloadMedia ??
@@ -103,7 +156,9 @@ export function createApp(options: CreateAppOptions = {}): App {
 		downloadMedia,
 		staticDir,
 		port: requestedPort,
-		getAllowedOrigins
+		getAllowedOrigins,
+		nextDraftJitterMs: pacer ? () => pacer.jitterMs() : undefined,
+		wakeOutbox: pacer ? () => pacer.wake() : undefined
 	});
 
 	const server = createServer((req, res) => {
@@ -188,6 +243,8 @@ export function createApp(options: CreateAppOptions = {}): App {
 				if (event.type === 'connection') {
 					connection.setState(event.state);
 					events.emit({ type: 'connection', state: event.state });
+					if (event.state === 'connected') pacer?.wake();
+					else pacer?.setDraftsPaused(true);
 				} else if (event.type === 'pairing-needed') {
 					connection.setQr(event.qr);
 					events.emit({ type: 'pairing-needed', qr: event.qr });
@@ -200,14 +257,34 @@ export function createApp(options: CreateAppOptions = {}): App {
 						messagesSynced: view.messagesSynced,
 						complete: view.complete
 					});
+					if (event.isLatest && scheduler) {
+						schedulerStarted = true;
+						scheduler.start();
+					}
+					if (event.isLatest) pacer?.setDraftsPaused(false);
+				} else if (event.type === 'message-committed') {
+					ingestHooks.onMessageIngested(event.message);
+					if (!event.message.from_me) {
+						for (const outbox of cancelStaleDraftOutbox(
+							db,
+							event.message.chat_jid,
+							event.message.id
+						)) {
+							events.emit({ type: 'outbox-updated', outbox });
+						}
+					}
+					if (schedulerStarted) scheduler?.onMessage(event.message);
 				}
 			});
 			await options.channel.start();
 		}
+		pacer?.start();
 	}
 
 	async function close(): Promise<void> {
 		channelUnsub?.();
+		scheduler?.stop();
+		pacer?.stop();
 		session.dispose();
 		if (options.channel) await options.channel.stop();
 		unsubscribeEvents();
@@ -243,7 +320,24 @@ export function createApp(options: CreateAppOptions = {}): App {
 }
 
 async function main(): Promise<void> {
-	const app = createApp();
+	const db = openDatabase();
+	const settings = listSettings(db);
+	const channel = new WhatsAppConnection(db);
+	const providerName = (settings.provider ?? 'claude') as DraftProviderName;
+	const dryRunSetting = getSetting(db, 'outbox_dry_run');
+	const app = createApp({
+		db,
+		channel,
+		draftProvider: createDraftProvider(settings),
+		providerName,
+		memory: new NullMemory(),
+		outboxTransport: createWhatsAppSendTransport(() => channel.getSendSocket()),
+		outboxPacer: {
+			dryRun: dryRunSetting === undefined
+				? process.env.NODE_ENV !== 'production'
+				: dryRunSetting === 'true'
+		}
+	});
 	await app.start();
 	console.log(`whatsagent listening on ${app.url} (loopback only)`);
 

@@ -89,10 +89,18 @@ export const api = {
 	 * newer inbound than the draft's basis message; the caller must re-confirm
 	 * rather than send. Staleness is never inferred client-side.
 	 */
-	approveDraft: (jid: string, text?: string) =>
+	approveDraft: (jid: string, text?: string, confirmedLatestInboundId?: string) =>
 		request<{ outbox: OutboxRow; draft: Draft }>(
 			`/chats/${encodeURIComponent(jid)}/draft/approve`,
-			{ method: 'POST', body: JSON.stringify(text === undefined ? {} : { text }) }
+			{
+				method: 'POST',
+				body: JSON.stringify({
+					...(text === undefined ? {} : { text }),
+					...(confirmedLatestInboundId
+						? { confirmed_latest_inbound_id: confirmedLatestInboundId }
+						: {})
+				})
+			}
 		),
 
 	skipDraft: (jid: string) =>

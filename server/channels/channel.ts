@@ -9,6 +9,8 @@ export type ChannelEvent =
 	 * `ChannelConnectionState` — the transport enum stays three-valued (D5).
 	 */
 	| { type: 'logged-out' }
+	/** Emitted only after a live message transaction commits to SQLite. */
+	| { type: 'message-committed'; message: Message }
 	| {
 			type: 'sync-progress';
 			/** Baileys' percentage — retained at transport level, never rendered (D5). */
@@ -34,3 +36,4 @@ export interface Channel {
 	 */
 	resetAuth?(): Promise<void>;
 }
+import type { Message } from '../store/messages.js';

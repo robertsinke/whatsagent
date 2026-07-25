@@ -71,6 +71,7 @@ export type Draft = {
 	generated_at: number;
 	provider: string | null;
 	basis_msg_id: string | null;
+	original_text: string;
 };
 
 export type OutboxRow = {
@@ -81,6 +82,10 @@ export type OutboxRow = {
 	send_after: number;
 	sent_at: number | null;
 	status: string;
+	source: 'draft' | 'manual';
+	message_id: string | null;
+	draft_text: string | null;
+	basis_msg_id: string | null;
 };
 
 /** D5 — derived session view. */

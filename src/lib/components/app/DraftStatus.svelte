@@ -14,6 +14,7 @@
 		onedit,
 		onapprove,
 		onskip,
+		onconfirmstale,
 		ondismissstale
 	}: {
 		draft: Draft | null;
@@ -23,6 +24,7 @@
 		onedit?: (text: string) => void;
 		onapprove?: () => void;
 		onskip?: () => void;
+		onconfirmstale?: () => void;
 		ondismissstale?: () => void;
 	} = $props();
 
@@ -45,8 +47,11 @@
 			fits.
 		</p>
 		<div class="draft-actions">
+			<Button size="sm" onclick={() => onconfirmstale?.()}>
+				<Check class="size-3.5" /> Queue this draft anyway
+			</Button>
 			<Button size="sm" variant="outline" onclick={() => ondismissstale?.()}>
-				<Check class="size-3.5" /> Got it
+				<X class="size-3.5" /> Cancel
 			</Button>
 		</div>
 	</div>

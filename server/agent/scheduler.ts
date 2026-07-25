@@ -68,7 +68,7 @@ export class DraftScheduler {
 		if (!chat || chat.kind !== '1:1') return;
 
 		const draft = getDraft(this.#options.db, chat.jid);
-		if (draft && ['drafting', 'ready', 'failed'].includes(draft.status)) {
+		if (draft && ['drafting', 'ready', 'failed', 'approved'].includes(draft.status)) {
 			upsertDraft(this.#options.db, { ...draft, status: 'stale' });
 			this.#options.hooks?.onDraftUpdated?.(getDraft(this.#options.db, chat.jid)!);
 		}

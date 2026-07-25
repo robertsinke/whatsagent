@@ -99,6 +99,7 @@
 								phaseTwoPending={app.selectedChat.kind === '1:1'}
 								onedit={(text) => (composerValue = text)}
 								onapprove={() => app.approveDraft(composerValue.trim() || undefined)}
+								onconfirmstale={() => app.confirmStaleDraft(composerValue.trim() || undefined)}
 								onskip={() => app.skipDraft()}
 								ondismissstale={() => (app.stalePrompt = null)}
 							/>
