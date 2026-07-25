@@ -1,4 +1,3 @@
-import { Boom } from '@hapi/boom';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -98,15 +97,19 @@ describe('media state machine (D2)', () => {
 		});
 	});
 
+	// Boom errors are shaped `{ output: { statusCode } }`. Constructed literally
+	// rather than importing @hapi/boom, which is only a transitive dep of baileys.
+	const boom = (statusCode: number) => ({ output: { statusCode } });
+
 	it('classifies reupload-refused / expired media as terminal unavailable', () => {
 		// Baileys maps NOT_FOUND onto statusCode 404 in MEDIA_RETRY_STATUS_MAP.
-		expect(classifyMediaFailure(new Boom('gone', { statusCode: 404 }))).toBe('unavailable');
-		expect(classifyMediaFailure(new Boom('gone', { statusCode: 410 }))).toBe('unavailable');
+		expect(classifyMediaFailure(boom(404))).toBe('unavailable');
+		expect(classifyMediaFailure(boom(410))).toBe('unavailable');
 	});
 
 	it('classifies decrypt / general / network errors as transient', () => {
-		expect(classifyMediaFailure(new Boom('decrypt', { statusCode: 412 }))).toBe('transient');
-		expect(classifyMediaFailure(new Boom('general', { statusCode: 418 }))).toBe('transient');
+		expect(classifyMediaFailure(boom(412))).toBe('transient');
+		expect(classifyMediaFailure(boom(418))).toBe('transient');
 		expect(classifyMediaFailure(new Error('ECONNRESET'))).toBe('transient');
 	});
 
@@ -131,7 +134,7 @@ describe('media state machine (D2)', () => {
 
 	it('persists failed + reason, and survives a history re-ingest', async () => {
 		const download = vi.fn(async () => {
-			throw new Boom('no longer available', { statusCode: 404 });
+			throw Object.assign(new Error('no longer available'), { output: { statusCode: 404 } });
 		});
 
 		await expect(downloadAndCacheMedia(db, 'img-1', { dataDir, download })).rejects.toBeInstanceOf(

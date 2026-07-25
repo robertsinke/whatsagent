@@ -91,8 +91,12 @@ export function createApp(options: CreateAppOptions = {}): App {
 		getSessionStatus: session.get,
 		regeneratePairing: options.channel
 			? async () => {
-					await options.channel!.stop();
-					await options.channel!.start();
+					const channel = options.channel!;
+					await channel.stop();
+					// After `logged_out` the stored session is dead. A channel still
+					// holding it will not offer a fresh QR, so forget it first.
+					if (session.get().status === 'logged_out') await channel.resetAuth?.();
+					await channel.start();
 				}
 			: undefined,
 		dataDir,

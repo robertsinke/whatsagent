@@ -27,4 +27,10 @@ export interface Channel {
 	start(): Promise<void>;
 	stop(): Promise<void>;
 	onEvent(listener: ChannelEventListener): () => void;
+	/**
+	 * Forget stored credentials so the next `start()` pairs from scratch.
+	 * Required after `logged-out`: the stored session is dead, but a channel
+	 * holding it will not offer a fresh QR.
+	 */
+	resetAuth?(): Promise<void>;
 }

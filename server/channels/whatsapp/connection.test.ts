@@ -176,4 +176,40 @@ describe('WhatsApp connection', () => {
 		).toMatchObject({ conversation: 'stored hello' });
 		expect(await config.getMessage?.({ id: 'missing' })).toBeUndefined();
 	});
+
+	it('resetAuth clears stored credentials and hands the socket a fresh session', async () => {
+		const database = openTempDb();
+		const key = Buffer.alloc(32, 7);
+		const fake = fakeSocketFactory();
+		const connection = new WhatsAppConnection(database, {
+			// Factory, not a fixed instance: a reset must re-read the emptied tables.
+			createAuthStore: () => createSqliteAuthStore(database, key),
+			socketFactory: fake.factory
+		});
+
+		await connection.start();
+		const store = createSqliteAuthStore(database, key);
+		await store.saveCreds();
+		await store.state.keys.set({ 'pre-key': { '1': { public: Buffer.alloc(4) } } } as never);
+		expect(
+			(database.prepare('SELECT COUNT(*) AS c FROM wa_auth_creds').get() as { c: number }).c
+		).toBe(1);
+
+		// After `logged-out` the stored session is dead — re-pairing must forget it.
+		await connection.resetAuth();
+
+		expect(
+			(database.prepare('SELECT COUNT(*) AS c FROM wa_auth_creds').get() as { c: number }).c
+		).toBe(0);
+		expect(
+			(database.prepare('SELECT COUNT(*) AS c FROM wa_auth_keys').get() as { c: number }).c
+		).toBe(0);
+
+		await connection.start();
+		const before = fake.configs[0]!.auth.creds.registrationId;
+		const after = fake.configs.at(-1)!.auth.creds.registrationId;
+		expect(fake.configs).toHaveLength(2);
+		// A rebuilt store means `initAuthCreds()`, not the cleared-but-cached object.
+		expect(after).not.toBe(before);
+	});
 });

@@ -87,7 +87,7 @@
 						<ConversationPane
 							messages={app.messages}
 							loading={app.loadingMessages}
-							hasMore={app.messages.length >= 60}
+							hasMore={app.hasMoreMessages}
 							onloadolder={() => app.loadOlder()}
 							onloadmedia={(id) => app.loadMedia(id)}
 						/>

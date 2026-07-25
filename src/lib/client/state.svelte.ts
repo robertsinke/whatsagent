@@ -10,6 +10,8 @@ import {
 } from './types.js';
 import { mergeMessages } from './view.js';
 
+const PAGE_SIZE = 60;
+
 const EMPTY_SESSION: SessionView = {
 	status: 'initializing',
 	qr: null,
@@ -32,6 +34,8 @@ export class AppState {
 	draft = $state<Draft | null>(null);
 	outbox = $state<OutboxRow[]>([]);
 	loadingMessages = $state(false);
+	/** False once a page comes back short — otherwise "load earlier" never ends. */
+	hasMoreMessages = $state(false);
 	stalePrompt = $state<StalePrompt | null>(null);
 	error = $state<string | null>(null);
 
@@ -81,8 +85,9 @@ export class AppState {
 		this.loadingMessages = true;
 		this.stalePrompt = null;
 		try {
-			const messages = await api.messages(jid, { limit: 60 });
+			const messages = await api.messages(jid, { limit: PAGE_SIZE });
 			this.messages = mergeMessages([], messages);
+			this.hasMoreMessages = messages.length >= PAGE_SIZE;
 			this.draft = await api.draft(jid).catch(() => null);
 			if (options.markRead !== false) {
 				const updated = await api.markRead(jid);
@@ -99,7 +104,12 @@ export class AppState {
 		const jid = this.selectedJid;
 		const oldest = this.messages[0];
 		if (!jid || !oldest) return;
-		const older = await api.messages(jid, { limit: 60, beforeTs: oldest.ts, beforeId: oldest.id });
+		const older = await api.messages(jid, {
+			limit: PAGE_SIZE,
+			beforeTs: oldest.ts,
+			beforeId: oldest.id
+		});
+		this.hasMoreMessages = older.length >= PAGE_SIZE;
 		this.messages = mergeMessages(this.messages, older);
 	}
 
@@ -171,7 +181,7 @@ export class AppState {
 		} catch (err) {
 			// The server has already persisted `failed` + reason; refetch to render it.
 			const jid = this.selectedJid;
-			if (jid) this.messages = mergeMessages([], await api.messages(jid, { limit: 60 }));
+			if (jid) this.messages = mergeMessages([], await api.messages(jid, { limit: PAGE_SIZE }));
 			if (!(err instanceof ApiError)) this.error = describeError(err);
 		}
 	}
