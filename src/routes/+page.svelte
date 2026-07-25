@@ -9,6 +9,7 @@
 	import ChatList from '$lib/components/app/ChatList.svelte';
 	import Composer from '$lib/components/app/Composer.svelte';
 	import ConversationPane from '$lib/components/app/ConversationPane.svelte';
+	import DeepenHistoryButton from '$lib/components/app/DeepenHistoryButton.svelte';
 	import DraftStatus from '$lib/components/app/DraftStatus.svelte';
 	import OutboxTray from '$lib/components/app/OutboxTray.svelte';
 	import PairingScreen from '$lib/components/app/PairingScreen.svelte';
@@ -28,6 +29,11 @@
 
 	const banner = $derived(sessionBanner(app.session));
 	const chatTitle = $derived(app.selectedChat ? displayName(app.selectedChat) : '');
+	// Deepen requires an active WhatsApp socket — the server refuses while
+	// disconnected. Syncing is allowed: the phone can still serve history.
+	const deepenDisabled = $derived(
+		app.session.status === 'disconnected' || app.session.status === 'logged_out'
+	);
 
 	async function openChat(jid: string) {
 		composerValue = '';
@@ -82,6 +88,13 @@
 									{app.selectedChat.kind === 'group' ? 'Group · agent excluded' : '1:1'}
 								</span>
 							</div>
+							<div class="conv-actions">
+								<DeepenHistoryButton
+									status={app.deepenStatus}
+									disabled={deepenDisabled}
+									ondeepen={() => app.deepenHistory()}
+								/>
+							</div>
 						</header>
 
 						<ConversationPane
@@ -93,11 +106,11 @@
 						/>
 
 						<div class="conv-foot">
-							<DraftStatus
-								draft={app.draft}
-								stalePrompt={app.stalePrompt}
-								phaseTwoPending={app.selectedChat.kind === '1:1'}
-								onedit={(text) => (composerValue = text)}
+						<DraftStatus
+							draft={app.draft}
+							stalePrompt={app.stalePrompt}
+							agentEligible={app.selectedChat.kind === '1:1'}
+							onedit={(text) => (composerValue = text)}
 								onapprove={() => app.approveDraft(composerValue.trim() || undefined)}
 								onconfirmstale={() => app.confirmStaleDraft(composerValue.trim() || undefined)}
 								onskip={() => app.skipDraft()}
@@ -215,6 +228,11 @@
 	.conv-sub {
 		font-size: 0.7rem;
 		color: var(--ink-50);
+	}
+	.conv-actions {
+		margin-left: auto;
+		display: inline-flex;
+		align-items: center;
 	}
 	.conv-foot {
 		display: flex;

@@ -38,6 +38,15 @@ export class AppState {
 	hasMoreMessages = $state(false);
 	stalePrompt = $state<StalePrompt | null>(null);
 	error = $state<string | null>(null);
+	/**
+	 * Owner-triggered history-deepen status per selected chat. `idle` | `loading`
+	 * | `success` | `error`. Resets on chat switch. Read-only with respect to
+	 * WhatsApp — this only asks the phone for older messages; it never sends.
+	 */
+	deepenStatus = $state<{ kind: 'idle' | 'loading' | 'success' | 'error'; at: number | null }>({
+		kind: 'idle',
+		at: null
+	});
 
 	#realtime: Realtime | undefined;
 	#conversationEpoch = 0;
@@ -86,6 +95,7 @@ export class AppState {
 		this.selectedJid = jid;
 		this.loadingMessages = true;
 		this.stalePrompt = null;
+		this.deepenStatus = { kind: 'idle', at: null };
 		try {
 			const messages = await api.messages(jid, { limit: PAGE_SIZE });
 			if (epoch !== this.#conversationEpoch || this.selectedJid !== jid) return;
@@ -223,6 +233,33 @@ export class AppState {
 		try {
 			await api.regeneratePairing();
 		} catch (err) {
+			this.error = describeError(err);
+		}
+	}
+
+	/**
+	 * Owner-triggered on-demand history deepen for the selected chat. Asks the
+	 * server to call Baileys `fetchMessageHistory` for older messages; the
+	 * server returns 202 once the request is accepted, and the new (older)
+	 * messages arrive over WS as `message-new`/`sync-progress` events and merge
+	 * into the open conversation pane like any other inbound.
+	 *
+	 * This is read-only with respect to WhatsApp — it pulls history from the
+	 * phone, never sends to a recipient — so it is safe to expose without the
+	 * outbox/approval guard. The server additionally refuses while disconnected.
+	 */
+	async deepenHistory(count?: number): Promise<void> {
+		const jid = this.selectedJid;
+		if (!jid) return;
+		this.deepenStatus = { kind: 'loading', at: Date.now() };
+		try {
+			await api.deepenHistory(jid, count);
+			this.deepenStatus = { kind: 'success', at: Date.now() };
+			// The phone delivers older messages asynchronously; refresh once to
+			// surface anything that landed between request and response.
+			await this.openChat(jid, { markRead: false });
+		} catch (err) {
+			this.deepenStatus = { kind: 'error', at: Date.now() };
 			this.error = describeError(err);
 		}
 	}

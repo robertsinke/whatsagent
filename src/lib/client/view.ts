@@ -346,3 +346,37 @@ export function reconnectDelayMs(attempt: number, random: () => number = Math.ra
 	const base = Math.min(30_000, 500 * 2 ** Math.max(0, attempt - 1));
 	return Math.round(base * (0.7 + random() * 0.6));
 }
+
+export type DeepenKind = 'idle' | 'loading' | 'success' | 'error';
+
+/** Deepen-history status view for the conversation header affordance. */
+export type DeepenStatusView = {
+	/** Button label. */
+	label: string;
+	/** Whether the action is in flight and the button should be inert. */
+	busy: boolean;
+	/** Whether the last attempt failed and a retry is the obvious next action. */
+	failed: boolean;
+	/** Whether the last attempt was accepted (older messages may still be arriving). */
+	accepted: boolean;
+};
+
+/**
+ * Owner-triggered history-deepen UI state. Read-only with respect to WhatsApp:
+ * the action only asks the phone for older messages via
+ * `fetchMessageHistory` — it never sends anything to a recipient, so it does
+ * NOT route through the outbox/approval guard (R9 is about *sending*, not
+ * fetching). The server additionally refuses while disconnected.
+ */
+export function deepenStatusView(kind: DeepenKind): DeepenStatusView {
+	switch (kind) {
+		case 'idle':
+			return { label: 'Deepen history', busy: false, failed: false, accepted: false };
+		case 'loading':
+			return { label: 'Deepening…', busy: true, failed: false, accepted: false };
+		case 'success':
+			return { label: 'Requested', busy: false, failed: false, accepted: true };
+		case 'error':
+			return { label: 'Retry deepen', busy: false, failed: true, accepted: false };
+	}
+}

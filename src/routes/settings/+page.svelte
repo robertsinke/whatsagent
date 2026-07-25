@@ -7,43 +7,38 @@
 	import { ArrowLeft, Check } from '@lucide/svelte';
 	import { api } from '$lib/client/api.js';
 
-	type Field = { key: string; label: string; help: string; placeholder: string; phase2?: boolean };
+	type Field = { key: string; label: string; help: string; placeholder: string };
 
 	const FIELDS: Field[] = [
 		{
 			key: 'provider',
 			label: 'Draft provider',
-			help: 'claude · codex · ollama. Runs under your existing subscription login (U7).',
-			placeholder: 'claude',
-			phase2: true
+			help: 'claude · codex · ollama. Runs under your existing subscription login.',
+			placeholder: 'claude'
 		},
 		{
 			key: 'provider_model',
 			label: 'Model',
 			help: 'Optional model override for the selected provider.',
-			placeholder: 'default',
-			phase2: true
+			placeholder: 'default'
 		},
 		{
 			key: 'pacing_min_seconds',
 			label: 'Pacing floor (s)',
-			help: 'Approved drafts are spaced by randomized jitter. Manual sends skip the wait (D1).',
-			placeholder: '30',
-			phase2: true
+			help: 'Approved drafts are spaced by randomized jitter. Manual sends skip the wait.',
+			placeholder: '30'
 		},
 		{
 			key: 'pacing_max_seconds',
 			label: 'Pacing ceiling (s)',
 			help: 'Upper bound of the send jitter window.',
-			placeholder: '90',
-			phase2: true
+			placeholder: '90'
 		},
 		{
 			key: 'memory',
 			label: 'Voice memory',
 			help: 'off · null · hindsight. Null keeps a static local voice profile; Hindsight learns over time after restart.',
-			placeholder: 'null',
-			phase2: true
+			placeholder: 'null'
 		}
 	];
 
@@ -91,10 +86,7 @@
 			<Tabs.Content value="agent" class="panel-content">
 				{#each FIELDS as field (field.key)}
 					<label class="field">
-						<span class="field-label">
-							{field.label}
-							{#if field.phase2}<span class="pill">Phase 2</span>{/if}
-						</span>
+					<span class="field-label">{field.label}</span>
 						<span class="field-row">
 							<Input
 								bind:value={values[field.key]}
@@ -205,16 +197,6 @@
 	}
 	.field-help {
 		font-size: 0.72rem;
-		color: var(--ink-50);
-	}
-	.pill {
-		font-size: 0.6rem;
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
-		background: var(--surface-sunken);
-		border: 1px solid var(--hairline-soft);
-		border-radius: 999px;
-		padding: 0.05rem 0.35rem;
 		color: var(--ink-50);
 	}
 	.safety {

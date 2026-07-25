@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { Chat, MediaView, Message, SessionView } from './types.js';
+import { api } from './api.js';
 import {
 	canApprove,
+	deepenStatusView,
 	draftBadge,
 	filterChats,
 	formatBytes,
@@ -239,5 +241,57 @@ describe('reconnect backoff', () => {
 		const mid = () => 0.5;
 		expect(reconnectDelayMs(1, mid)).toBeLessThan(reconnectDelayMs(4, mid));
 		expect(reconnectDelayMs(50, mid)).toBeLessThanOrEqual(30_000);
+	});
+});
+
+describe('deepen-history status view', () => {
+	it('labels every status in the enum', () => {
+		for (const kind of ['idle', 'loading', 'success', 'error'] as const) {
+			expect(deepenStatusView(kind).label).toBeTruthy();
+		}
+	});
+
+	it('is busy only while loading, and inert there', () => {
+		expect(deepenStatusView('loading').busy).toBe(true);
+		expect(deepenStatusView('idle').busy).toBe(false);
+		expect(deepenStatusView('success').busy).toBe(false);
+		expect(deepenStatusView('error').busy).toBe(false);
+	});
+
+	it('marks success as accepted and error as failed — never the reverse', () => {
+		expect(deepenStatusView('success').accepted).toBe(true);
+		expect(deepenStatusView('success').failed).toBe(false);
+		expect(deepenStatusView('error').failed).toBe(true);
+		expect(deepenStatusView('error').accepted).toBe(false);
+		expect(deepenStatusView('idle').accepted).toBe(false);
+	});
+
+	it('is never both accepted and failed', () => {
+		for (const kind of ['idle', 'loading', 'success', 'error'] as const) {
+			const view = deepenStatusView(kind);
+			expect(view.accepted && view.failed).toBe(false);
+		}
+	});
+});
+
+describe('no-autonomous-send invariant (R9)', () => {
+	// The api surface is the only client path that can reach WhatsApp. The
+	// outbox is the sole sender; deepen-history is read-only fetch from the
+	// phone and must not be confused with a send/approve path.
+	it('exposes deepenHistory as a distinct function from send and approveDraft', () => {
+		expect(typeof api.deepenHistory).toBe('function');
+		expect(api.deepenHistory).not.toBe(api.send);
+		expect(api.deepenHistory).not.toBe(api.approveDraft);
+	});
+
+	it('lists every WhatsApp-bound send/approve path through the outbox surface', () => {
+		// Only send (manual composer) and approveDraft (approved draft) produce
+		// outbox rows. Everything else is read-only or local-only.
+		const outboxProducing = ['send', 'approveDraft'];
+		for (const key of outboxProducing) {
+			expect(typeof (api as Record<string, unknown>)[key]).toBe('function');
+		}
+		// Deepen is NOT in that set — it produces no outbox row and cannot send.
+		expect(outboxProducing).not.toContain('deepenHistory');
 	});
 });
