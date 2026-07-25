@@ -15,6 +15,7 @@ import {
 	loadKeychainEncryptionKey,
 	type SqliteAuthStore
 } from './auth-store.js';
+import { attachIngest } from './ingest.js';
 
 type SocketEventHandler = (...args: any[]) => void;
 
@@ -96,12 +97,16 @@ export class WhatsAppConnection implements Channel {
 	readonly #onError?: (error: Error) => void;
 	readonly #getStoredMessage: ReturnType<typeof createStoredMessageLoader>;
 
+	readonly #db: AppDatabase;
+
 	#socket?: WhatsAppSocket;
 	#reconnectTimer?: ReturnType<typeof setTimeout>;
+	#detachIngest?: () => void;
 	#running = false;
 	#state?: ChannelConnectionState;
 
 	constructor(db: AppDatabase, options: WhatsAppConnectionOptions = {}) {
+		this.#db = db;
 		this.#socketFactory =
 			options.socketFactory ??
 			((config) => makeWASocket(config) as unknown as WhatsAppSocket);
@@ -128,6 +133,8 @@ export class WhatsAppConnection implements Channel {
 		this.#running = false;
 		if (this.#reconnectTimer) clearTimeout(this.#reconnectTimer);
 		this.#reconnectTimer = undefined;
+		this.#detachIngest?.();
+		this.#detachIngest = undefined;
 		const socket = this.#socket;
 		this.#socket = undefined;
 		socket?.end(new Error('WhatsApp connection stopped'));
@@ -139,6 +146,7 @@ export class WhatsAppConnection implements Channel {
 		this.#setState('connecting');
 
 		try {
+			this.#detachIngest?.();
 			const socket = this.#socketFactory({
 				auth: this.#authStore.state,
 				browser: Browsers.macOS('Desktop'),
@@ -147,6 +155,15 @@ export class WhatsAppConnection implements Channel {
 				cachedGroupMetadata: async (jid) => this.#groupCache.get(jid)
 			});
 			this.#socket = socket;
+
+			this.#detachIngest = attachIngest(socket.ev, this.#db, {
+				onSyncProgress: (progress) =>
+					this.#emit({
+						type: 'sync-progress',
+						progress: progress.progress,
+						isLatest: progress.isLatest
+					})
+			});
 
 			socket.ev.on('connection.update', (update: {
 				connection?: 'close' | 'connecting' | 'open';
