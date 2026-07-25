@@ -1,6 +1,6 @@
 import tailwindcss from '@tailwindcss/vite';
 import { sveltekit } from '@sveltejs/kit/vite';
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
 	plugins: [
@@ -23,5 +23,9 @@ export default defineConfig({
 		host: 'localhost',
 		port: 4173,
 		strictPort: false
+	},
+	test: {
+		include: ['server/**/*.test.ts'],
+		environment: 'node'
 	}
 });
