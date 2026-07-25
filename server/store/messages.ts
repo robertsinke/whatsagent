@@ -90,6 +90,70 @@ export function listMessages(db: AppDatabase, chatJid: string): Message[] {
 	return rows.map(mapMessage);
 }
 
+export type ListMessagesPageOptions = {
+	/** Max rows to return (default 50, capped at 200). */
+	limit?: number;
+	/** Exclusive upper bound: return messages older than this timestamp. */
+	beforeTs?: number;
+	/** Tie-break when multiple messages share `beforeTs`. */
+	beforeId?: string;
+};
+
+/**
+ * Newest-first page of messages for a chat (client reverses for display).
+ * When `beforeTs` is omitted, returns the latest `limit` messages.
+ */
+export function listMessagesPage(
+	db: AppDatabase,
+	chatJid: string,
+	options: ListMessagesPageOptions = {}
+): Message[] {
+	const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
+	const beforeTs = options.beforeTs;
+	const beforeId = options.beforeId;
+
+	let rows: MessageRow[];
+	if (beforeTs !== undefined && beforeId !== undefined) {
+		rows = db
+			.prepare(
+				`SELECT * FROM messages
+				 WHERE chat_jid = ?
+				   AND (ts < ? OR (ts = ? AND id < ?))
+				 ORDER BY ts DESC, id DESC
+				 LIMIT ?`
+			)
+			.all(chatJid, beforeTs, beforeTs, beforeId, limit) as MessageRow[];
+	} else if (beforeTs !== undefined) {
+		rows = db
+			.prepare(
+				`SELECT * FROM messages
+				 WHERE chat_jid = ? AND ts < ?
+				 ORDER BY ts DESC, id DESC
+				 LIMIT ?`
+			)
+			.all(chatJid, beforeTs, limit) as MessageRow[];
+	} else {
+		rows = db
+			.prepare(
+				`SELECT * FROM messages
+				 WHERE chat_jid = ?
+				 ORDER BY ts DESC, id DESC
+				 LIMIT ?`
+			)
+			.all(chatJid, limit) as MessageRow[];
+	}
+	return rows.map(mapMessage);
+}
+
+export function getLastMessage(db: AppDatabase, chatJid: string): Message | undefined {
+	const row = db
+		.prepare(
+			`SELECT * FROM messages WHERE chat_jid = ? ORDER BY ts DESC, id DESC LIMIT 1`
+		)
+		.get(chatJid) as MessageRow | undefined;
+	return row ? mapMessage(row) : undefined;
+}
+
 export function getMessage(db: AppDatabase, id: string): Message | undefined {
 	const row = db.prepare('SELECT * FROM messages WHERE id = ?').get(id) as MessageRow | undefined;
 	return row ? mapMessage(row) : undefined;

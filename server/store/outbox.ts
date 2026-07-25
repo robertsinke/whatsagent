@@ -44,6 +44,20 @@ export function listPendingOutbox(db: AppDatabase): OutboxRow[] {
 		.all() as OutboxRow[];
 }
 
+/** Recent outbox rows (pending first by send_after, then others by id desc). */
+export function listOutbox(db: AppDatabase, limit = 100): OutboxRow[] {
+	const capped = Math.min(Math.max(limit, 1), 500);
+	return db
+		.prepare(
+			`SELECT * FROM outbox
+			 ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END,
+			          send_after ASC,
+			          id DESC
+			 LIMIT ?`
+		)
+		.all(capped) as OutboxRow[];
+}
+
 export function getOutbox(db: AppDatabase, id: number): OutboxRow | undefined {
 	return db.prepare('SELECT * FROM outbox WHERE id = ?').get(id) as OutboxRow | undefined;
 }
@@ -52,4 +66,12 @@ export function markOutboxSent(db: AppDatabase, id: number, sentAt: number): voi
 	db.prepare(
 		`UPDATE outbox SET status = 'sent', sent_at = ? WHERE id = ?`
 	).run(sentAt, id);
+}
+
+/** Cancel a still-queued row. Returns false if missing or not pending. */
+export function cancelOutbox(db: AppDatabase, id: number): boolean {
+	const result = db
+		.prepare(`UPDATE outbox SET status = 'cancelled' WHERE id = ? AND status = 'pending'`)
+		.run(id);
+	return result.changes > 0;
 }
