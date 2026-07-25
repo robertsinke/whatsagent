@@ -77,6 +77,14 @@ export type App = {
 	close: () => Promise<void>;
 };
 
+/**
+ * Sending is opt-in: a fresh install and any malformed value remain in
+ * dry-run. Only the explicit SQLite value `false` enables WhatsApp transport.
+ */
+export function resolveOutboxDryRun(setting: string | undefined): boolean {
+	return setting !== 'false';
+}
+
 function defaultStaticDir(): string {
 	const here = dirname(fileURLToPath(import.meta.url));
 	// server/ → repo root → build/ (adapter-static)
@@ -366,9 +374,7 @@ async function main(): Promise<void> {
 		memory,
 		outboxTransport: createWhatsAppSendTransport(() => channel.getSendSocket()),
 		outboxPacer: {
-			dryRun: dryRunSetting === undefined
-				? process.env.NODE_ENV !== 'production'
-				: dryRunSetting === 'true'
+			dryRun: resolveOutboxDryRun(dryRunSetting)
 		}
 	});
 	await app.start();

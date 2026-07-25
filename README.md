@@ -116,7 +116,7 @@ Saving them in the UI updates the DB immediately but does not hot-reload the run
 
 The outbox pacer is the **only** path that can call WhatsApp `sendMessage`.
 
-- **Dry-run (default in development):** when `outbox_dry_run` is unset, dry-run is **on** unless `NODE_ENV=production`. Queued rows advance through the full state machine and are logged; `sendMessage` is never called.
+- **Dry-run (safe default):** when `outbox_dry_run` is unset, malformed, or `true`, dry-run is **on** in every environment. Queued rows advance through the full state machine and are logged; `sendMessage` is never called.
 - **Live sends:** set `outbox_dry_run=false` and restart the backend. Use deliberately — typically one manual send to your own number after dry-run confidence. Sends are globally paced (~30–90s jitter), never bursted.
 
 Manual composer sends and approved drafts both go through the same paced outbox.

@@ -90,12 +90,17 @@ export class AppState {
 		}
 	}
 
-	async openChat(jid: string, options: { markRead?: boolean } = {}): Promise<void> {
+	async openChat(
+		jid: string,
+		options: { markRead?: boolean; preserveDeepenStatus?: boolean } = {}
+	): Promise<void> {
 		const epoch = ++this.#conversationEpoch;
 		this.selectedJid = jid;
 		this.loadingMessages = true;
 		this.stalePrompt = null;
-		this.deepenStatus = { kind: 'idle', at: null };
+		if (!options.preserveDeepenStatus) {
+			this.deepenStatus = { kind: 'idle', at: null };
+		}
 		try {
 			const messages = await api.messages(jid, { limit: PAGE_SIZE });
 			if (epoch !== this.#conversationEpoch || this.selectedJid !== jid) return;
@@ -257,7 +262,7 @@ export class AppState {
 			this.deepenStatus = { kind: 'success', at: Date.now() };
 			// The phone delivers older messages asynchronously; refresh once to
 			// surface anything that landed between request and response.
-			await this.openChat(jid, { markRead: false });
+			await this.openChat(jid, { markRead: false, preserveDeepenStatus: true });
 		} catch (err) {
 			this.deepenStatus = { kind: 'error', at: Date.now() };
 			this.error = describeError(err);

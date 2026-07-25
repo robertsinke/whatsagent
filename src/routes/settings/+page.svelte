@@ -9,6 +9,13 @@
 
 	type Field = { key: string; label: string; help: string; placeholder: string };
 
+	const DRY_RUN_FIELD: Field = {
+		key: 'outbox_dry_run',
+		label: 'Outbox dry-run',
+		help: 'true blocks WhatsApp delivery while exercising the full queue. Only explicit false enables live sends after restart.',
+		placeholder: 'true'
+	};
+
 	const FIELDS: Field[] = [
 		{
 			key: 'provider',
@@ -107,6 +114,28 @@
 			</Tabs.Content>
 
 			<Tabs.Content value="safety" class="panel-content">
+				<label class="field safety-field">
+					<span class="field-label">{DRY_RUN_FIELD.label}</span>
+					<span class="field-row">
+						<Input
+							bind:value={values[DRY_RUN_FIELD.key]}
+							placeholder={DRY_RUN_FIELD.placeholder}
+							class="field-input"
+						/>
+						<Button
+							size="sm"
+							variant="outline"
+							onclick={() => save(DRY_RUN_FIELD.key)}
+						>
+							{#if saved === DRY_RUN_FIELD.key}
+								<Check class="size-3.5" /> Saved
+							{:else}
+								Save
+							{/if}
+						</Button>
+					</span>
+					<span class="field-help">{DRY_RUN_FIELD.help}</span>
+				</label>
 				<h2>What this app will never do</h2>
 				<ul class="safety">
 					<li>The agent never sends. Every message leaves only after you press send or approve.</li>
@@ -172,6 +201,10 @@
 		font-weight: 600;
 		color: var(--ink-90);
 		margin: 0;
+	}
+	.safety-field {
+		padding-bottom: 0.9rem;
+		border-bottom: 1px solid var(--hairline);
 	}
 	.field {
 		display: flex;

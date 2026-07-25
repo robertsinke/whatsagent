@@ -9,7 +9,7 @@ import { openDatabase, type AppDatabase } from './store/db.js';
 import { getDraft } from './store/drafts.js';
 import { getMessage, upsertMessage } from './store/messages.js';
 import { enqueueDraftOutbox, getOutbox } from './store/outbox.js';
-import { createApp, type App } from './index.js';
+import { createApp, resolveOutboxDryRun, type App } from './index.js';
 import type { Memory } from './agent/memory/memory.js';
 
 class FakeChannel implements Channel {
@@ -43,6 +43,17 @@ afterEach(async () => {
 	}
 	if (dataDir) rmSync(dataDir, { recursive: true, force: true });
 	dataDir = undefined;
+});
+
+describe('outbox dry-run safety default', () => {
+	it.each([
+		{ setting: undefined, expected: true },
+		{ setting: 'true', expected: true },
+		{ setting: 'invalid', expected: true },
+		{ setting: 'false', expected: false }
+	])('resolves $setting to $expected', ({ setting, expected }) => {
+		expect(resolveOutboxDryRun(setting)).toBe(expected);
+	});
 });
 
 describe('live draft scheduler wiring', () => {
