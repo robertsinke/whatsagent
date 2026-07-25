@@ -10,7 +10,8 @@
 	let {
 		draft,
 		stalePrompt = null,
-		phaseTwoPending = false,
+		/** True for 1:1 chats with no draft — the empty-draft hint is only meaningful where the agent is allowed to act. */
+		agentEligible = false,
 		onedit,
 		onapprove,
 		onskip,
@@ -19,8 +20,7 @@
 	}: {
 		draft: Draft | null;
 		stalePrompt?: StalePrompt | null;
-		/** True until U8 ships — the agent isn't drafting yet. */
-		phaseTwoPending?: boolean;
+		agentEligible?: boolean;
 		onedit?: (text: string) => void;
 		onapprove?: () => void;
 		onskip?: () => void;
@@ -86,20 +86,21 @@
 			</Button>
 			{#if draft.status === 'failed'}
 				<span class="draft-note">
-					<RotateCw class="size-3" /> Drafting failed — retry lands with the agent (U8).
+					<RotateCw class="size-3" /> Drafting failed — the agent waits for the next inbound
+					to retry, or you can reply yourself any time.
 				</span>
 			{/if}
 		</div>
 	</div>
-{:else if phaseTwoPending}
+{:else if agentEligible}
 	<div class="draft muted">
 		<div class="draft-head">
 			<Pencil class="size-3.5" />
 			<span class="draft-title">No draft</span>
 		</div>
 		<p class="draft-note">
-			The drafting agent arrives in Phase 2. Until then, replies are yours to type — and nothing
-			ever sends without you pressing send.
+			The agent will draft here once the latest inbound settles (about a minute after the last
+			message). Type your own reply any time — nothing sends without you.
 		</p>
 	</div>
 {/if}

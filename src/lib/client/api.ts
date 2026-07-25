@@ -76,6 +76,20 @@ export const api = {
 	markRead: (jid: string) =>
 		request<Chat>(`/chats/${encodeURIComponent(jid)}/read`, { method: 'POST' }),
 
+	/**
+	 * Owner-triggered on-demand history deepen. Asks the phone for older
+	 * messages via Baileys `fetchMessageHistory` (server route POST
+	 * `/api/chats/:jid/history/deepen`). Returns 202 on acceptance; ingestion
+	 * arrives over WS as normal `message-new`/`sync-progress` events. Read-only
+	 * for the client — this never sends anything to WhatsApp recipients and is
+	 * gated to disconnected/eligible states on the server.
+	 */
+	deepenHistory: (jid: string, count?: number) =>
+		request<{ ok: true }>(`/chats/${encodeURIComponent(jid)}/history/deepen`, {
+			method: 'POST',
+			body: JSON.stringify(count === undefined ? {} : { count })
+		}),
+
 	draft: (jid: string) => request<Draft>(`/chats/${encodeURIComponent(jid)}/draft`),
 
 	editDraft: (jid: string, text: string) =>
