@@ -1,6 +1,12 @@
 import { getChat, setChatAgentState, type Chat } from '../store/chats.js';
 import type { AppDatabase } from '../store/db.js';
-import { deleteDraft, getDraft, upsertDraft, type Draft } from '../store/drafts.js';
+import {
+	deleteDraft,
+	getDraft,
+	upsertDraft,
+	type Draft,
+	type DraftInput as DraftRowInput
+} from '../store/drafts.js';
 import { getLastMessage, listMessagesPage, type Message } from '../store/messages.js';
 import {
 	ProviderError,
@@ -80,7 +86,11 @@ function emitChat(options: DraftChatOptions): void {
 	if (chat) options.hooks?.onChatUpdated?.(chat);
 }
 
-function persistDraft(options: DraftChatOptions, input: Omit<Draft, 'chat_jid'>): Draft {
+/**
+ * `error_code` is optional and defaults to null on every write, so any non-failed
+ * transition (including a retry) clears a stale code rather than carrying it.
+ */
+function persistDraft(options: DraftChatOptions, input: Omit<DraftRowInput, 'chat_jid'>): Draft {
 	upsertDraft(options.db, { chat_jid: options.chatJid, ...input });
 	const draft = getDraft(options.db, options.chatJid)!;
 	options.hooks?.onDraftUpdated?.(draft);
@@ -137,9 +147,10 @@ export async function draftChat(options: DraftChatOptions): Promise<DraftAttempt
 		if (result.kind === 'no_reply_needed') {
 			deleteDraft(options.db, options.chatJid);
 			options.hooks?.onDraftRemoved?.(options.chatJid);
-			// The existing needs-reply API recognizes skipped-since-last-inbound as
-			// its persisted demotion; onMessage clears it for a later inbound.
-			setChatAgentState(options.db, options.chatJid, 'skipped');
+			// 'quiet' is the agent's own verdict, distinct from an owner 'skip' — the
+			// UI must not present them alike. Both demote out of needs-reply, and
+			// onMessage clears either for a later inbound.
+			setChatAgentState(options.db, options.chatJid, 'quiet');
 			emitChat(options);
 			return { kind: 'no_reply_needed' };
 		}
@@ -174,14 +185,15 @@ export async function draftChat(options: DraftChatOptions): Promise<DraftAttempt
 			return { kind: 'rate_limited', retryAfterMs: providerError.retryAfterMs ?? 1_000 };
 		}
 
-		// The existing schema has no error-code column; failed rows carry the typed
-		// ProviderErrorCode in text until the API model grows a dedicated field.
+		// D3: the typed code lives in its own column. `text` keeps the last good
+		// draft body if there was one, so a retry failure doesn't destroy it.
 		persistDraft(options, {
-			text: providerError.code,
+			text: prior?.status === 'ready' ? prior.text : '',
 			status: 'failed',
 			generated_at: now(),
 			provider: options.providerName,
-			basis_msg_id: candidate.lastInbound.id
+			basis_msg_id: candidate.lastInbound.id,
+			error_code: providerError.code
 		});
 		setChatAgentState(options.db, options.chatJid, 'failed');
 		emitChat(options);

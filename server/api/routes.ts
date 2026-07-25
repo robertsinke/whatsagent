@@ -85,7 +85,8 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
 export function chatNeedsReply(db: AppDatabase, chat: Chat): boolean {
 	if (chat.kind !== '1:1') return false;
 	if (chat.muted || chat.archived) return false;
-	if (chat.agent_state === 'skipped') return false;
+	// 'skipped' = owner opted out; 'quiet' = agent returned no_reply_needed (D3).
+	if (chat.agent_state === 'skipped' || chat.agent_state === 'quiet') return false;
 	const last = getLastMessage(db, chat.jid);
 	if (!last || last.from_me) return false;
 	return true;

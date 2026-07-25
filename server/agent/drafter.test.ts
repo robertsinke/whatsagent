@@ -104,7 +104,8 @@ describe('draftChat', () => {
 			})
 		).resolves.toEqual({ kind: 'no_reply_needed' });
 		expect(getDraft(database, 'alice@s.whatsapp.net')).toBeUndefined();
-		expect(getChat(database, 'alice@s.whatsapp.net')?.agent_state).toBe('skipped');
+		// 'quiet', not 'skipped' — an agent verdict is not an owner opt-out.
+		expect(getChat(database, 'alice@s.whatsapp.net')?.agent_state).toBe('quiet');
 	});
 
 	it('stores a ProviderError code as failed without an agent retry', async () => {
@@ -127,7 +128,8 @@ describe('draftChat', () => {
 		expect(provider.draft).toHaveBeenCalledOnce();
 		expect(getDraft(database, 'alice@s.whatsapp.net')).toMatchObject({
 			status: 'failed',
-			text: 'process_exit',
+			error_code: 'process_exit',
+			text: '',
 			basis_msg_id: 'm2'
 		});
 		expect(getChat(database, 'alice@s.whatsapp.net')?.agent_state).toBe('failed');
