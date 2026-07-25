@@ -16,6 +16,7 @@ import {
 	type SqliteAuthStore
 } from './auth-store.js';
 import { attachIngest } from './ingest.js';
+import { deepenChatHistory } from './history.js';
 import type { WhatsAppSendSocket } from './send.js';
 
 type SocketEventHandler = (...args: any[]) => void;
@@ -25,6 +26,11 @@ export type WhatsAppSocket = Partial<WhatsAppSendSocket> & {
 		on(event: string, handler: SocketEventHandler): unknown;
 	};
 	end(error?: Error): void;
+	fetchMessageHistory?(
+		count: number,
+		oldestMsgKey: WAMessageKey,
+		oldestMsgTimestamp: number
+	): Promise<string>;
 };
 
 export type SocketFactory = (config: UserFacingSocketConfig) => WhatsAppSocket;
@@ -173,6 +179,17 @@ export class WhatsAppConnection implements Channel {
 			!socket.readMessages
 		) return undefined;
 		return socket as WhatsAppSendSocket;
+	}
+
+	async deepenHistory(chatId: string, count = 50): Promise<unknown> {
+		const fetchMessageHistory = this.#socket?.fetchMessageHistory;
+		if (!fetchMessageHistory) throw new Error('WhatsApp history is unavailable while disconnected');
+		return deepenChatHistory(
+			this.#db,
+			fetchMessageHistory.bind(this.#socket),
+			chatId,
+			count
+		);
 	}
 
 	#connect(): void {

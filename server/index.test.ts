@@ -10,6 +10,7 @@ import { getDraft } from './store/drafts.js';
 import { getMessage, upsertMessage } from './store/messages.js';
 import { enqueueDraftOutbox, getOutbox } from './store/outbox.js';
 import { createApp, type App } from './index.js';
+import type { Memory } from './agent/memory/memory.js';
 
 class FakeChannel implements Channel {
 	readonly listeners = new Set<ChannelEventListener>();
@@ -54,6 +55,13 @@ describe('live draft scheduler wiring', () => {
 			last_msg_at: 10
 		});
 		upsertMessage(db, {
+			id: 'owner-style',
+			chat_jid: 'alice@s.whatsapp.net',
+			from_me: true,
+			ts: 5,
+			text: 'Short and direct.'
+		});
+		upsertMessage(db, {
 			id: 'history-basis',
 			chat_jid: 'alice@s.whatsapp.net',
 			from_me: false,
@@ -62,16 +70,28 @@ describe('live draft scheduler wiring', () => {
 		});
 
 		let draftCount = 0;
-		const draft: DraftProvider['draft'] = vi.fn(async () => ({
-			kind: 'draft' as const,
-			text: `reply ${++draftCount}`
-		}));
+		let voiceRetained = false;
+		const memory: Memory = {
+			retainVoiceObservation: vi.fn(async () => { voiceRetained = true; }),
+			retainEditDelta: async () => undefined,
+			recallStyleFor: async () => 'Uses short, direct replies.',
+			reflect: async () => undefined
+		};
+		const draft: DraftProvider['draft'] = vi.fn(async (input) => {
+			expect(voiceRetained).toBe(true);
+			expect(input.system).toContain('Uses short, direct replies.');
+			return {
+				kind: 'draft' as const,
+				text: `reply ${++draftCount}`
+			};
+		});
 		const channel = new FakeChannel();
 		app = createApp({
 			db,
 			channel,
 			draftProvider: { draft },
 			providerName: 'fake',
+			memory,
 			draftDebounceMs: 0,
 			port: 0,
 			staticDir: null

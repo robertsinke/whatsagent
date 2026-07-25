@@ -39,10 +39,10 @@
 			phase2: true
 		},
 		{
-			key: 'memory_enabled',
+			key: 'memory',
 			label: 'Voice memory',
-			help: '"on" uses local Hindsight; anything else runs the no-op NullMemory (U10).',
-			placeholder: 'off',
+			help: 'off · null · hindsight. Null keeps a static local voice profile; Hindsight learns over time after restart.',
+			placeholder: 'null',
 			phase2: true
 		}
 	];
@@ -77,7 +77,7 @@
 		</Button>
 		<h1>Settings</h1>
 		<p class="subtitle">
-			Stored locally in SQLite. Agent settings are live now and take effect when Phase 2 lands.
+			Stored locally in SQLite. Provider and memory changes take effect after restart.
 		</p>
 	</header>
 

@@ -11,12 +11,13 @@ import { listDraftFeedback } from '../store/draft-feedback.js';
 import { upsertMessage } from '../store/messages.js';
 import { getOutbox } from '../store/outbox.js';
 import { EventBus } from './events.js';
+import type { Memory } from '../agent/memory/memory.js';
 
 let dataDir: string | undefined;
 let app: App | undefined;
 let db: AppDatabase | undefined;
 
-async function startTestApp(events = new EventBus()): Promise<App> {
+async function startTestApp(events = new EventBus(), memory?: Memory): Promise<App> {
 	dataDir = mkdtempSync(join(tmpdir(), 'whatsagent-api-'));
 	db = openDatabase({ dataDir });
 	app = createApp({
@@ -24,7 +25,8 @@ async function startTestApp(events = new EventBus()): Promise<App> {
 		events,
 		port: 0,
 		host: '127.0.0.1',
-		staticDir: null
+		staticDir: null,
+		memory
 	});
 	await app.start();
 	return app;
@@ -496,7 +498,14 @@ describe('drafts', () => {
 	});
 
 	it('approve enqueues outbox; skip demotes chat from needs-reply', async () => {
-		await startTestApp();
+		const retainEditDelta = vi.fn(async () => undefined);
+		const memory = {
+			retainVoiceObservation: async () => undefined,
+			retainEditDelta,
+			recallStyleFor: async () => null,
+			reflect: async () => undefined
+		} satisfies Memory;
+		await startTestApp(new EventBus(), memory);
 		upsertChat(db!, {
 			jid: 'alice@s.whatsapp.net',
 			kind: '1:1',
@@ -558,6 +567,19 @@ describe('drafts', () => {
 			draft_text: 'draft reply',
 			final_text: null,
 			basis_msg_id: 'basis'
+		});
+		expect(retainEditDelta).toHaveBeenCalledTimes(2);
+		expect(retainEditDelta).toHaveBeenNthCalledWith(1, {
+			chatJid: 'alice@s.whatsapp.net',
+			draft: 'draft reply',
+			final: 'edited reply',
+			skipped: false
+		});
+		expect(retainEditDelta).toHaveBeenNthCalledWith(2, {
+			chatJid: 'alice@s.whatsapp.net',
+			draft: 'draft reply',
+			final: null,
+			skipped: true
 		});
 	});
 });

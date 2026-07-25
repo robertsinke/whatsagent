@@ -27,6 +27,8 @@ import {
 	listOutbox
 } from '../store/outbox.js';
 import { getSetting, listSettings, setSetting } from '../store/settings.js';
+import type { Memory } from '../agent/memory/memory.js';
+import { retainDraftLearning } from '../agent/voice.js';
 import type { ConnectionStatus, EventBus } from './events.js';
 import type { SessionView } from './session.js';
 import {
@@ -60,6 +62,10 @@ export type RoutesDeps = {
 	nextDraftJitterMs?: () => number;
 	/** Wake the single-flight pacer after queue mutations. */
 	wakeOutbox?: () => void;
+	/** Optional memory side effects; never participates in the outbox transaction. */
+	memory?: Memory;
+	/** Optional channel history deepener for thin voice samples. */
+	deepenHistory?: (chatJid: string, count?: number) => Promise<unknown>;
 };
 
 const MIME: Record<string, string> = {
@@ -482,6 +488,20 @@ async function handleApi(
 		return;
 	}
 
+	if (rest === 'history/deepen' && method === 'POST') {
+		if (!deps.deepenHistory) {
+			error(res, 503, 'History deepening unavailable');
+			return;
+		}
+		const body = (await readJsonBody(req)) as { count?: number } | undefined;
+		const requestedCount = typeof body?.count === 'number' && Number.isFinite(body.count)
+			? Math.trunc(body.count)
+			: 50;
+		const count = Math.min(Math.max(requestedCount, 1), 200);
+		json(res, 202, await deps.deepenHistory(jid, count));
+		return;
+	}
+
 	if (rest === 'read' && method === 'POST') {
 		if (!chat) {
 			error(res, 404, 'Chat not found', { jid });
@@ -593,6 +613,14 @@ async function handleApi(
 			return { row: getOutbox(db, id)!, draft: getDraft(db, jid)! };
 		});
 		const { row, draft } = approve();
+		if (deps.memory) {
+			void retainDraftLearning(deps.memory, {
+				chatJid: jid,
+				draft: existing.original_text,
+				final: text,
+				skipped: false
+			});
+		}
 		deps.wakeOutbox?.();
 		events.emit({ type: 'outbox-updated', outbox: row });
 		events.emit({ type: 'draft-updated', draft });
@@ -631,6 +659,14 @@ async function handleApi(
 		if (!skip()) {
 			error(res, 409, 'Approved draft is already sending or sent');
 			return;
+		}
+		if (deps.memory) {
+			void retainDraftLearning(deps.memory, {
+				chatJid: jid,
+				draft: existing.original_text,
+				final: null,
+				skipped: true
+			});
 		}
 		deps.wakeOutbox?.();
 		for (const outbox of cancelled) events.emit({ type: 'outbox-updated', outbox });
