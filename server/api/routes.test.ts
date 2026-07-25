@@ -1,12 +1,13 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 import { createApp, type App } from '../index.js';
 import { openDatabase, type AppDatabase } from '../store/db.js';
 import { upsertChat } from '../store/chats.js';
 import { upsertDraft } from '../store/drafts.js';
+import { listDraftFeedback } from '../store/draft-feedback.js';
 import { upsertMessage } from '../store/messages.js';
 import { getOutbox } from '../store/outbox.js';
 import { EventBus } from './events.js';
@@ -111,6 +112,7 @@ function seedNeedsReplyFixture(database: AppDatabase): void {
 }
 
 afterEach(async () => {
+	vi.restoreAllMocks();
 	if (app) {
 		// close() also closes db — clear our handle first so we don't double-close.
 		const current = app;
@@ -170,10 +172,12 @@ describe('POST /api/chats/:jid/messages (send → outbox)', () => {
 			chat_jid: string;
 			text: string;
 			status: string;
+			source: string;
 		};
 		expect(row.chat_jid).toBe('alice@s.whatsapp.net');
 		expect(row.text).toBe('hello from owner');
 		expect(row.status).toBe('pending');
+		expect(row.source).toBe('manual');
 		expect(getOutbox(db!, row.id)?.text).toBe('hello from owner');
 	});
 
@@ -365,6 +369,74 @@ describe('store write → WS event', () => {
 });
 
 describe('drafts', () => {
+	it('allows only one of two concurrent approvals to enqueue', async () => {
+		await startTestApp();
+		upsertChat(db!, {
+			jid: 'alice@s.whatsapp.net',
+			kind: '1:1',
+			last_msg_at: 10
+		});
+		upsertMessage(db!, {
+			id: 'basis',
+			chat_jid: 'alice@s.whatsapp.net',
+			from_me: false,
+			ts: 10,
+			text: 'question?'
+		});
+		upsertDraft(db!, {
+			chat_jid: 'alice@s.whatsapp.net',
+			text: 'one approval only',
+			status: 'ready',
+			generated_at: 11,
+			basis_msg_id: 'basis'
+		});
+
+		const responses = await Promise.all([
+			api('/api/chats/alice%40s.whatsapp.net/draft/approve', { method: 'POST' }),
+			api('/api/chats/alice%40s.whatsapp.net/draft/approve', { method: 'POST' })
+		]);
+		expect(responses.map((response) => response.status).sort()).toEqual([202, 409]);
+		expect((db!.prepare('SELECT COUNT(*) AS count FROM outbox').get() as { count: number }).count)
+			.toBe(1);
+	});
+
+	it('rolls back the outbox row when approval feedback persistence fails', async () => {
+		vi.spyOn(console, 'error').mockImplementation(() => undefined);
+		await startTestApp();
+		upsertChat(db!, {
+			jid: 'alice@s.whatsapp.net',
+			kind: '1:1',
+			last_msg_at: 10
+		});
+		upsertMessage(db!, {
+			id: 'basis',
+			chat_jid: 'alice@s.whatsapp.net',
+			from_me: false,
+			ts: 10,
+			text: 'question?'
+		});
+		upsertDraft(db!, {
+			chat_jid: 'alice@s.whatsapp.net',
+			text: 'draft reply',
+			status: 'ready',
+			generated_at: 11,
+			basis_msg_id: 'basis'
+		});
+		db!.exec(
+			`CREATE TRIGGER fail_feedback BEFORE INSERT ON draft_feedback
+			 BEGIN SELECT RAISE(ABORT, 'feedback unavailable'); END`
+		);
+
+		const response = await api('/api/chats/alice%40s.whatsapp.net/draft/approve', {
+			method: 'POST'
+		});
+		expect(response.status).toBe(500);
+		expect((db!.prepare('SELECT COUNT(*) AS count FROM outbox').get() as { count: number }).count)
+			.toBe(0);
+		expect((db!.prepare('SELECT status FROM drafts WHERE chat_jid = ?').get('alice@s.whatsapp.net')))
+			.toEqual({ status: 'ready' });
+	});
+
 	it('rejects a stale draft even when an outbound message is newest', async () => {
 		await startTestApp();
 		upsertChat(db!, {
@@ -410,6 +482,17 @@ describe('drafts', () => {
 			basis_msg_id: 'basis',
 			latest_inbound_id: 'newer-inbound'
 		});
+
+		const confirmed = await api('/api/chats/alice%40s.whatsapp.net/draft/approve', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ confirmed_latest_inbound_id: 'newer-inbound' })
+		});
+		expect(confirmed.status).toBe(202);
+		expect(await confirmed.json()).toMatchObject({
+			outbox: { text: 'old draft', source: 'draft', status: 'pending' },
+			draft: { status: 'approved' }
+		});
 	});
 
 	it('approve enqueues outbox; skip demotes chat from needs-reply', async () => {
@@ -442,21 +525,23 @@ describe('drafts', () => {
 		});
 		expect(approve.status).toBe(202);
 		const approved = (await approve.json()) as {
-			outbox: { text: string; status: string };
+			outbox: { text: string; status: string; draft_text: string };
 			draft: { status: string };
 		};
 		expect(approved.outbox.text).toBe('edited reply');
 		expect(approved.outbox.status).toBe('pending');
+		expect(approved.outbox.draft_text).toBe('draft reply');
 		expect(approved.draft.status).toBe('approved');
-
-		// Re-seed a skippable draft on a needs-reply chat.
-		upsertDraft(db!, {
-			chat_jid: 'alice@s.whatsapp.net',
-			text: 'another',
-			status: 'drafted',
-			generated_at: 12,
+		expect(listDraftFeedback(db!, 'alice@s.whatsapp.net')).toMatchObject([
+		{
+			kind: 'approved',
+			draft_text: 'draft reply',
+			final_text: 'edited reply',
 			basis_msg_id: 'basis'
-		});
+		}
+	]);
+
+		// Skip remains meaningful after approval: it cancels the queued row.
 		const skip = await api('/api/chats/alice%40s.whatsapp.net/draft/skip', {
 			method: 'POST'
 		});
@@ -465,5 +550,14 @@ describe('drafts', () => {
 		const filtered = await api('/api/chats?filter=needs-reply');
 		const body = (await filtered.json()) as { items: unknown[] };
 		expect(body.items).toEqual([]);
+		expect((await api('/api/outbox').then((res) => res.json()))).toMatchObject({
+			items: [{ status: 'cancelled', source: 'draft' }]
+		});
+		expect(listDraftFeedback(db!, 'alice@s.whatsapp.net').at(-1)).toMatchObject({
+			kind: 'skipped',
+			draft_text: 'draft reply',
+			final_text: null,
+			basis_msg_id: 'basis'
+		});
 	});
 });

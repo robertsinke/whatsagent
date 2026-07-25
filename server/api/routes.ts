@@ -10,6 +10,7 @@ import {
 	type Chat
 } from '../store/chats.js';
 import { deleteDraft, getDraft, upsertDraft } from '../store/drafts.js';
+import { recordDraftFeedback } from '../store/draft-feedback.js';
 import {
 	getLastInboundMessage,
 	getLastMessage,
@@ -19,7 +20,9 @@ import {
 } from '../store/messages.js';
 import {
 	cancelOutbox,
-	enqueueOutbox,
+	cancelPendingDraftOutbox,
+	enqueueDraftOutbox,
+	enqueueManualOutbox,
 	getOutbox,
 	listOutbox
 } from '../store/outbox.js';
@@ -53,6 +56,10 @@ export type RoutesDeps = {
 	allowedOrigins?: AllowedOrigins;
 	/** Prefer over static `allowedOrigins` when the listen port is ephemeral (0). */
 	getAllowedOrigins?: () => AllowedOrigins;
+	/** Pacer-owned jitter used when approved drafts enter the global schedule. */
+	nextDraftJitterMs?: () => number;
+	/** Wake the single-flight pacer after queue mutations. */
+	wakeOutbox?: () => void;
 };
 
 const MIME: Record<string, string> = {
@@ -384,6 +391,7 @@ async function handleApi(
 			return;
 		}
 		const updated = getOutbox(db, id)!;
+		deps.wakeOutbox?.();
 		events.emit({ type: 'outbox-updated', outbox: updated });
 		json(res, 200, updated);
 		return;
@@ -462,14 +470,13 @@ async function handleApi(
 			return;
 		}
 		const now = Date.now();
-		const id = enqueueOutbox(db, {
-			chat_jid: jid,
+		const id = enqueueManualOutbox(db, {
+			chatJid: jid,
 			text,
-			queued_at: now,
-			send_after: now,
-			status: 'pending'
+			now
 		});
 		const row = getOutbox(db, id)!;
+		deps.wakeOutbox?.();
 		events.emit({ type: 'outbox-updated', outbox: row });
 		json(res, 202, row);
 		return;
@@ -511,6 +518,10 @@ async function handleApi(
 			error(res, 404, 'Draft not found');
 			return;
 		}
+		if (!['ready', 'stale', 'drafted'].includes(existing.status)) {
+			error(res, 409, 'Draft is not editable', { status: existing.status });
+			return;
+		}
 		const body = (await readJsonBody(req)) as { text?: string } | undefined;
 		if (typeof body?.text !== 'string') {
 			error(res, 400, 'Expected { text }');
@@ -528,36 +539,61 @@ async function handleApi(
 			error(res, 404, 'Chat not found', { jid });
 			return;
 		}
+		const body = (await readJsonBody(req)) as
+			| { text?: string; confirmed_latest_inbound_id?: string }
+			| undefined;
+		// Re-read after the await above. Another approval may have completed while
+		// this request body was arriving; only one request may observe approvable.
 		const existing = getDraft(db, jid);
 		if (!existing) {
 			error(res, 404, 'Draft not found');
 			return;
 		}
+		if (!['ready', 'stale', 'drafted'].includes(existing.status)) {
+			error(res, 409, 'Draft is not approvable', { status: existing.status });
+			return;
+		}
 		const latestInbound = getLastInboundMessage(db, jid);
-		if (existing.basis_msg_id && latestInbound && latestInbound.id !== existing.basis_msg_id) {
+		if (
+			existing.basis_msg_id &&
+			latestInbound &&
+			latestInbound.id !== existing.basis_msg_id &&
+			body?.confirmed_latest_inbound_id !== latestInbound.id
+		) {
 			error(res, 409, 'Draft is stale; newer inbound arrived', {
 				basis_msg_id: existing.basis_msg_id,
 				latest_inbound_id: latestInbound.id
 			});
 			return;
 		}
-		const body = (await readJsonBody(req)) as { text?: string } | undefined;
 		const text = (body?.text ?? existing.text).trim();
 		if (!text) {
 			error(res, 400, 'Empty draft text');
 			return;
 		}
 		const now = Date.now();
-		const id = enqueueOutbox(db, {
-			chat_jid: jid,
-			text,
-			queued_at: now,
-			send_after: now,
-			status: 'pending'
+		const approve = db.transaction(() => {
+			const id = enqueueDraftOutbox(db, {
+				chatJid: jid,
+				text,
+				draftText: existing.original_text,
+				basisMsgId: existing.basis_msg_id,
+				now,
+				jitterMs: deps.nextDraftJitterMs?.() ?? 30_000
+			});
+			recordDraftFeedback(db, {
+				chat_jid: jid,
+				kind: 'approved',
+				draft_text: existing.original_text,
+				final_text: text,
+				basis_msg_id: existing.basis_msg_id,
+				created_at: now
+			});
+			upsertDraft(db, { ...existing, text, status: 'approved' });
+			return { row: getOutbox(db, id)!, draft: getDraft(db, jid)! };
 		});
-		upsertDraft(db, { ...existing, text, status: 'approved' });
-		const row = getOutbox(db, id)!;
-		const draft = getDraft(db, jid)!;
+		const { row, draft } = approve();
+		deps.wakeOutbox?.();
 		events.emit({ type: 'outbox-updated', outbox: row });
 		events.emit({ type: 'draft-updated', draft });
 		json(res, 202, { outbox: row, draft });
@@ -569,8 +605,35 @@ async function handleApi(
 			error(res, 404, 'Chat not found', { jid });
 			return;
 		}
-		deleteDraft(db, jid);
-		setChatAgentState(db, jid, 'skipped');
+		const existing = getDraft(db, jid);
+		if (!existing) {
+			error(res, 404, 'Draft not found');
+			return;
+		}
+		let cancelled: ReturnType<typeof cancelPendingDraftOutbox> = [];
+		const skip = db.transaction(() => {
+			if (existing.status === 'approved') {
+				cancelled = cancelPendingDraftOutbox(db, jid, existing.basis_msg_id);
+				if (cancelled.length === 0) return false;
+			}
+			recordDraftFeedback(db, {
+				chat_jid: jid,
+				kind: 'skipped',
+				draft_text: existing.original_text,
+				final_text: null,
+				basis_msg_id: existing.basis_msg_id,
+				created_at: Date.now()
+			});
+			deleteDraft(db, jid);
+			setChatAgentState(db, jid, 'skipped');
+			return true;
+		});
+		if (!skip()) {
+			error(res, 409, 'Approved draft is already sending or sent');
+			return;
+		}
+		deps.wakeOutbox?.();
+		for (const outbox of cancelled) events.emit({ type: 'outbox-updated', outbox });
 		const updated = toChatView(db, getChat(db, jid)!, (c) => chatNeedsReply(db, c));
 		events.emit({ type: 'draft-removed', chat_jid: jid });
 		events.emit({ type: 'chat-updated', chat: updated });

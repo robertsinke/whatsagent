@@ -163,6 +163,28 @@ export class AppState {
 		}
 	}
 
+	/** Explicit second owner action after the server reports a stale basis. */
+	async confirmStaleDraft(text?: string): Promise<void> {
+		const prompt = this.stalePrompt;
+		if (!prompt || this.selectedJid !== prompt.chatJid || !prompt.latestInboundId) return;
+		try {
+			const { outbox, draft } = await api.approveDraft(
+				prompt.chatJid,
+				text,
+				prompt.latestInboundId
+			);
+			this.#mergeOutbox(outbox);
+			this.draft = draft;
+			this.stalePrompt = null;
+		} catch (err) {
+			if (err instanceof ApiError && err.status === 409) {
+				await this.approveDraft(text);
+				return;
+			}
+			this.error = describeError(err);
+		}
+	}
+
 	async skipDraft(): Promise<void> {
 		const jid = this.selectedJid;
 		if (!jid) return;

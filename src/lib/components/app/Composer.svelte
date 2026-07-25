@@ -40,7 +40,7 @@
 		onsubmit={submit}
 		class="composer-input"
 	/>
-	<p class="hint">Sends queue through the outbox — nothing leaves without you.</p>
+	<p class="hint">Typed sends go immediately through the outbox — nothing bypasses it.</p>
 </div>
 
 <style>

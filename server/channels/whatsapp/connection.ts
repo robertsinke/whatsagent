@@ -16,10 +16,11 @@ import {
 	type SqliteAuthStore
 } from './auth-store.js';
 import { attachIngest } from './ingest.js';
+import type { WhatsAppSendSocket } from './send.js';
 
 type SocketEventHandler = (...args: any[]) => void;
 
-export type WhatsAppSocket = {
+export type WhatsAppSocket = Partial<WhatsAppSendSocket> & {
 	ev: {
 		on(event: string, handler: SocketEventHandler): unknown;
 	};
@@ -162,6 +163,18 @@ export class WhatsAppConnection implements Channel {
 		this.#authStore = this.#createAuthStore();
 	}
 
+	/** Restricted send capability handed only to the outbox adapter at boot. */
+	getSendSocket(): WhatsAppSendSocket | undefined {
+		if (this.#state !== 'connected') return undefined;
+		const socket = this.#socket;
+		if (
+			!socket?.sendMessage ||
+			!socket.sendPresenceUpdate ||
+			!socket.readMessages
+		) return undefined;
+		return socket as WhatsAppSendSocket;
+	}
+
 	#connect(): void {
 		if (!this.#running) return;
 		this.#setState('connecting');
@@ -178,6 +191,8 @@ export class WhatsAppConnection implements Channel {
 			this.#socket = socket;
 
 			this.#detachIngest = attachIngest(socket.ev, this.#db, {
+				onMessageIngested: (message) =>
+					this.#emit({ type: 'message-committed', message }),
 				onSyncProgress: (progress) =>
 					this.#emit({
 						type: 'sync-progress',

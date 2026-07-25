@@ -303,7 +303,8 @@ describe('attachIngest + mute/archive updates', () => {
 			}
 		};
 		const onSyncProgress = vi.fn();
-		attachIngest(ev, database, { onSyncProgress });
+		const onMessageIngested = vi.fn();
+		attachIngest(ev, database, { onSyncProgress, onMessageIngested });
 
 		for (const handler of handlers.get('messaging-history.set') ?? []) {
 			handler({
@@ -345,6 +346,24 @@ describe('attachIngest + mute/archive updates', () => {
 			archived: true,
 			name: 'Alice'
 		});
+
+		const live = {
+			type: 'notify' as const,
+			messages: [
+				{
+					key: { id: 'live-once', remoteJid: 'alice@s.whatsapp.net', fromMe: false },
+					messageTimestamp: 20,
+					message: { conversation: 'new inbound' }
+				}
+			]
+		};
+		for (const handler of handlers.get('messages.upsert') ?? []) handler(live);
+		for (const handler of handlers.get('messages.upsert') ?? []) handler(live);
+		expect(onMessageIngested).toHaveBeenCalledOnce();
+		expect(onMessageIngested).toHaveBeenCalledWith(
+			expect.objectContaining({ id: 'live-once', text: 'new inbound' })
+		);
+		expect(getChat(database, 'alice@s.whatsapp.net')?.unread).toBe(1);
 	});
 });
 

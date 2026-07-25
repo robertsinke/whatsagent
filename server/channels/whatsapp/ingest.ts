@@ -12,7 +12,7 @@ import {
 import { getChat, upsertChat, type ChatKind } from '../../store/chats.js';
 import { upsertContact } from '../../store/contacts.js';
 import type { AppDatabase } from '../../store/db.js';
-import { upsertMessage } from '../../store/messages.js';
+import { getMessage, upsertMessage, type Message } from '../../store/messages.js';
 
 export type HistorySetPayload = {
 	chats: Chat[];
@@ -43,6 +43,7 @@ export type IngestListener = {
 
 export type AttachIngestOptions = {
 	onSyncProgress?: (progress: SyncProgress) => void;
+	onMessageIngested?: (message: Message) => void;
 };
 
 type LongLike = { toNumber(): number };
@@ -247,9 +248,10 @@ export function ingestBaileysMessage(
 
 	// FK: chat row must exist before the message row.
 	const existing = getChat(db, chatJid);
+	const existingMessage = getMessage(db, id);
 	const nextLast = existing?.last_msg_at == null ? ts : Math.max(existing.last_msg_at, ts);
 	let unread = existing?.unread ?? 0;
-	if (options.bumpUnread && !fromMe) unread += 1;
+	if (options.bumpUnread && !fromMe && !existingMessage) unread += 1;
 
 	upsertChatMerged(db, {
 		jid: chatJid,
@@ -332,7 +334,22 @@ export function attachIngest(
 		const progress = handleHistorySet(db, payload);
 		options.onSyncProgress?.(progress);
 	};
-	const onMessages = (payload: MessagesUpsertPayload) => handleMessagesUpsert(db, payload);
+	const onMessages = (payload: MessagesUpsertPayload) => {
+		const existingIds = new Set(
+			payload.messages
+				.map((message) => message.key?.id)
+				.filter((id): id is string => Boolean(id && getMessage(db, id)))
+		);
+		handleMessagesUpsert(db, payload);
+		// The transaction above has committed. Consumers may now safely classify
+		// against the complete stored chat/message state.
+		for (const incoming of payload.messages) {
+			const id = incoming.key?.id;
+			if (!id || existingIds.has(id)) continue;
+			const stored = getMessage(db, id);
+			if (stored) options.onMessageIngested?.(stored);
+		}
+	};
 	const onChats = (chats: Chat[]) => handleChatsUpsert(db, chats);
 	const onChatUpdates = (updates: ChatUpdate[]) => handleChatsUpdate(db, updates);
 	const onContacts = (contacts: Contact[]) => handleContactsUpsert(db, contacts);

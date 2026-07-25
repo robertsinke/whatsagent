@@ -47,6 +47,7 @@ describe('migrations', () => {
 		expect(tables.map((t) => t.name)).toEqual([
 			'chats',
 			'contacts',
+			'draft_feedback',
 			'drafts',
 			'messages',
 			'outbox',
