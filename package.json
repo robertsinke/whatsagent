@@ -7,8 +7,9 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "dev": "vite dev",
+    "dev": "tsx scripts/concurrent-dev.ts",
     "dev:server": "tsx watch server/index.ts",
+    "dev:web": "vite dev",
     "start": "tsx server/index.ts",
     "build": "npm run check && vite build",
     "preview": "vite preview",
