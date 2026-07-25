@@ -104,7 +104,8 @@ describe('messaging-history.set', () => {
 			]
 		});
 
-		expect(progress).toEqual({ progress: 40, isLatest: false });
+		// Batch counts are the only honest sync unit — Baileys never sends a total (D5).
+	expect(progress).toEqual({ progress: 40, isLatest: false, chats: 2, messages: 3 });
 
 		const chats = listChats(database);
 		expect(chats.map((c) => c.jid)).toEqual(['alice@s.whatsapp.net', 'family@g.us']);
@@ -322,7 +323,12 @@ describe('attachIngest + mute/archive updates', () => {
 				messages: []
 			});
 		}
-		expect(onSyncProgress).toHaveBeenCalledWith({ progress: 100, isLatest: true });
+		expect(onSyncProgress).toHaveBeenCalledWith({
+		progress: 100,
+		isLatest: true,
+		chats: 1,
+		messages: 0
+	});
 
 		for (const handler of handlers.get('chats.update') ?? []) {
 			handler([

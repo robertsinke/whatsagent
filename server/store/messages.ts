@@ -1,5 +1,15 @@
 import type { AppDatabase } from './db.js';
 
+/** D2 — persisted media viewer state; the UI never infers it. */
+export type MediaState = 'placeholder' | 'downloading' | 'ready' | 'failed';
+
+/**
+ * D2 — why a media fetch failed.
+ * `unavailable` is terminal (WhatsApp-side expiry / reupload refused): no retry.
+ * `transient` is network/decrypt/IO: retry affordance shown.
+ */
+export type MediaFailureReason = 'unavailable' | 'transient';
+
 export type Message = {
 	id: string;
 	chat_jid: string;
@@ -10,6 +20,8 @@ export type Message = {
 	type: string;
 	text: string | null;
 	media_ref: string | null;
+	media_state: MediaState;
+	media_error: MediaFailureReason | null;
 	raw: string | null;
 };
 
@@ -36,6 +48,8 @@ type MessageRow = {
 	type: string;
 	text: string | null;
 	media_ref: string | null;
+	media_state: MediaState;
+	media_error: MediaFailureReason | null;
 	raw: string | null;
 };
 
@@ -50,11 +64,42 @@ function mapMessage(row: MessageRow): Message {
 		type: row.type,
 		text: row.text,
 		media_ref: row.media_ref,
+		media_state: row.media_state,
+		media_error: row.media_error,
 		raw: row.raw
 	};
 }
 
-/** Idempotent upsert — same `id` replaces the prior row (ingestion-safe). */
+/**
+ * D2 — the four persisted media states. Written only by `setMediaState`, never
+ * by `upsertMessage`: a history re-ingest of an already-downloaded message must
+ * not reset the owner's cached media back to tap-to-load.
+ */
+export function setMediaState(
+	db: AppDatabase,
+	id: string,
+	state: MediaState,
+	error: MediaFailureReason | null = null
+): void {
+	db.prepare('UPDATE messages SET media_state = ?, media_error = ? WHERE id = ?').run(
+		state,
+		state === 'failed' ? error : null,
+		id
+	);
+}
+
+/** Records a successful download: cached path + `ready`, in one statement. */
+export function setMediaRef(db: AppDatabase, id: string, mediaRef: string): void {
+	db.prepare(
+		`UPDATE messages SET media_ref = ?, media_state = 'ready', media_error = NULL WHERE id = ?`
+	).run(mediaRef, id);
+}
+
+/**
+ * Idempotent upsert — same `id` replaces the prior row (ingestion-safe).
+ * `media_ref` is preserved on conflict and `media_state`/`media_error` are not
+ * touched at all: a re-ingested history batch must never discard cached media.
+ */
 export function upsertMessage(db: AppDatabase, message: MessageInput): void {
 	db.prepare(
 		`INSERT INTO messages (id, chat_jid, channel, from_me, sender, ts, type, text, media_ref, raw)
@@ -67,7 +112,7 @@ export function upsertMessage(db: AppDatabase, message: MessageInput): void {
 		   ts = excluded.ts,
 		   type = excluded.type,
 		   text = excluded.text,
-		   media_ref = excluded.media_ref,
+		   media_ref = COALESCE(excluded.media_ref, messages.media_ref),
 		   raw = excluded.raw`
 	).run({
 		id: message.id,

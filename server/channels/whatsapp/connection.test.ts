@@ -97,7 +97,9 @@ describe('WhatsApp connection', () => {
 			{ type: 'connection', state: 'connected' },
 			{ type: 'connection', state: 'disconnected' },
 			{ type: 'connection', state: 'connecting' },
-			{ type: 'connection', state: 'disconnected' }
+			{ type: 'connection', state: 'disconnected' },
+			// Terminal signal the transport enum can't express — drives D5's `logged_out`.
+			{ type: 'logged-out' }
 		]);
 	});
 

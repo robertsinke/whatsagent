@@ -161,7 +161,9 @@ export class WhatsAppConnection implements Channel {
 					this.#emit({
 						type: 'sync-progress',
 						progress: progress.progress,
-						isLatest: progress.isLatest
+						isLatest: progress.isLatest,
+						chats: progress.chats,
+						messages: progress.messages
 					})
 			});
 
@@ -198,6 +200,8 @@ export class WhatsAppConnection implements Channel {
 		const code = disconnectStatusCode(update.lastDisconnect?.error);
 		if (code === DisconnectReason.loggedOut) {
 			this.#running = false;
+			// Terminal — no reconnect will help; the owner must re-pair (D5).
+			this.#emit({ type: 'logged-out' });
 			return;
 		}
 		this.#scheduleReconnect();

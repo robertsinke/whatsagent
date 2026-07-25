@@ -1,377 +1,240 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
+	import * as Resizable from '$lib/components/ui/resizable/index.js';
+	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
-	import * as Tabs from '$lib/components/ui/tabs/index.js';
-	import * as Item from '$lib/components/ui/item/index.js';
-	import { Avatar, AvatarFallback, AvatarBadge } from '$lib/components/ui/avatar/index.js';
-	import { Badge } from '$lib/components/ui/badge/index.js';
-	import {
-		Conversation,
-		ConversationContent,
-		ConversationScrollButton
-	} from '$lib/components/ai-elements/conversation/index.js';
-	import Message from '$lib/components/ai-elements/message.svelte';
-	import MessageContent from '$lib/components/ai-elements/message-content.svelte';
-	import PromptInput from '$lib/components/ai-elements/prompt-input.svelte';
-	import { Pencil, Send, Inbox, Users } from '@lucide/svelte';
+	import * as Empty from '$lib/components/ui/empty/index.js';
+	import { MessagesSquare, Settings } from '@lucide/svelte';
+	import ChatList from '$lib/components/app/ChatList.svelte';
+	import Composer from '$lib/components/app/Composer.svelte';
+	import ConversationPane from '$lib/components/app/ConversationPane.svelte';
+	import DraftStatus from '$lib/components/app/DraftStatus.svelte';
+	import OutboxTray from '$lib/components/app/OutboxTray.svelte';
+	import PairingScreen from '$lib/components/app/PairingScreen.svelte';
+	import SessionStatus from '$lib/components/app/SessionStatus.svelte';
+	import { AppState } from '$lib/client/state.svelte.js';
+	import { displayName, initialsFor, sessionBanner } from '$lib/client/view.js';
 
-	type DemoChat = {
-		name: string;
-		initials: string;
-		preview: string;
-		time: string;
-		unread: number;
-		hasDraft: boolean;
-	};
-
-	const chats: DemoChat[] = [
-		{ name: 'Maya Rivera', initials: 'MR', preview: 'Did you send the brief?', time: '2m', unread: 2, hasDraft: true },
-		{ name: 'Tom K.', initials: 'TK', preview: 'ok 👍', time: '1h', unread: 0, hasDraft: false },
-		{ name: 'Design Sync', initials: 'DS', preview: 'Aiko: updated the figma', time: '3h', unread: 5, hasDraft: false }
-	];
-
+	const app = new AppState();
 	let composerValue = $state('');
-	let composerStatus = $state<'ready' | 'submitted' | 'streaming' | 'error'>('ready');
+
+	// Never in `load()` — this route prerenders, and a load-time fetch would run
+	// at build time with no backend listening.
+	onMount(() => {
+		app.start();
+		return () => app.stop();
+	});
+
+	const banner = $derived(sessionBanner(app.session));
+	const chatTitle = $derived(app.selectedChat ? displayName(app.selectedChat) : '');
+
+	async function openChat(jid: string) {
+		composerValue = '';
+		await app.openChat(jid);
+	}
 </script>
 
-<main class="page">
-	<header class="page-header neumorphic-raised">
+<div class="shell">
+	<header class="topbar">
 		<div class="brand">
 			<span class="brand-dot"></span>
-			<h1>WhatsAgent</h1>
-			<Badge variant="secondary" class="ml-auto">Scaffold · U1</Badge>
+			<span class="brand-name">WhatsAgent</span>
 		</div>
-		<p class="subtitle">
-			Neumorphic token layer rendering against copied catalog components — Phase 1 shell.
-		</p>
+		<div class="topbar-right">
+			<SessionStatus session={app.session} socketConnected={app.connected} />
+			<OutboxTray outbox={app.outbox} chats={app.chats} oncancel={(id) => app.cancelOutbox(id)} />
+			<Button variant="ghost" size="sm" onclick={() => goto('/settings')}>
+				<Settings class="size-4" /> Settings
+			</Button>
+		</div>
 	</header>
 
-	<div class="grid">
-		<section class="panel neumorphic-raised list-panel">
-			<Tabs.Root value="all">
-				<Tabs.List class="w-full">
-					<Tabs.Trigger value="all" class="flex-1">All</Tabs.Trigger>
-					<Tabs.Trigger value="needs" class="flex-1">
-						<Inbox class="size-3.5 inline-block mr-1 -mt-0.5" />Needs reply
-						<Badge variant="secondary" class="ml-1.5">{chats.filter((c) => c.hasDraft).length}</Badge>
-					</Tabs.Trigger>
-					<Tabs.Trigger value="groups" class="flex-1">
-						<Users class="size-3.5 inline-block mr-1 -mt-0.5" />Groups
-					</Tabs.Trigger>
-				</Tabs.List>
-				<Tabs.Content value="all" class="mt-3">
-					<Item.Root class="gap-1">
-						{#each chats as chat (chat.name)}
-							<Item.Content class="chat-row" tabindex={0}>
-								<Item.Media>
-									<Avatar>
-										<AvatarFallback>{chat.initials}</AvatarFallback>
-										{#if chat.unread}
-											<AvatarBadge>{chat.unread}</AvatarBadge>
-										{/if}
-									</Avatar>
-								</Item.Media>
-								<Item.Header>
-									<Item.Title class="chat-name">{chat.name}</Item.Title>
-									<Item.Description class="chat-preview">{chat.preview}</Item.Description>
-								</Item.Header>
-								<Item.Actions class="chat-actions">
-									<span class="chat-time">{chat.time}</span>
-									{#if chat.hasDraft}
-										<Badge variant="default" class="draft-badge">
-											<Pencil class="size-3" />draft
-										</Badge>
-									{/if}
-								</Item.Actions>
-							</Item.Content>
-						{/each}
-					</Item.Root>
-				</Tabs.Content>
-				<Tabs.Content value="needs" class="mt-3">
-					<Item.Root class="gap-1">
-						{#each chats.filter((c) => c.hasDraft) as chat (chat.name)}
-							<Item.Content class="chat-row" tabindex={0}>
-								<Item.Media>
-									<Avatar>
-										<AvatarFallback>{chat.initials}</AvatarFallback>
-										<AvatarBadge>{chat.unread}</AvatarBadge>
-									</Avatar>
-								</Item.Media>
-								<Item.Header>
-									<Item.Title class="chat-name">{chat.name}</Item.Title>
-									<Item.Description class="chat-preview">{chat.preview}</Item.Description>
-								</Item.Header>
-								<Item.Actions class="chat-actions">
-									<Badge variant="default" class="draft-badge">
-										<Pencil class="size-3" />draft
-									</Badge>
-								</Item.Actions>
-							</Item.Content>
-						{/each}
-					</Item.Root>
-				</Tabs.Content>
-				<Tabs.Content value="groups" class="mt-3">
-					<Item.Root class="gap-1">
-						{#each chats.filter((_, i) => i === 2) as chat (chat.name)}
-							<Item.Content class="chat-row" tabindex={0}>
-								<Item.Media>
-									<Avatar><AvatarFallback>{chat.initials}</AvatarFallback></Avatar>
-								</Item.Media>
-								<Item.Header>
-									<Item.Title class="chat-name">{chat.name}</Item.Title>
-									<Item.Description class="chat-preview">{chat.preview}</Item.Description>
-								</Item.Header>
-								<Item.Actions class="chat-actions">
-									<Badge variant="secondary">{chat.unread} unread</Badge>
-								</Item.Actions>
-							</Item.Content>
-						{/each}
-					</Item.Root>
-				</Tabs.Content>
-			</Tabs.Root>
-		</section>
+	{#if banner.blocking}
+		<!-- Pairing and logged-out are the only states that gate the shell. -->
+		<PairingScreen session={app.session} onregenerate={() => app.regeneratePairing()} />
+	{:else}
+		<!-- Syncing never gates: chats render as they land (D5). -->
+		<Resizable.PaneGroup direction="horizontal" class="panes">
+			<Resizable.Pane defaultSize={30} minSize={20} maxSize={45}>
+				<section class="pane list-pane neumorphic-raised">
+					<ChatList
+						chats={app.chats}
+						selectedJid={app.selectedJid}
+						syncing={app.session.status === 'syncing'}
+						onselect={openChat}
+					/>
+				</section>
+			</Resizable.Pane>
 
-		<section class="panel neumorphic-raised conversation-panel">
-			<div class="conv-header">
-				<Avatar class="size-8"><AvatarFallback>MR</AvatarFallback></Avatar>
-				<div>
-					<div class="conv-name">Maya Rivera</div>
-					<div class="conv-status">online</div>
-				</div>
-			</div>
-			<Conversation class="conv-body">
-				<ConversationContent>
-					<Message from="assistant">
-						<MessageContent>Did you send the brief?</MessageContent>
-					</Message>
-					<Message from="user">
-						<MessageContent>Not yet — pulling the latest numbers now.</MessageContent>
-					</Message>
-					<Message from="assistant">
-						<MessageContent>No rush, just wanted to check.</MessageContent>
-					</Message>
-					<Message from="assistant">
-						<MessageContent class="draft-bubble">
-							<div class="draft-label"><Pencil class="size-3" /> Draft</div>
-							<div class="drafting-text">Drafting a reply…</div>
-						</MessageContent>
-					</Message>
-				</ConversationContent>
-				<ConversationScrollButton />
-			</Conversation>
-			<div class="composer neumorphic-bevel">
-				<PromptInput
-					bind:value={composerValue}
-					status={composerStatus}
-					placeholder="Type a reply, or approve the draft above…"
-					onsubmit={(m) => {
-						composerStatus = 'submitted';
-						setTimeout(() => (composerStatus = 'ready'), 800);
-						composerValue = '';
-					}}
-				/>
-			</div>
-		</section>
-	</div>
+			<Resizable.Handle withHandle />
 
-	<footer class="page-footer">
-		<span class="swatch swatch-bg"></span>bg
-		<span class="swatch swatch-raised"></span>raised
-		<span class="swatch swatch-sunken"></span>sunken
-		<span class="swatch swatch-terracotta"></span>terracotta
-		<span class="swatch swatch-lime"></span>lime
-		<span class="swatch swatch-ink"></span>ink
-		<Button variant="default" class="ml-auto"><Send class="size-4" />Demo send</Button>
-	</footer>
-</main>
+			<Resizable.Pane defaultSize={70}>
+				<section class="pane conv-pane neumorphic-raised">
+					{#if app.selectedChat}
+						<header class="conv-head">
+							<Avatar class="conv-avatar">
+								<AvatarFallback>{initialsFor(chatTitle)}</AvatarFallback>
+							</Avatar>
+							<div class="conv-id">
+								<span class="conv-name">{chatTitle}</span>
+								<span class="conv-sub">
+									{app.selectedChat.kind === 'group' ? 'Group · agent excluded' : '1:1'}
+								</span>
+							</div>
+						</header>
+
+						<ConversationPane
+							messages={app.messages}
+							loading={app.loadingMessages}
+							hasMore={app.messages.length >= 60}
+							onloadolder={() => app.loadOlder()}
+							onloadmedia={(id) => app.loadMedia(id)}
+						/>
+
+						<div class="conv-foot">
+							<DraftStatus
+								draft={app.draft}
+								stalePrompt={app.stalePrompt}
+								phaseTwoPending={app.selectedChat.kind === '1:1'}
+								onedit={(text) => (composerValue = text)}
+								onapprove={() => app.approveDraft(composerValue.trim() || undefined)}
+								onskip={() => app.skipDraft()}
+								ondismissstale={() => (app.stalePrompt = null)}
+							/>
+							<Composer
+								bind:value={composerValue}
+								onsend={(text) => app.send(text)}
+								placeholder={`Message ${chatTitle}`}
+							/>
+						</div>
+					{:else}
+						<Empty.Root class="conv-empty">
+							<Empty.Header>
+								<Empty.Media variant="icon"><MessagesSquare class="size-5" /></Empty.Media>
+								<Empty.Title>Pick a conversation</Empty.Title>
+								<Empty.Description>
+									{app.session.status === 'syncing'
+										? 'Still catching up — chats appear as history arrives.'
+										: 'Your chats are on the left.'}
+								</Empty.Description>
+							</Empty.Header>
+						</Empty.Root>
+					{/if}
+				</section>
+			</Resizable.Pane>
+		</Resizable.PaneGroup>
+	{/if}
+
+	{#if app.error}
+		<div class="error-bar" role="alert">
+			<span>{app.error}</span>
+			<Button variant="ghost" size="sm" onclick={() => (app.error = null)}>Dismiss</Button>
+		</div>
+	{/if}
+</div>
 
 <style>
-	.page {
-		flex: 1;
+	.shell {
 		display: flex;
 		flex-direction: column;
-		gap: 1rem;
-		padding: 1.25rem;
-		max-width: 1200px;
-		margin: 0 auto;
-		width: 100%;
+		height: 100vh;
+		min-height: 0;
+		padding: 0.6rem;
+		gap: 0.5rem;
 	}
-
-	.page-header {
-		border-radius: var(--radius-lg);
-		padding: 1.25rem 1.5rem;
+	.topbar {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.5rem;
+		padding: 0 0.3rem;
 	}
 	.brand {
 		display: flex;
 		align-items: center;
-		gap: 0.6rem;
+		gap: 0.45rem;
 	}
 	.brand-dot {
-		width: 12px;
-		height: 12px;
+		width: 10px;
+		height: 10px;
 		border-radius: 999px;
 		background: var(--terracotta);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--terracotta) 18%, transparent);
+		box-shadow: var(--shadow-bevel);
 	}
-	.brand h1 {
-		font-size: 1.05rem;
+	.brand-name {
 		font-weight: 600;
-		color: var(--ink-solid);
-		margin: 0;
-		letter-spacing: -0.01em;
+		font-size: 0.92rem;
+		color: var(--ink-90);
 	}
-	.subtitle {
-		color: var(--ink-70);
-		font-size: 0.85rem;
-		margin: 0.35rem 0 0;
+	.topbar-right {
+		display: flex;
+		align-items: center;
+		gap: 0.35rem;
 	}
 
-	.grid {
-		display: grid;
-		grid-template-columns: minmax(280px, 360px) 1fr;
-		gap: 1rem;
+	:global(.panes) {
 		flex: 1;
 		min-height: 0;
 	}
-	@media (max-width: 760px) {
-		.grid {
-			grid-template-columns: 1fr;
-		}
-		.conversation-panel {
-			display: none;
-		}
-	}
-
-	.panel {
-		border-radius: var(--radius-lg);
-		padding: 1rem;
-		display: flex;
-		flex-direction: column;
+	.pane {
+		height: 100%;
 		min-height: 0;
-	}
-
-	.list-panel {
-		gap: 0.5rem;
-		overflow-y: auto;
-	}
-	:global(.chat-row) {
-		display: flex;
-		align-items: center;
-		gap: 0.75rem;
-		padding: 0.6rem 0.5rem;
-		border-radius: var(--radius-md);
-		border: 1px solid transparent;
-		transition: background 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
-	}
-	:global(.chat-row:hover) {
-		background: var(--surface-raised);
-		border-color: var(--hairline-soft);
-	}
-	:global(.chat-row:focus-visible),
-	:global(.chat-row:active) {
-		background: var(--surface-sunken);
-		border-color: var(--hairline);
-		box-shadow: var(--shadow-pressed);
-		outline: none;
-	}
-	:global(.chat-name) {
-		font-weight: 600;
-		color: var(--ink-90);
-		font-size: 0.92rem;
-	}
-	:global(.chat-preview) {
-		color: var(--ink-70);
-		font-size: 0.82rem;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		max-width: 180px;
-	}
-	:global(.chat-actions) {
+		border-radius: var(--radius-lg);
+		padding: 0.6rem;
 		display: flex;
 		flex-direction: column;
-		align-items: flex-end;
-		gap: 0.3rem;
-	}
-	:global(.chat-time) {
-		font-size: 0.7rem;
-		color: var(--ink-50);
-	}
-	:global(.draft-badge) {
-		font-size: 0.68rem;
-		display: inline-flex;
-		align-items: center;
-		gap: 0.25rem;
-	}
-
-	.conversation-panel {
 		gap: 0.5rem;
 	}
-	.conv-header {
+	.list-pane {
+		margin-right: 0.3rem;
+	}
+	.conv-pane {
+		margin-left: 0.3rem;
+	}
+	.conv-head {
 		display: flex;
 		align-items: center;
-		gap: 0.6rem;
-		padding: 0.5rem 0.5rem 0.75rem;
+		gap: 0.55rem;
+		padding: 0.1rem 0.25rem 0.55rem;
 		border-bottom: 1px solid var(--hairline-soft);
+	}
+	:global(.conv-avatar) {
+		flex: none;
+	}
+	.conv-id {
+		display: flex;
+		flex-direction: column;
 	}
 	.conv-name {
 		font-weight: 600;
+		font-size: 0.92rem;
 		color: var(--ink-90);
-		font-size: 0.9rem;
 	}
-	.conv-status {
-		font-size: 0.72rem;
+	.conv-sub {
+		font-size: 0.7rem;
 		color: var(--ink-50);
 	}
-	:global(.conv-body) {
+	.conv-foot {
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
+	}
+	:global(.conv-empty) {
 		flex: 1;
-		min-height: 0;
-	}
-	:global(.draft-bubble) {
-		background: color-mix(in srgb, var(--lime) 12%, var(--surface-raised));
-		border: 1px solid color-mix(in srgb, var(--lime) 35%, var(--hairline));
-		border-radius: var(--radius-md);
-		padding: 0.6rem 0.8rem;
-	}
-	.draft-label {
-		font-size: 0.66rem;
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
-		color: var(--ink-50);
-		display: inline-flex;
-		align-items: center;
-		gap: 0.3rem;
-		margin-bottom: 0.25rem;
-	}
-	.drafting-text {
-		color: var(--ink-70);
-		font-size: 0.85rem;
-	}
-	.composer {
-		border-radius: var(--radius-md);
-		padding: 0.5rem;
-		margin-top: 0.5rem;
+		justify-content: center;
 	}
 
-	.page-footer {
+	.error-bar {
 		display: flex;
 		align-items: center;
+		justify-content: space-between;
 		gap: 0.5rem;
-		padding: 0.5rem 0.75rem;
-		font-size: 0.72rem;
-		color: var(--ink-50);
+		border-radius: var(--radius-md);
+		border: 1px solid var(--destructive);
+		background: color-mix(in srgb, var(--destructive) 8%, var(--surface-raised));
+		color: var(--destructive);
+		font-size: 0.78rem;
+		padding: 0.35rem 0.5rem;
 	}
-	.swatch {
-		display: inline-block;
-		width: 14px;
-		height: 14px;
-		border-radius: 4px;
-		border: 1px solid var(--hairline);
-		margin-right: 0.15rem;
-	}
-	.swatch-bg { background: var(--bg); }
-	.swatch-raised { background: var(--surface-raised); box-shadow: var(--shadow-raised); }
-	.swatch-sunken { background: var(--surface-sunken); }
-	.swatch-terracotta { background: var(--terracotta); }
-	.swatch-lime { background: var(--lime); }
-	.swatch-ink { background: var(--ink-solid); }
 </style>

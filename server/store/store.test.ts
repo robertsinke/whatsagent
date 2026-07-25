@@ -67,7 +67,8 @@ describe('migrations', () => {
 		).c;
 
 		expect(versionAfter).toBe(versionBefore);
-		expect(versionRows).toBe(2);
+		// 001-init, 002-wa-auth, 003-media-state.
+		expect(versionRows).toBe(3);
 	});
 
 	it('creates the DB file under the app-data dir with 0600 permissions', () => {

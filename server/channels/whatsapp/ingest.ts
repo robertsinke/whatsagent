@@ -28,8 +28,13 @@ export type MessagesUpsertPayload = {
 };
 
 export type SyncProgress = {
+	/** Baileys' own percentage. Kept for logs; the UI must not render it (D5). */
 	progress: number | null;
 	isLatest: boolean;
+	/** Chats in this batch. Baileys never tells us the total, so counts only. */
+	chats: number;
+	/** Messages in this batch. */
+	messages: number;
 };
 
 export type IngestListener = {
@@ -280,7 +285,9 @@ export function handleHistorySet(db: AppDatabase, payload: HistorySetPayload): S
 
 	return {
 		progress: payload.progress ?? null,
-		isLatest: Boolean(payload.isLatest)
+		isLatest: Boolean(payload.isLatest),
+		chats: payload.chats.length,
+		messages: payload.messages.length
 	};
 }
 
