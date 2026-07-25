@@ -93,3 +93,19 @@ export function listChats(db: AppDatabase): Chat[] {
 		.all() as ChatRow[];
 	return rows.map(mapChat);
 }
+
+export function markChatRead(db: AppDatabase, jid: string): boolean {
+	const result = db.prepare('UPDATE chats SET unread = 0 WHERE jid = ?').run(jid);
+	return result.changes > 0;
+}
+
+export function setChatAgentState(
+	db: AppDatabase,
+	jid: string,
+	agentState: string | null
+): boolean {
+	const result = db
+		.prepare('UPDATE chats SET agent_state = ? WHERE jid = ?')
+		.run(agentState, jid);
+	return result.changes > 0;
+}

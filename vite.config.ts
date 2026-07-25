@@ -5,13 +5,10 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
 	plugins: [
 		tailwindcss(),
-		sveltekit({
-			compilerOptions: {
-				// Force runes mode for the project, except for libraries. Can be removed in svelte 6.
-				runes: ({ filename }) =>
-					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
-			}
-		})
+		// Do not pass options into sveltekit() — that makes Vite ignore svelte.config.js,
+		// which drops kit.adapter (adapter-static) and leaves no `build/` output.
+		// compilerOptions.runes lives in svelte.config.js instead.
+		sveltekit()
 	],
 	server: {
 		// Local single-user app — bind to localhost only (R9-adjacent CSRF surface).
