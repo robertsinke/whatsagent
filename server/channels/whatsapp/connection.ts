@@ -31,6 +31,11 @@ export type SocketFactory = (config: UserFacingSocketConfig) => WhatsAppSocket;
 export type WhatsAppConnectionOptions = {
 	socketFactory?: SocketFactory;
 	authStore?: SqliteAuthStore;
+	/**
+	 * Builds the auth store. Preferred over `authStore` when `resetAuth()` is
+	 * used, since a reset must produce a store reading the now-empty tables.
+	 */
+	createAuthStore?: () => SqliteAuthStore;
 	reconnectDelayMs?: number;
 	groupCacheSize?: number;
 	onError?: (error: Error) => void;
@@ -91,7 +96,8 @@ export class GroupMetadataCache {
 export class WhatsAppConnection implements Channel {
 	readonly #listeners = new Set<ChannelEventListener>();
 	readonly #socketFactory: SocketFactory;
-	readonly #authStore: SqliteAuthStore;
+	readonly #createAuthStore: () => SqliteAuthStore;
+	#authStore: SqliteAuthStore;
 	readonly #reconnectDelayMs: number;
 	readonly #groupCache: GroupMetadataCache;
 	readonly #onError?: (error: Error) => void;
@@ -110,8 +116,12 @@ export class WhatsAppConnection implements Channel {
 		this.#socketFactory =
 			options.socketFactory ??
 			((config) => makeWASocket(config) as unknown as WhatsAppSocket);
-		this.#authStore =
-			options.authStore ?? createSqliteAuthStore(db, loadKeychainEncryptionKey());
+		this.#createAuthStore =
+			options.createAuthStore ??
+			(options.authStore
+				? () => options.authStore!
+				: () => createSqliteAuthStore(db, loadKeychainEncryptionKey()));
+		this.#authStore = this.#createAuthStore();
 		this.#reconnectDelayMs = options.reconnectDelayMs ?? 1_000;
 		this.#groupCache = new GroupMetadataCache(options.groupCacheSize);
 		this.#onError = options.onError;
@@ -141,6 +151,17 @@ export class WhatsAppConnection implements Channel {
 		this.#setState('disconnected');
 	}
 
+	/**
+	 * Forget the stored session. `clear()` empties the tables but leaves the
+	 * in-memory `creds` object, which Baileys would still present as a valid
+	 * session — so the store is rebuilt from the now-empty tables.
+	 */
+	async resetAuth(): Promise<void> {
+		await this.stop();
+		await this.#authStore.clear();
+		this.#authStore = this.#createAuthStore();
+	}
+
 	#connect(): void {
 		if (!this.#running) return;
 		this.#setState('connecting');
@@ -161,7 +182,9 @@ export class WhatsAppConnection implements Channel {
 					this.#emit({
 						type: 'sync-progress',
 						progress: progress.progress,
-						isLatest: progress.isLatest
+						isLatest: progress.isLatest,
+						chats: progress.chats,
+						messages: progress.messages
 					})
 			});
 
@@ -198,6 +221,8 @@ export class WhatsAppConnection implements Channel {
 		const code = disconnectStatusCode(update.lastDisconnect?.error);
 		if (code === DisconnectReason.loggedOut) {
 			this.#running = false;
+			// Terminal — no reconnect will help; the owner must re-pair (D5).
+			this.#emit({ type: 'logged-out' });
 			return;
 		}
 		this.#scheduleReconnect();

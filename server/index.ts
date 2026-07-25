@@ -3,7 +3,13 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { Channel } from './channels/channel.js';
-import { openDatabase, type AppDatabase, type OpenDatabaseOptions } from './store/db.js';
+import { downloadAndCacheMedia } from './channels/whatsapp/media.js';
+import {
+	getDefaultDataDir,
+	openDatabase,
+	type AppDatabase,
+	type OpenDatabaseOptions
+} from './store/db.js';
 import {
 	createConnectionStatus,
 	createIngestEventHooks,
@@ -12,6 +18,7 @@ import {
 	type ServerEvent
 } from './api/events.js';
 import { createRequestHandler } from './api/routes.js';
+import { createSessionState } from './api/session.js';
 import { buildAllowedOrigins, validateOriginAndHost } from './api/security.js';
 
 const DEFAULT_PORT = 8787;
@@ -26,6 +33,10 @@ export type CreateAppOptions = {
 	staticDir?: string | null;
 	/** Optional WhatsApp (or other) channel — started when provided. */
 	channel?: Channel;
+	/** Override the D2 on-demand media fetch (tests). */
+	downloadMedia?: (messageId: string) => Promise<unknown>;
+	/** App-data dir (media cache root). Defaults to the DB's data dir. */
+	dataDir?: string;
 };
 
 export type App = {
@@ -50,9 +61,20 @@ export function createApp(options: CreateAppOptions = {}): App {
 	const requestedPort = options.port ?? Number(process.env.PORT ?? DEFAULT_PORT);
 	const host = options.host ?? DEFAULT_HOST;
 	const db = options.db ?? openDatabase(options.dbOptions);
+	const dataDir = options.dataDir ?? options.dbOptions?.dataDir ?? getDefaultDataDir();
 	const events = options.events ?? new EventBus();
 	const connection = createConnectionStatus();
+	// D5 — derived pairing/sync view, pushed on every transition (QR rotations included).
+	const session = createSessionState({
+		onChange: (view) => events.emit({ type: 'session', session: view })
+	});
 	const ingestHooks = createIngestEventHooks(events);
+
+	const downloadMedia =
+		options.downloadMedia ??
+		(options.channel
+			? (messageId: string) => downloadAndCacheMedia(db, messageId, { dataDir })
+			: undefined);
 	const staticDir =
 		options.staticDir === null
 			? undefined
@@ -66,6 +88,19 @@ export function createApp(options: CreateAppOptions = {}): App {
 		db,
 		events,
 		getConnectionStatus: connection.get,
+		getSessionStatus: session.get,
+		regeneratePairing: options.channel
+			? async () => {
+					const channel = options.channel!;
+					await channel.stop();
+					// After `logged_out` the stored session is dead. A channel still
+					// holding it will not offer a fresh QR, so forget it first.
+					if (session.get().status === 'logged_out') await channel.resetAuth?.();
+					await channel.start();
+				}
+			: undefined,
+		dataDir,
+		downloadMedia,
 		staticDir,
 		port: requestedPort,
 		getAllowedOrigins
@@ -107,6 +142,9 @@ export function createApp(options: CreateAppOptions = {}): App {
 				state: connection.get().state
 			} satisfies ServerEvent)
 		);
+		// Snapshot the derived session immediately — a client that connects
+		// mid-QR-rotation must not wait up to 20s for the next push.
+		ws.send(JSON.stringify({ type: 'session', session: session.get() } satisfies ServerEvent));
 		const qr = connection.get().qr;
 		if (qr) {
 			ws.send(JSON.stringify({ type: 'pairing-needed', qr } satisfies ServerEvent));
@@ -144,12 +182,24 @@ export function createApp(options: CreateAppOptions = {}): App {
 
 		if (options.channel) {
 			channelUnsub = options.channel.onEvent((event) => {
+				// Every channel event feeds the D5 derivation, which emits `session`
+				// itself via onChange. Transport events stay published as-is.
+				session.applyChannelEvent(event);
 				if (event.type === 'connection') {
 					connection.setState(event.state);
 					events.emit({ type: 'connection', state: event.state });
 				} else if (event.type === 'pairing-needed') {
 					connection.setQr(event.qr);
 					events.emit({ type: 'pairing-needed', qr: event.qr });
+				} else if (event.type === 'sync-progress') {
+					const view = session.get().sync;
+					events.emit({
+						type: 'sync-progress',
+						phase: 'history',
+						chatsSynced: view.chatsSynced,
+						messagesSynced: view.messagesSynced,
+						complete: view.complete
+					});
 				}
 			});
 			await options.channel.start();
@@ -158,6 +208,7 @@ export function createApp(options: CreateAppOptions = {}): App {
 
 	async function close(): Promise<void> {
 		channelUnsub?.();
+		session.dispose();
 		if (options.channel) await options.channel.stop();
 		unsubscribeEvents();
 		for (const ws of sockets) ws.close();

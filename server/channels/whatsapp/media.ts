@@ -3,10 +3,16 @@ import {
 	downloadMediaMessage,
 	type WAMessage
 } from 'baileys';
+import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import type { AppDatabase } from '../../store/db.js';
-import { getMessage, upsertMessage } from '../../store/messages.js';
+import {
+	getMessage,
+	setMediaRef,
+	setMediaState,
+	type MediaFailureReason
+} from '../../store/messages.js';
 
 export type MediaDownloader = (
 	message: WAMessage,
@@ -37,6 +43,45 @@ const noopLogger = {
 	error: () => undefined
 };
 
+/** Raised by `downloadAndCacheMedia`; carries the persisted D2 failure reason. */
+export class MediaDownloadFailure extends Error {
+	readonly reason: MediaFailureReason;
+
+	constructor(reason: MediaFailureReason, cause: unknown) {
+		super(cause instanceof Error ? cause.message : String(cause));
+		this.name = 'MediaDownloadFailure';
+		this.reason = reason;
+		this.cause = cause;
+	}
+}
+
+function statusCodeOf(error: unknown): number | undefined {
+	if (!error || typeof error !== 'object') return undefined;
+	const candidate = error as {
+		status?: number;
+		statusCode?: number;
+		output?: { statusCode?: number };
+	};
+	return candidate.output?.statusCode ?? candidate.statusCode ?? candidate.status;
+}
+
+/**
+ * D2 — `unavailable` (terminal) vs `transient` (retriable), off a concrete
+ * Baileys signal rather than a guess.
+ *
+ * Baileys wraps media failures in `Boom`, and maps the phone's reupload verdict
+ * onto HTTP-ish status codes in `MEDIA_RETRY_STATUS_MAP`
+ * (`baileys/lib/Utils/messages-media.js`): NOT_FOUND → 404, DECRYPTION_ERROR →
+ * 412, GENERAL_ERROR → 418; a reupload response missing ciphertext is also 404.
+ * CDN fetches throw `Boom('Failed to fetch stream from …', { statusCode })`.
+ * So 404/410 means the bytes are gone WhatsApp-side — everything else
+ * (412 decrypt, 418, 5xx, socket errors) is treated as transient and retriable.
+ */
+export function classifyMediaFailure(error: unknown): MediaFailureReason {
+	const status = statusCodeOf(error);
+	return status === 404 || status === 410 ? 'unavailable' : 'transient';
+}
+
 /**
  * On-demand media download: reads the full WAMessage envelope from `messages.raw`,
  * downloads via Baileys (with optional reupload), caches under `{dataDir}/media/`,
@@ -58,28 +103,40 @@ export async function downloadAndCacheMedia(
 		? { reuploadRequest: options.reuploadRequest, logger: noopLogger }
 		: undefined;
 
-	const buffer = await download(envelope, 'buffer', {}, ctx);
+	// D2: the state machine is persisted at every step so the UI never guesses.
+	setMediaState(db, messageId, 'downloading');
+
+	let buffer: Buffer;
+	try {
+		buffer = await download(envelope, 'buffer', {}, ctx);
+	} catch (error) {
+		const reason = classifyMediaFailure(error);
+		setMediaState(db, messageId, 'failed', reason);
+		throw new MediaDownloadFailure(reason, error);
+	}
 
 	const mediaDir = join(options.dataDir, 'media');
-	mkdirSync(mediaDir, { recursive: true, mode: 0o700 });
-
 	const ext = extensionForType(stored.type);
-	const relativeRef = join('media', `${messageId}${ext}`);
-	const absolutePath = join(options.dataDir, relativeRef);
-	writeFileSync(absolutePath, buffer, { mode: 0o600 });
+	const cacheId = createHash('sha256').update(messageId).digest('hex');
+	const relativeRef = join('media', `${cacheId}${ext}`);
+	const absolutePath = resolve(options.dataDir, relativeRef);
+	const resolvedMediaDir = resolve(mediaDir);
+	const relativeToMedia = relative(resolvedMediaDir, absolutePath);
+	if (relativeToMedia.startsWith('..') || relativeToMedia.includes('/../')) {
+		setMediaState(db, messageId, 'failed', 'transient');
+		throw new MediaDownloadFailure('transient', new Error('Unsafe media cache path'));
+	}
 
-	upsertMessage(db, {
-		id: stored.id,
-		chat_jid: stored.chat_jid,
-		channel: stored.channel,
-		from_me: stored.from_me,
-		sender: stored.sender,
-		ts: stored.ts,
-		type: stored.type,
-		text: stored.text,
-		media_ref: relativeRef,
-		raw: stored.raw
-	});
+	try {
+		mkdirSync(mediaDir, { recursive: true, mode: 0o700 });
+		writeFileSync(absolutePath, buffer, { mode: 0o600 });
+	} catch (error) {
+		// Local IO — always retriable.
+		setMediaState(db, messageId, 'failed', 'transient');
+		throw new MediaDownloadFailure('transient', error);
+	}
+
+	setMediaRef(db, messageId, relativeRef);
 
 	return { mediaRef: relativeRef, bytes: buffer.byteLength };
 }

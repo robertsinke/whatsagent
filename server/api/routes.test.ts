@@ -349,6 +349,8 @@ describe('store write → WS event', () => {
 					type: 'text',
 					text: 'inbound',
 					media_ref: null,
+					media_state: 'placeholder',
+					media_error: null,
 					raw: null
 				});
 			});
@@ -363,6 +365,53 @@ describe('store write → WS event', () => {
 });
 
 describe('drafts', () => {
+	it('rejects a stale draft even when an outbound message is newest', async () => {
+		await startTestApp();
+		upsertChat(db!, {
+			jid: 'alice@s.whatsapp.net',
+			kind: '1:1',
+			last_msg_at: 30,
+			unread: 1
+		});
+		upsertMessage(db!, {
+			id: 'basis',
+			chat_jid: 'alice@s.whatsapp.net',
+			from_me: false,
+			ts: 10,
+			text: 'first question'
+		});
+		upsertMessage(db!, {
+			id: 'newer-inbound',
+			chat_jid: 'alice@s.whatsapp.net',
+			from_me: false,
+			ts: 20,
+			text: 'follow-up'
+		});
+		upsertMessage(db!, {
+			id: 'outbound-tail',
+			chat_jid: 'alice@s.whatsapp.net',
+			from_me: true,
+			ts: 30,
+			text: 'unrelated reply'
+		});
+		upsertDraft(db!, {
+			chat_jid: 'alice@s.whatsapp.net',
+			text: 'old draft',
+			status: 'drafted',
+			generated_at: 11,
+			basis_msg_id: 'basis'
+		});
+
+		const response = await api('/api/chats/alice%40s.whatsapp.net/draft/approve', {
+			method: 'POST'
+		});
+		expect(response.status).toBe(409);
+		expect(await response.json()).toMatchObject({
+			basis_msg_id: 'basis',
+			latest_inbound_id: 'newer-inbound'
+		});
+	});
+
 	it('approve enqueues outbox; skip demotes chat from needs-reply', async () => {
 		await startTestApp();
 		upsertChat(db!, {

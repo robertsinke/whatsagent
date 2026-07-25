@@ -10,7 +10,13 @@ import {
 	type Chat
 } from '../store/chats.js';
 import { deleteDraft, getDraft, upsertDraft } from '../store/drafts.js';
-import { getLastMessage, listMessagesPage } from '../store/messages.js';
+import {
+	getLastInboundMessage,
+	getLastMessage,
+	getMessage,
+	listMessagesPage,
+	type Message
+} from '../store/messages.js';
 import {
 	cancelOutbox,
 	enqueueOutbox,
@@ -19,17 +25,28 @@ import {
 } from '../store/outbox.js';
 import { getSetting, listSettings, setSetting } from '../store/settings.js';
 import type { ConnectionStatus, EventBus } from './events.js';
+import type { SessionView } from './session.js';
 import {
 	buildAllowedOrigins,
 	isMutatingMethod,
 	validateOriginAndHost,
 	type AllowedOrigins
 } from './security.js';
+import { toChatView } from './chat-view.js';
+import { isMediaType, toMessageView } from './message-view.js';
 
 export type RoutesDeps = {
 	db: AppDatabase;
 	events: EventBus;
 	getConnectionStatus: () => ConnectionStatus;
+	/** D5 — derived view state for the pairing/sync surfaces. */
+	getSessionStatus?: () => SessionView;
+	/** Re-pair affordance for `qr_expired` / `logged_out`: restarts the channel. */
+	regeneratePairing?: () => Promise<void>;
+	/** App-data dir — media cache root (`{dataDir}/media/...`). */
+	dataDir?: string;
+	/** D2 — on-demand media fetch; absent when no channel is attached. */
+	downloadMedia?: (messageId: string) => Promise<unknown>;
 	/** Absolute path to adapter-static output (optional; API-only if omitted). */
 	staticDir?: string;
 	port: number;
@@ -183,6 +200,112 @@ export function createRequestHandler(deps: RoutesDeps) {
 	};
 }
 
+/**
+ * D2 media endpoints.
+ * - `POST` fetches on demand (never bulk-prefetched) and persists the resulting
+ *   state; failures come back with the `unavailable` / `transient` sub-reason so
+ *   the UI can decide whether a retry button is even honest.
+ * - `GET` streams cached bytes for the lightbox / inline audio / OS handoff.
+ */
+async function handleMedia(
+	deps: RoutesDeps,
+	res: ServerResponse,
+	method: string,
+	messageId: string
+): Promise<void> {
+	const message = getMessage(deps.db, messageId);
+	if (!message) {
+		error(res, 404, 'Message not found', { id: messageId });
+		return;
+	}
+	if (!isMediaType(message.type)) {
+		error(res, 400, 'Message has no media', { id: messageId, type: message.type });
+		return;
+	}
+
+	if (method === 'POST') {
+		if (message.media_state === 'ready' && message.media_ref) {
+			json(res, 200, toMessageView(message));
+			return;
+		}
+		if (message.media_state === 'failed' && message.media_error === 'unavailable') {
+			// Terminal — retrying cannot help, so do not pretend it might.
+			error(res, 410, 'Media is no longer available', { id: messageId });
+			return;
+		}
+		if (!deps.downloadMedia) {
+			error(res, 503, 'No channel attached');
+			return;
+		}
+		try {
+			await deps.downloadMedia(messageId);
+		} catch (err) {
+			const updated = getMessage(deps.db, messageId);
+			const reason = updated?.media_error ?? 'transient';
+			error(res, reason === 'unavailable' ? 410 : 502, 'Media download failed', {
+				id: messageId,
+				reason
+			});
+			return;
+		}
+		json(res, 200, toMessageView(getMessage(deps.db, messageId)!));
+		return;
+	}
+
+	if (method === 'GET' || method === 'HEAD') {
+		if (!message.media_ref || message.media_state !== 'ready' || !deps.dataDir) {
+			error(res, 409, 'Media not downloaded', { id: messageId, state: message.media_state });
+			return;
+		}
+		const filePath = normalize(join(deps.dataDir, message.media_ref));
+		if (!filePath.startsWith(join(deps.dataDir, 'media') + sep) || !existsSync(filePath)) {
+			error(res, 404, 'Cached media missing', { id: messageId });
+			return;
+		}
+		const st = statSync(filePath);
+		res.writeHead(200, {
+			'Content-Type': mediaContentType(message),
+			'Content-Length': st.size,
+			'Content-Disposition': `${mediaDisposition(message)}; filename="${mediaFilename(message)}"`,
+			'X-Content-Type-Options': 'nosniff',
+			'Content-Security-Policy': "sandbox; default-src 'none'"
+		});
+		if (method === 'HEAD') {
+			res.end();
+			return;
+		}
+		const stream = createReadStream(filePath);
+		stream.on('error', (err) => res.destroy(err));
+		stream.pipe(res);
+		return;
+	}
+
+	error(res, 405, 'Method not allowed');
+}
+
+function mediaContentType(message: Message): string {
+	const described = toMessageView(message).media;
+	const mime = described?.mime?.toLowerCase();
+	if (message.type === 'image' && mime?.startsWith('image/') && mime !== 'image/svg+xml') return mime;
+	if (message.type === 'video' && mime?.startsWith('video/')) return mime;
+	if (message.type === 'audio' && mime?.startsWith('audio/')) return mime;
+	if (message.type === 'sticker') return 'image/webp';
+	// Documents and unknown sender-declared types download rather than execute
+	// inside the app's trusted origin.
+	if (message.type === 'document') return 'application/octet-stream';
+	return MIME[extname(message.media_ref ?? '').toLowerCase()] ?? 'application/octet-stream';
+}
+
+function mediaDisposition(message: Message): 'inline' | 'attachment' {
+	return message.type === 'document' ? 'attachment' : 'inline';
+}
+
+function mediaFilename(message: Message): string {
+	const described = toMessageView(message).media;
+	const name = described?.filename ?? `${message.id}${extname(message.media_ref ?? '')}`;
+	return name.replace(/["\\\r\n]/g, '_');
+}
+
 async function handleApi(
 	deps: RoutesDeps,
 	req: IncomingMessage,
@@ -195,6 +318,34 @@ async function handleApi(
 
 	if (path === '/api/connection' && method === 'GET') {
 		json(res, 200, deps.getConnectionStatus());
+		return;
+	}
+
+	// D5 — derived session view (pairing + indeterminate sync) for the shell.
+	if (path === '/api/session' && method === 'GET') {
+		const session = deps.getSessionStatus?.();
+		if (!session) {
+			error(res, 503, 'Session state unavailable');
+			return;
+		}
+		json(res, 200, session);
+		return;
+	}
+
+	// Regenerate affordance for `qr_expired`, and re-pair after `logged_out`.
+	if (path === '/api/session/pair' && method === 'POST') {
+		if (!deps.regeneratePairing) {
+			error(res, 503, 'No channel attached');
+			return;
+		}
+		await deps.regeneratePairing();
+		json(res, 202, { ok: true });
+		return;
+	}
+
+	const mediaMatch = /^\/api\/messages\/([^/]+)\/media$/.exec(path);
+	if (mediaMatch) {
+		await handleMedia(deps, res, method, decodeURIComponent(mediaMatch[1]!));
 		return;
 	}
 
@@ -240,13 +391,15 @@ async function handleApi(
 
 	if (path === '/api/chats' && method === 'GET') {
 		const filter = url.searchParams.get('filter') ?? 'all';
-		let chats = listChats(db);
+		let items = listChats(db).map((chat) =>
+			toChatView(db, chat, (c) => chatNeedsReply(db, c))
+		);
 		if (filter === 'needs-reply') {
-			chats = chats.filter((c) => chatNeedsReply(db, c));
+			items = items.filter((c) => c.needs_reply);
 		} else if (filter === 'groups') {
-			chats = chats.filter((c) => c.kind === 'group');
+			items = items.filter((c) => c.kind === 'group');
 		}
-		json(res, 200, { items: chats });
+		json(res, 200, { items });
 		return;
 	}
 
@@ -271,7 +424,7 @@ async function handleApi(
 			error(res, 404, 'Chat not found', { jid });
 			return;
 		}
-		json(res, 200, chat);
+		json(res, 200, toChatView(db, chat, (c) => chatNeedsReply(db, c)));
 		return;
 	}
 
@@ -292,7 +445,7 @@ async function handleApi(
 			beforeTs: beforeTs !== undefined && Number.isFinite(beforeTs) ? beforeTs : undefined,
 			beforeId
 		});
-		json(res, 200, { items });
+		json(res, 200, { items: items.map(toMessageView) });
 		return;
 	}
 
@@ -328,7 +481,7 @@ async function handleApi(
 			return;
 		}
 		markChatRead(db, jid);
-		const updated = getChat(db, jid)!;
+		const updated = toChatView(db, getChat(db, jid)!, (c) => chatNeedsReply(db, c));
 		events.emit({ type: 'chat-updated', chat: updated });
 		json(res, 200, updated);
 		return;
@@ -380,16 +533,11 @@ async function handleApi(
 			error(res, 404, 'Draft not found');
 			return;
 		}
-		const last = getLastMessage(db, jid);
-		if (
-			existing.basis_msg_id &&
-			last &&
-			!last.from_me &&
-			last.id !== existing.basis_msg_id
-		) {
+		const latestInbound = getLastInboundMessage(db, jid);
+		if (existing.basis_msg_id && latestInbound && latestInbound.id !== existing.basis_msg_id) {
 			error(res, 409, 'Draft is stale; newer inbound arrived', {
 				basis_msg_id: existing.basis_msg_id,
-				latest_inbound_id: last.id
+				latest_inbound_id: latestInbound.id
 			});
 			return;
 		}
@@ -423,7 +571,7 @@ async function handleApi(
 		}
 		deleteDraft(db, jid);
 		setChatAgentState(db, jid, 'skipped');
-		const updated = getChat(db, jid)!;
+		const updated = toChatView(db, getChat(db, jid)!, (c) => chatNeedsReply(db, c));
 		events.emit({ type: 'draft-removed', chat_jid: jid });
 		events.emit({ type: 'chat-updated', chat: updated });
 		json(res, 200, { ok: true, chat: updated });

@@ -3,6 +3,9 @@ import type { Chat } from '../store/chats.js';
 import type { Draft } from '../store/drafts.js';
 import type { Message } from '../store/messages.js';
 import type { OutboxRow } from '../store/outbox.js';
+import type { ChatView } from './chat-view.js';
+import { toMessageView, type MessageView } from './message-view.js';
+import type { SessionView } from './session.js';
 
 /**
  * Realtime events fan out to connected WebSocket clients.
@@ -11,14 +14,27 @@ import type { OutboxRow } from '../store/outbox.js';
 export type ConnectionState = ChannelConnectionState | 'unpaired';
 
 export type ServerEvent =
-	| { type: 'message-new'; message: Message }
-	| { type: 'chat-updated'; chat: Chat }
+	/** Carries the client-facing view (no `raw` envelope) — see message-view.ts. */
+	| { type: 'message-new'; message: MessageView }
+	| { type: 'chat-updated'; chat: Chat | ChatView }
 	| { type: 'draft-updated'; draft: Draft }
 	| { type: 'draft-removed'; chat_jid: string }
 	| { type: 'outbox-updated'; outbox: OutboxRow }
 	| { type: 'connection'; state: ConnectionState }
 	| { type: 'pairing-needed'; qr: string }
-	| { type: 'sync-progress'; phase: string; done: number; total: number };
+	/** D5 — the derived view state the shell renders (supersedes `connection` for UI). */
+	| { type: 'session'; session: SessionView }
+	/**
+	 * D5 — indeterminate by construction: counts only, never a total or a
+	 * percentage. Baileys does not tell us how much history is coming.
+	 */
+	| {
+			type: 'sync-progress';
+			phase: string;
+			chatsSynced: number;
+			messagesSynced: number;
+			complete: boolean;
+	  };
 
 export type ServerEventListener = (event: ServerEvent) => void;
 
@@ -45,22 +61,29 @@ export class EventBus {
  * Hooks for U4 ingestion (and peers) to publish store writes without importing
  * HTTP/WS internals. Define the contract here; U4 wires it from its side.
  */
+export type SyncProgressPayload = {
+	phase: string;
+	chatsSynced: number;
+	messagesSynced: number;
+	complete: boolean;
+};
+
 export type IngestEventHooks = {
 	onMessageIngested(message: Message): void;
 	onChatUpdated(chat: Chat): void;
-	onSyncProgress(phase: string, done: number, total: number): void;
+	onSyncProgress(progress: SyncProgressPayload): void;
 };
 
 export function createIngestEventHooks(bus: EventBus): IngestEventHooks {
 	return {
 		onMessageIngested(message) {
-			bus.emit({ type: 'message-new', message });
+			bus.emit({ type: 'message-new', message: toMessageView(message) });
 		},
 		onChatUpdated(chat) {
 			bus.emit({ type: 'chat-updated', chat });
 		},
-		onSyncProgress(phase, done, total) {
-			bus.emit({ type: 'sync-progress', phase, done, total });
+		onSyncProgress(progress) {
+			bus.emit({ type: 'sync-progress', ...progress });
 		}
 	};
 }

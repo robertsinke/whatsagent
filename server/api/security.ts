@@ -9,7 +9,11 @@ export type AllowedOrigins = ReadonlySet<string>;
 export function buildAllowedOrigins(port: number): AllowedOrigins {
 	return new Set([
 		`http://localhost:${port}`,
-		`http://127.0.0.1:${port}`
+		`http://127.0.0.1:${port}`,
+		// Vite's fixed development origin. The proxy preserves the incoming
+		// Origin, so a foreign page remains foreign and is rejected here.
+		'http://localhost:5173',
+		'http://127.0.0.1:5173'
 	]);
 }
 

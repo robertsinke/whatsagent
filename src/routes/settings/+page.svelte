@@ -1,8 +1,73 @@
 <script lang="ts">
-	import { Button } from '$lib/components/ui/button/index.js';
-	import * as Tabs from '$lib/components/ui/tabs/index.js';
-	import { ArrowLeft } from '@lucide/svelte';
+	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { Button } from '$lib/components/ui/button/index.js';
+	import { Input } from '$lib/components/ui/input/index.js';
+	import * as Tabs from '$lib/components/ui/tabs/index.js';
+	import { ArrowLeft, Check } from '@lucide/svelte';
+	import { api } from '$lib/client/api.js';
+
+	type Field = { key: string; label: string; help: string; placeholder: string; phase2?: boolean };
+
+	const FIELDS: Field[] = [
+		{
+			key: 'provider',
+			label: 'Draft provider',
+			help: 'claude · codex · ollama. Runs under your existing subscription login (U7).',
+			placeholder: 'claude',
+			phase2: true
+		},
+		{
+			key: 'provider_model',
+			label: 'Model',
+			help: 'Optional model override for the selected provider.',
+			placeholder: 'default',
+			phase2: true
+		},
+		{
+			key: 'pacing_min_seconds',
+			label: 'Pacing floor (s)',
+			help: 'Approved drafts are spaced by randomized jitter. Manual sends skip the wait (D1).',
+			placeholder: '30',
+			phase2: true
+		},
+		{
+			key: 'pacing_max_seconds',
+			label: 'Pacing ceiling (s)',
+			help: 'Upper bound of the send jitter window.',
+			placeholder: '90',
+			phase2: true
+		},
+		{
+			key: 'memory_enabled',
+			label: 'Voice memory',
+			help: '"on" uses local Hindsight; anything else runs the no-op NullMemory (U10).',
+			placeholder: 'off',
+			phase2: true
+		}
+	];
+
+	let values = $state<Record<string, string>>({});
+	let saved = $state<string | null>(null);
+	let error = $state<string | null>(null);
+
+	// Fetched on mount, not in `load()` — this route prerenders.
+	onMount(() => {
+		void api
+			.settings()
+			.then((settings) => (values = settings))
+			.catch((err) => (error = err instanceof Error ? err.message : String(err)));
+	});
+
+	async function save(key: string) {
+		try {
+			await api.setSetting(key, values[key] ?? '');
+			saved = key;
+			setTimeout(() => (saved = saved === key ? null : saved), 1500);
+		} catch (err) {
+			error = err instanceof Error ? err.message : String(err);
+		}
+	}
 </script>
 
 <main class="page">
@@ -11,30 +76,60 @@
 			<ArrowLeft class="size-4" /> Back
 		</Button>
 		<h1>Settings</h1>
-		<p class="subtitle">Phase 1 placeholder — provider pick, pacing, memory land in U6/U10.</p>
+		<p class="subtitle">
+			Stored locally in SQLite. Agent settings are live now and take effect when Phase 2 lands.
+		</p>
 	</header>
 
 	<section class="neumorphic-raised settings-body">
-		<Tabs.Root value="provider" orientation="vertical" class="h-full">
-			<Tabs.List class="flex-col h-full justify-start">
-				<Tabs.Trigger value="provider">Provider</Tabs.Trigger>
-				<Tabs.Trigger value="pacing">Pacing</Tabs.Trigger>
-				<Tabs.Trigger value="memory">Memory</Tabs.Trigger>
+		<Tabs.Root value="agent">
+			<Tabs.List class="settings-tabs">
+				<Tabs.Trigger value="agent">Agent</Tabs.Trigger>
+				<Tabs.Trigger value="safety">Safety</Tabs.Trigger>
 			</Tabs.List>
-			<Tabs.Content value="provider" class="panel-content">
-				<h2>Provider</h2>
-				<p class="muted">Draft provider selection (Claude / Codex / Ollama) lands in U7.</p>
+
+			<Tabs.Content value="agent" class="panel-content">
+				{#each FIELDS as field (field.key)}
+					<label class="field">
+						<span class="field-label">
+							{field.label}
+							{#if field.phase2}<span class="pill">Phase 2</span>{/if}
+						</span>
+						<span class="field-row">
+							<Input
+								bind:value={values[field.key]}
+								placeholder={field.placeholder}
+								class="field-input"
+							/>
+							<Button size="sm" variant="outline" onclick={() => save(field.key)}>
+								{#if saved === field.key}
+									<Check class="size-3.5" /> Saved
+								{:else}
+									Save
+								{/if}
+							</Button>
+						</span>
+						<span class="field-help">{field.help}</span>
+					</label>
+				{/each}
 			</Tabs.Content>
-			<Tabs.Content value="pacing" class="panel-content">
-				<h2>Pacing</h2>
-				<p class="muted">Outbox send pacing (30–90s jitter) lands in U9.</p>
-			</Tabs.Content>
-			<Tabs.Content value="memory" class="panel-content">
-				<h2>Memory</h2>
-				<p class="muted">Voice memory (NullMemory / Hindsight) lands in U10.</p>
+
+			<Tabs.Content value="safety" class="panel-content">
+				<h2>What this app will never do</h2>
+				<ul class="safety">
+					<li>The agent never sends. Every message leaves only after you press send or approve.</li>
+					<li>All sends route through the outbox pacer — there is no other path to WhatsApp.</li>
+					<li>Group chats are readable but structurally excluded from drafting.</li>
+					<li>Media is fetched only when you ask for it, never bulk-downloaded.</li>
+				</ul>
+				<p class="muted">These are structural, not toggles — there is nothing to configure here.</p>
 			</Tabs.Content>
 		</Tabs.Root>
 	</section>
+
+	{#if error}
+		<p class="error" role="alert">{error}</p>
+	{/if}
 </main>
 
 <style>
@@ -53,6 +148,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.4rem;
+		align-items: flex-start;
 	}
 	.settings-header h1 {
 		font-size: 1.1rem;
@@ -70,17 +166,73 @@
 		padding: 1rem;
 		min-height: 320px;
 	}
+	:global(.settings-tabs) {
+		width: 100%;
+	}
 	:global(.panel-content) {
-		padding: 0.5rem 1.25rem;
+		padding: 0.75rem 0.25rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.85rem;
 	}
 	:global(.panel-content h2) {
 		font-size: 1rem;
 		font-weight: 600;
 		color: var(--ink-90);
-		margin: 0 0 0.4rem;
+		margin: 0;
+	}
+	.field {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+	}
+	.field-label {
+		font-size: 0.8rem;
+		font-weight: 600;
+		color: var(--ink-90);
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+	}
+	.field-row {
+		display: flex;
+		gap: 0.4rem;
+		align-items: center;
+	}
+	:global(.field-input) {
+		height: 2rem;
+		font-size: 0.82rem;
+	}
+	.field-help {
+		font-size: 0.72rem;
+		color: var(--ink-50);
+	}
+	.pill {
+		font-size: 0.6rem;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		background: var(--surface-sunken);
+		border: 1px solid var(--hairline-soft);
+		border-radius: 999px;
+		padding: 0.05rem 0.35rem;
+		color: var(--ink-50);
+	}
+	.safety {
+		margin: 0;
+		padding-left: 1.1rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+		font-size: 0.84rem;
+		color: var(--ink-80);
 	}
 	.muted {
 		color: var(--ink-50);
-		font-size: 0.85rem;
+		font-size: 0.8rem;
+		margin: 0;
+	}
+	.error {
+		color: var(--destructive);
+		font-size: 0.8rem;
 	}
 </style>
