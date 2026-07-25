@@ -28,6 +28,8 @@ import { buildAllowedOrigins, validateOriginAndHost } from './api/security.js';
 import { DraftScheduler } from './agent/scheduler.js';
 import type { Memory } from './agent/memory/memory.js';
 import { NullMemory } from './agent/memory/null-memory.js';
+import { createRuntimeMemory } from './agent/memory/hindsight.js';
+import { bootstrapOwnerVoice } from './agent/voice.js';
 import { OutboxPacer, type OutboxPacerOptions } from './outbox/pacer.js';
 import { createDraftProvider, type DraftProviderName } from './providers/index.js';
 import type { DraftProvider } from './providers/provider.js';
@@ -56,6 +58,7 @@ export type CreateAppOptions = {
 	draftProvider?: DraftProvider;
 	providerName?: string;
 	memory?: Memory;
+	memoryReflectMs?: number;
 	draftDebounceMs?: number;
 	/** Supplying a transport mounts and starts the sole WhatsApp send path. */
 	outboxTransport?: WhatsAppSendTransport;
@@ -92,12 +95,13 @@ export function createApp(options: CreateAppOptions = {}): App {
 		onChange: (view) => events.emit({ type: 'session', session: view })
 	});
 	const ingestHooks = createIngestEventHooks(events);
+	const memory = options.memory ?? new NullMemory();
 	const scheduler = options.draftProvider
 		? new DraftScheduler({
 				db,
 				provider: options.draftProvider,
 				providerName: options.providerName ?? 'claude',
-				memory: options.memory ?? new NullMemory(),
+				memory,
 				debounceMs: options.draftDebounceMs,
 				hooks: {
 					onDraftUpdated: (draft) => events.emit({ type: 'draft-updated', draft }),
@@ -158,7 +162,11 @@ export function createApp(options: CreateAppOptions = {}): App {
 		port: requestedPort,
 		getAllowedOrigins,
 		nextDraftJitterMs: pacer ? () => pacer.jitterMs() : undefined,
-		wakeOutbox: pacer ? () => pacer.wake() : undefined
+		wakeOutbox: pacer ? () => pacer.wake() : undefined,
+		memory,
+		deepenHistory: options.channel?.deepenHistory
+			? (chatJid, count) => options.channel!.deepenHistory!(chatJid, count)
+			: undefined
 	});
 
 	const server = createServer((req, res) => {
@@ -216,6 +224,23 @@ export function createApp(options: CreateAppOptions = {}): App {
 
 	let channelUnsub: (() => void) | undefined;
 	let started = false;
+	let closing = false;
+	let voiceBootstrap: Promise<void> | undefined;
+	let reflectTimer: ReturnType<typeof setInterval> | undefined;
+
+	function completeHistorySync(): void {
+		if (voiceBootstrap) {
+			if (schedulerStarted) scheduler?.start();
+			return;
+		}
+		voiceBootstrap = bootstrapOwnerVoice(db, memory)
+			.catch((error) => console.warn('[memory] voice bootstrap failed; continuing without it', error))
+			.then(() => {
+				if (closing || !scheduler) return;
+				schedulerStarted = true;
+				scheduler.start();
+			});
+	}
 
 	server.on('listening', () => {
 		const addr = server.address();
@@ -227,6 +252,7 @@ export function createApp(options: CreateAppOptions = {}): App {
 
 	async function start(): Promise<void> {
 		if (started) return;
+		closing = false;
 		await new Promise<void>((resolve, reject) => {
 			server.once('error', reject);
 			server.listen(requestedPort, host, () => {
@@ -257,10 +283,7 @@ export function createApp(options: CreateAppOptions = {}): App {
 						messagesSynced: view.messagesSynced,
 						complete: view.complete
 					});
-					if (event.isLatest && scheduler) {
-						schedulerStarted = true;
-						scheduler.start();
-					}
+					if (event.isLatest) completeHistorySync();
 					if (event.isLatest) pacer?.setDraftsPaused(false);
 				} else if (event.type === 'message-committed') {
 					ingestHooks.onMessageIngested(event.message);
@@ -279,10 +302,19 @@ export function createApp(options: CreateAppOptions = {}): App {
 			await options.channel.start();
 		}
 		pacer?.start();
+		const reflectMs = options.memoryReflectMs ?? 6 * 60 * 60 * 1_000;
+		if (reflectMs > 0) {
+			reflectTimer = setInterval(() => {
+				void memory.reflect().catch((error) => console.warn('[memory] reflection failed', error));
+			}, reflectMs);
+		}
 	}
 
 	async function close(): Promise<void> {
+		closing = true;
 		channelUnsub?.();
+		if (reflectTimer) clearInterval(reflectTimer);
+		reflectTimer = undefined;
 		scheduler?.stop();
 		pacer?.stop();
 		session.dispose();
@@ -324,13 +356,14 @@ async function main(): Promise<void> {
 	const settings = listSettings(db);
 	const channel = new WhatsAppConnection(db);
 	const providerName = (settings.provider ?? 'claude') as DraftProviderName;
+	const memory = createRuntimeMemory(settings);
 	const dryRunSetting = getSetting(db, 'outbox_dry_run');
 	const app = createApp({
 		db,
 		channel,
 		draftProvider: createDraftProvider(settings),
 		providerName,
-		memory: new NullMemory(),
+		memory,
 		outboxTransport: createWhatsAppSendTransport(() => channel.getSendSocket()),
 		outboxPacer: {
 			dryRun: dryRunSetting === undefined

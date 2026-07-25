@@ -1,0 +1,20 @@
+services:
+  hindsight:
+    image: ghcr.io/vectorize-io/hindsight:0.8.5
+    restart: unless-stopped
+    ports:
+      - "8888:8888"
+      - "9999:9999"
+    environment:
+      HINDSIGHT_API_LLM_PROVIDER: "${HINDSIGHT_LLM_PROVIDER:-ollama}"
+      HINDSIGHT_API_LLM_BASE_URL: "${HINDSIGHT_LLM_BASE_URL:-http://host.docker.internal:11434/v1}"
+      HINDSIGHT_API_LLM_MODEL: "${HINDSIGHT_LLM_MODEL:-gemma3:12b}"
+      HINDSIGHT_API_EMBEDDINGS_PROVIDER: local
+      HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - hindsight-data:/home/hindsight/.pg0
+
+volumes:
+  hindsight-data:

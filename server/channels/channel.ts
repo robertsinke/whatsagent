@@ -35,5 +35,7 @@ export interface Channel {
 	 * holding it will not offer a fresh QR.
 	 */
 	resetAuth?(): Promise<void>;
+	/** Optional channel-specific request for older messages (voice bootstrap deepening). */
+	deepenHistory?(chatId: string, count?: number): Promise<unknown>;
 }
 import type { Message } from '../store/messages.js';
