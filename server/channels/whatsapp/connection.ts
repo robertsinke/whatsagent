@@ -1,0 +1,212 @@
+import makeWASocket, {
+	Browsers,
+	BufferJSON,
+	DisconnectReason,
+	type GroupMetadata,
+	type UserFacingSocketConfig,
+	type WAMessage,
+	type WAMessageKey
+} from 'baileys';
+import type { AppDatabase } from '../../store/db.js';
+import { getMessage } from '../../store/messages.js';
+import type { Channel, ChannelConnectionState, ChannelEvent, ChannelEventListener } from '../channel.js';
+import {
+	createSqliteAuthStore,
+	loadKeychainEncryptionKey,
+	type SqliteAuthStore
+} from './auth-store.js';
+
+type SocketEventHandler = (...args: any[]) => void;
+
+export type WhatsAppSocket = {
+	ev: {
+		on(event: string, handler: SocketEventHandler): unknown;
+	};
+	end(error?: Error): void;
+};
+
+export type SocketFactory = (config: UserFacingSocketConfig) => WhatsAppSocket;
+
+export type WhatsAppConnectionOptions = {
+	socketFactory?: SocketFactory;
+	authStore?: SqliteAuthStore;
+	reconnectDelayMs?: number;
+	groupCacheSize?: number;
+	onError?: (error: Error) => void;
+};
+
+function asError(error: unknown): Error {
+	return error instanceof Error ? error : new Error(String(error));
+}
+
+function disconnectStatusCode(error: unknown): number | undefined {
+	if (!error || typeof error !== 'object') return undefined;
+	const candidate = error as {
+		statusCode?: number;
+		output?: { statusCode?: number };
+	};
+	return candidate.output?.statusCode ?? candidate.statusCode;
+}
+
+export function createStoredMessageLoader(db: AppDatabase) {
+	return async (key: WAMessageKey) => {
+		if (!key.id) return undefined;
+		const stored = getMessage(db, key.id);
+		if (!stored?.raw) return undefined;
+
+		try {
+			const parsed = JSON.parse(stored.raw, BufferJSON.reviver) as WAMessage;
+			return parsed.message ?? undefined;
+		} catch {
+			return undefined;
+		}
+	};
+}
+
+export class GroupMetadataCache {
+	readonly #entries = new Map<string, GroupMetadata>();
+
+	constructor(private readonly maxSize = 100) {}
+
+	get(jid: string): GroupMetadata | undefined {
+		const value = this.#entries.get(jid);
+		if (!value) return undefined;
+		this.#entries.delete(jid);
+		this.#entries.set(jid, value);
+		return value;
+	}
+
+	set(metadata: GroupMetadata): void {
+		this.#entries.delete(metadata.id);
+		this.#entries.set(metadata.id, metadata);
+		while (this.#entries.size > this.maxSize) {
+			const oldest = this.#entries.keys().next().value as string | undefined;
+			if (!oldest) break;
+			this.#entries.delete(oldest);
+		}
+	}
+}
+
+export class WhatsAppConnection implements Channel {
+	readonly #listeners = new Set<ChannelEventListener>();
+	readonly #socketFactory: SocketFactory;
+	readonly #authStore: SqliteAuthStore;
+	readonly #reconnectDelayMs: number;
+	readonly #groupCache: GroupMetadataCache;
+	readonly #onError?: (error: Error) => void;
+	readonly #getStoredMessage: ReturnType<typeof createStoredMessageLoader>;
+
+	#socket?: WhatsAppSocket;
+	#reconnectTimer?: ReturnType<typeof setTimeout>;
+	#running = false;
+	#state?: ChannelConnectionState;
+
+	constructor(db: AppDatabase, options: WhatsAppConnectionOptions = {}) {
+		this.#socketFactory =
+			options.socketFactory ??
+			((config) => makeWASocket(config) as unknown as WhatsAppSocket);
+		this.#authStore =
+			options.authStore ?? createSqliteAuthStore(db, loadKeychainEncryptionKey());
+		this.#reconnectDelayMs = options.reconnectDelayMs ?? 1_000;
+		this.#groupCache = new GroupMetadataCache(options.groupCacheSize);
+		this.#onError = options.onError;
+		this.#getStoredMessage = createStoredMessageLoader(db);
+	}
+
+	onEvent(listener: ChannelEventListener): () => void {
+		this.#listeners.add(listener);
+		return () => this.#listeners.delete(listener);
+	}
+
+	async start(): Promise<void> {
+		if (this.#running) return;
+		this.#running = true;
+		this.#connect();
+	}
+
+	async stop(): Promise<void> {
+		this.#running = false;
+		if (this.#reconnectTimer) clearTimeout(this.#reconnectTimer);
+		this.#reconnectTimer = undefined;
+		const socket = this.#socket;
+		this.#socket = undefined;
+		socket?.end(new Error('WhatsApp connection stopped'));
+		this.#setState('disconnected');
+	}
+
+	#connect(): void {
+		if (!this.#running) return;
+		this.#setState('connecting');
+
+		try {
+			const socket = this.#socketFactory({
+				auth: this.#authStore.state,
+				browser: Browsers.macOS('Desktop'),
+				syncFullHistory: true,
+				getMessage: this.#getStoredMessage,
+				cachedGroupMetadata: async (jid) => this.#groupCache.get(jid)
+			});
+			this.#socket = socket;
+
+			socket.ev.on('connection.update', (update: {
+				connection?: 'close' | 'connecting' | 'open';
+				lastDisconnect?: { error?: unknown };
+				qr?: string;
+			}) => this.#handleConnectionUpdate(update));
+			socket.ev.on('creds.update', (update: Record<string, unknown>) => {
+				Object.assign(this.#authStore.state.creds, update);
+				void this.#authStore.saveCreds().catch((error) => this.#surfaceError(error, true));
+			});
+			socket.ev.on('groups.upsert', (groups: GroupMetadata[]) => {
+				for (const group of groups) this.#groupCache.set(group);
+			});
+		} catch (error) {
+			this.#surfaceError(error, true);
+			this.#scheduleReconnect();
+		}
+	}
+
+	#handleConnectionUpdate(update: {
+		connection?: 'close' | 'connecting' | 'open';
+		lastDisconnect?: { error?: unknown };
+		qr?: string;
+	}): void {
+		if (update.qr) this.#emit({ type: 'pairing-needed', qr: update.qr });
+		if (update.connection === 'connecting') this.#setState('connecting');
+		if (update.connection === 'open') this.#setState('connected');
+		if (update.connection !== 'close') return;
+
+		this.#socket = undefined;
+		this.#setState('disconnected');
+		const code = disconnectStatusCode(update.lastDisconnect?.error);
+		if (code === DisconnectReason.loggedOut) {
+			this.#running = false;
+			return;
+		}
+		this.#scheduleReconnect();
+	}
+
+	#scheduleReconnect(): void {
+		if (!this.#running || this.#reconnectTimer) return;
+		this.#reconnectTimer = setTimeout(() => {
+			this.#reconnectTimer = undefined;
+			this.#connect();
+		}, this.#reconnectDelayMs);
+	}
+
+	#setState(state: ChannelConnectionState): void {
+		if (this.#state === state) return;
+		this.#state = state;
+		this.#emit({ type: 'connection', state });
+	}
+
+	#surfaceError(error: unknown, fatal: boolean): void {
+		const normalized = asError(error);
+		this.#onError?.(normalized);
+		this.#emit({ type: 'error', error: normalized, fatal });
+	}
+
+	#emit(event: ChannelEvent): void {
+		for (const listener of this.#listeners) listener(event);
+	}
+}

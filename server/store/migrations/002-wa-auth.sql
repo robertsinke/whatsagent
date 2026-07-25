@@ -1,0 +1,13 @@
+CREATE TABLE IF NOT EXISTS wa_auth_creds (
+	id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
+	blob BLOB NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS wa_auth_keys (
+	type TEXT NOT NULL,
+	id TEXT NOT NULL,
+	blob BLOB NOT NULL,
+	updated_at INTEGER NOT NULL,
+	PRIMARY KEY (type, id)
+);

@@ -44,7 +44,9 @@ describe('migrations', () => {
 			'messages',
 			'outbox',
 			'schema_version',
-			'settings'
+			'settings',
+			'wa_auth_creds',
+			'wa_auth_keys'
 		]);
 	});
 
@@ -65,7 +67,7 @@ describe('migrations', () => {
 		).c;
 
 		expect(versionAfter).toBe(versionBefore);
-		expect(versionRows).toBe(1);
+		expect(versionRows).toBe(2);
 	});
 
 	it('creates the DB file under the app-data dir with 0600 permissions', () => {
