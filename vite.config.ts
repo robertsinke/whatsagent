@@ -42,7 +42,7 @@ export default defineConfig({
 	test: {
 		// Client-side tests cover the pure view-model layer (`src/lib/client/view.ts`);
 		// Svelte components stay untested here on purpose — see the U6 report.
-		include: ['server/**/*.test.ts', 'src/lib/**/*.test.ts'],
+		include: ['server/**/*.test.ts', 'src/lib/**/*.test.ts', 'scripts/**/*.test.ts'],
 		environment: 'node'
 	}
 });
