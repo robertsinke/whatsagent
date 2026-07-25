@@ -1,0 +1,264 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import '@fontsource-variable/geist';
+
+@custom-variant dark (&:is(.dark *));
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  /* Warm off-white canvas. Soft shadows live on chrome, never on text. */
+  background-color: var(--background);
+  color: var(--foreground);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Optional subtle grain overlay — keeps flat warm surfaces from looking plastic. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+@theme inline {
+  --font-heading: var(--font-sans);
+  --font-sans: 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
+  --animate-marquee: marquee var(--duration) infinite linear;
+  --animate-marquee-vertical: marquee-vertical var(--duration) linear infinite;
+
+  /* shadcn-svelte semantic surface tokens — every copied component reads these. */
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+
+  /* Neumorphic surface tokens — the cofounder.co-derived palette. */
+  --color-bg: var(--bg);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-terracotta: var(--terracotta);
+  --color-lime: var(--lime);
+  --color-ink: var(--ink-solid);
+  --color-ink-90: var(--ink-90);
+  --color-ink-80: var(--ink-80);
+  --color-ink-70: var(--ink-70);
+  --color-ink-50: var(--ink-50);
+  --color-hairline: var(--hairline);
+  --color-hairline-soft: var(--hairline-soft);
+
+  /* Neumorphic shadow stacks — top-left light source, layered. */
+  --shadow-raised: inset 0 1px 0 #fff, 0 1px 2px #00000014, 0 8px 20px #00000008, 0 20px 36px #00000005;
+  --shadow-pressed: inset 1px 1px 4px #0000001f, inset -2px -2px 3px #ffffffb3;
+  --shadow-bevel: inset 0 1px 0 #fff, inset 0 -1px 0 #0000000a;
+
+  /* Radii — 6 / 10 / 16 / 999 per plan. */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+  --radius-2xl: 28px;
+  --radius-3xl: 34px;
+  --radius-4xl: 40px;
+}
+
+:root {
+  /* Surfaces — warm off-white, layered. */
+  --bg: #f5f5f2;
+  --surface-raised: #fbfbf8;
+  --surface-sunken: #e7e7e3;
+
+  /* Ink — single hex #262323 at opacity steps + solid #202020. */
+  --ink-solid: #202020;
+  --ink-90: #262323e6;
+  --ink-80: #262323cc;
+  --ink-70: #262323b3;
+  --ink-50: #26232380;
+
+  /* Accents — terracotta primary, lime secondary. */
+  --terracotta: #a76451;
+  --lime: #bbf451;
+
+  /* Hairline borders — always paired with shadows on interactive chrome. */
+  --hairline: #dee2de;
+  --hairline-soft: #e3e3e0;
+
+  /* shadcn semantic mapping onto the neumorphic palette. */
+  --background: var(--bg);
+  --foreground: var(--ink-90);
+  --card: var(--surface-raised);
+  --card-foreground: var(--ink-90);
+  --popover: var(--surface-raised);
+  --popover-foreground: var(--ink-90);
+  --primary: var(--terracotta);
+  --primary-foreground: var(--surface-raised);
+  --secondary: var(--surface-sunken);
+  --secondary-foreground: var(--ink-90);
+  --muted: var(--surface-sunken);
+  --muted-foreground: var(--ink-50);
+  --accent: var(--surface-sunken);
+  --accent-foreground: var(--ink-90);
+  --destructive: #b3261e;
+  --border: var(--hairline);
+  --input: var(--hairline-soft);
+  --ring: var(--terracotta);
+  --chart-1: var(--terracotta);
+  --chart-2: #7a9e6f;
+  --chart-3: #c9a14a;
+  --chart-4: #5b6b8c;
+  --chart-5: var(--ink-70);
+  --radius: 10px;
+
+  /* Sidebar (reserved channel rail) — slightly sunken vs main bg. */
+  --sidebar: var(--surface-sunken);
+  --sidebar-foreground: var(--ink-90);
+  --sidebar-primary: var(--terracotta);
+  --sidebar-primary-foreground: var(--surface-raised);
+  --sidebar-accent: var(--surface-raised);
+  --sidebar-accent-foreground: var(--ink-90);
+  --sidebar-border: var(--hairline);
+  --sidebar-ring: var(--terracotta);
+}
+
+.dark {
+  /* Dark neumorphic variant — same light-source geometry, inverted values. */
+  --bg: #1c1b1a;
+  --surface-raised: #242322;
+  --surface-sunken: #161515;
+
+  --ink-solid: #f5f5f2;
+  --ink-90: #f5f5f2e6;
+  --ink-80: #f5f5f2cc;
+  --ink-70: #f5f5f2b3;
+  --ink-50: #f5f5f280;
+
+  --terracotta: #c07a66;
+  --lime: #c5e86b;
+
+  --hairline: #343332;
+  --hairline-soft: #2a2928;
+
+  --background: var(--bg);
+  --foreground: var(--ink-90);
+  --card: var(--surface-raised);
+  --card-foreground: var(--ink-90);
+  --popover: var(--surface-raised);
+  --popover-foreground: var(--ink-90);
+  --primary: var(--terracotta);
+  --primary-foreground: var(--surface-raised);
+  --secondary: var(--surface-sunken);
+  --secondary-foreground: var(--ink-90);
+  --muted: var(--surface-sunken);
+  --muted-foreground: var(--ink-50);
+  --accent: var(--surface-sunken);
+  --accent-foreground: var(--ink-90);
+  --destructive: #ef4444;
+  --border: var(--hairline);
+  --input: var(--hairline-soft);
+  --ring: var(--terracotta);
+
+  --sidebar: var(--surface-sunken);
+  --sidebar-foreground: var(--ink-90);
+  --sidebar-primary: var(--terracotta);
+  --sidebar-primary-foreground: var(--surface-raised);
+  --sidebar-accent: var(--surface-raised);
+  --sidebar-accent-foreground: var(--ink-90);
+  --sidebar-border: var(--hairline);
+  --sidebar-ring: var(--terracotta);
+
+  --shadow-raised: inset 0 1px 0 #ffffff14, 0 1px 2px #00000066, 0 8px 20px #00000044, 0 20px 36px #00000022;
+  --shadow-pressed: inset 1px 1px 4px #00000099, inset -2px -2px 3px #ffffff14;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+@keyframes marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(calc(-100% - var(--gap)));
+  }
+}
+
+@keyframes marquee-vertical {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(calc(-100% - var(--gap)));
+  }
+}
+
+/* Neumorphic chrome utilities — soft shadows on chrome only.
+   Every soft-shadowed interactive element also carries a hairline border
+   and a solid/pressed state (per plan accessibility rule). */
+@utility neumorphic-raised {
+  background-color: var(--surface-raised);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow-raised);
+}
+
+@utility neumorphic-pressed {
+  background-color: var(--surface-sunken);
+  border: 1px solid var(--hairline-soft);
+  box-shadow: var(--shadow-pressed);
+}
+
+@utility neumorphic-bevel {
+  background-color: var(--surface-raised);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow-bevel);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body::before {
+    animation: none;
+  }
+}
