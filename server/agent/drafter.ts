@@ -49,7 +49,7 @@ function messageContent(message: Message): string {
 	return message.text?.trim() || `[${message.type} message]`;
 }
 
-function conversationFor(
+export function conversationFor(
 	db: AppDatabase,
 	chatJid: string,
 	limit: number,

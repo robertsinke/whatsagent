@@ -30,6 +30,7 @@ import type { Memory } from './agent/memory/memory.js';
 import { NullMemory } from './agent/memory/null-memory.js';
 import { createRuntimeMemory } from './agent/memory/hindsight.js';
 import { bootstrapOwnerVoice } from './agent/voice.js';
+import { refineDraft } from './agent/refiner.js';
 import { OutboxPacer, type OutboxPacerOptions } from './outbox/pacer.js';
 import { createDraftProvider, type DraftProviderName } from './providers/index.js';
 import type { DraftProvider } from './providers/provider.js';
@@ -124,6 +125,18 @@ export function createApp(options: CreateAppOptions = {}): App {
 				}
 			})
 		: undefined;
+	const refiner = options.draftProvider
+		? (request: Parameters<typeof refineDraft>[1]) =>
+				refineDraft(
+					{
+						db,
+						provider: options.draftProvider!,
+						providerName: options.providerName ?? 'claude',
+						onDraftUpdated: (draft) => events.emit({ type: 'draft-updated', draft })
+					},
+					request
+				)
+		: undefined;
 	let schedulerStarted = false;
 	const pacer = options.outboxTransport
 		? new OutboxPacer({
@@ -178,6 +191,7 @@ export function createApp(options: CreateAppOptions = {}): App {
 		nextDraftJitterMs: pacer ? () => pacer.jitterMs() : undefined,
 		wakeOutbox: pacer ? () => pacer.wake() : undefined,
 		memory,
+		refineDraft: refiner,
 		deepenHistory: options.channel?.deepenHistory
 			? (chatJid, count) => options.channel!.deepenHistory!(chatJid, count)
 			: undefined

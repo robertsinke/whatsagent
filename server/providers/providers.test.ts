@@ -7,6 +7,7 @@ import { CodexProvider } from './codex.js';
 import { OllamaProvider } from './ollama.js';
 import { createDraftProvider } from './index.js';
 import {
+	buildRefinementInput,
 	type ChildProcessLike,
 	type DraftInput,
 	type SpawnProcess
@@ -19,6 +20,17 @@ const input: DraftInput = {
 		{ role: 'assistant', content: 'Yes, that works.' }
 	]
 };
+
+describe('refinement prompts', () => {
+	it('builds a closed, preview-specific request for the same provider contract', () => {
+		const refinement = buildRefinementInput(input.conversation, 'shorter', 'Current preview');
+
+		expect(refinement.conversation).toBe(input.conversation);
+		expect(refinement.system).toContain('Make the current draft shorter');
+		expect(refinement.system).toContain('Current preview');
+		expect(refinement.system).toContain('never return no_reply_needed');
+	});
+});
 
 function fixture(name: string): string {
 	return readFileSync(fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url)), 'utf8');
