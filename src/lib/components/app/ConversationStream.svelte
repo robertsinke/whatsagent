@@ -256,10 +256,15 @@
 		white-space: nowrap;
 	}
 	/* U5 — brief flash on the jump target so the reader sees what they jumped to.
-	   One animation, theme-tinted, no persistent state; fades out on its own. */
-	.bubble-wrap {
-		border-radius: var(--radius-md);
-	}
+	   One animation, theme-tinted, no persistent state; fades out on its own.
+
+	   The class sits on `.bubble-wrap` (which owns `data-msg-id` and is what the
+	   scroll targets), but the flash MUST paint the inner `.bubble`. The wrapper
+	   is a full-width block and the row inside it is 78% wide, while the visible
+	   bubble is only as wide as its text — so painting the wrapper stretched a
+	   pink rectangle hundreds of pixels across empty space and read as though a
+	   different message had been selected. `:global()` because `.bubble` belongs
+	   to a child component. */
 	@keyframes jump-flash {
 		0% {
 			background: color-mix(in srgb, var(--terracotta) 22%, transparent);
@@ -270,13 +275,13 @@
 			box-shadow: 0 0 0 2px transparent;
 		}
 	}
-	.jump-highlight {
+	.jump-highlight :global(.bubble) {
 		animation: jump-flash 1.8s ease-out 1;
 	}
 	@media (prefers-reduced-motion: reduce) {
 		/* Keep the affordance without motion: a static tint that the class
 		   removal clears, so reduced-motion users still see the target. */
-		.jump-highlight {
+		.jump-highlight :global(.bubble) {
 			animation: none;
 			background: color-mix(in srgb, var(--terracotta) 18%, transparent);
 		}
