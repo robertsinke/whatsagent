@@ -46,8 +46,8 @@
 		{
 			key: 'memory',
 			label: 'Voice memory',
-			help: 'off · null · hindsight. Null keeps a static local voice profile; Hindsight learns over time after restart.',
-			placeholder: 'null'
+			help: 'hindsight (default) · null · off. Hindsight consolidates your edits and skips into two markdown voice documents — one global, one per contact — mirrored to voice/ in your data folder. Drafting reads those files, so drafts keep their voice even when Hindsight is down. Null keeps a static local profile; off learns nothing.',
+			placeholder: 'hindsight'
 		}
 	];
 
