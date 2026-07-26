@@ -99,6 +99,7 @@
 
 						<ConversationPane
 							chatJid={app.selectedChat.jid}
+							chatKind={app.selectedChat.kind}
 							messages={app.messages}
 							loading={app.loadingMessages}
 							hasMore={app.hasMoreMessages}

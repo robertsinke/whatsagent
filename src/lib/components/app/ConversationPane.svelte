@@ -9,11 +9,12 @@
 	import { Spinner } from '$lib/components/ui/spinner/index.js';
 	import * as Empty from '$lib/components/ui/empty/index.js';
 	import { MessagesSquare } from '@lucide/svelte';
-	import type { Message } from '$lib/client/types.js';
+	import type { ChatKind, Message } from '$lib/client/types.js';
 	import type { UnreadBoundary } from '$lib/client/view.js';
 
 	let {
 		chatJid,
+		chatKind = '1:1',
 		messages,
 		loading = false,
 		hasMore = true,
@@ -22,6 +23,8 @@
 		onloadmedia
 	}: {
 		chatJid: string;
+		/** Drives group sender attribution; 1:1 bubbles stay unlabelled. */
+		chatKind?: ChatKind;
 		messages: Message[];
 		loading?: boolean;
 		hasMore?: boolean;
@@ -48,6 +51,7 @@
 		{:else}
 			<ConversationStream
 				{chatJid}
+				{chatKind}
 				{messages}
 				{hasMore}
 				{unreadBoundary}

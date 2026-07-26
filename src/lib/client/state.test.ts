@@ -41,7 +41,9 @@ function inbound(id: string, ts: number, fromMe = false): Message {
 		ts,
 		type: 'text',
 		text: id,
-		media: null
+		media: null,
+		quote: null,
+		reactions: []
 	};
 }
 
@@ -141,6 +143,73 @@ describe('AppState unread boundary', () => {
 
 		state.messages = [...state.messages, inbound('i5', 5), inbound('i6', 6)];
 		expect(state.unreadBoundary).toEqual(boundary);
+	});
+});
+
+describe('AppState targeted message updates', () => {
+	const reacted = (id: string, ts: number, emoji: string, actors: string[]): Message => ({
+		...inbound(id, ts),
+		reactions: [
+			{
+				emoji,
+				count: actors.length,
+				actors: actors.map((name) => ({
+					jid: `${name}@s.whatsapp.net`,
+					display_jid: `${name}@s.whatsapp.net`,
+					name
+				}))
+			}
+		]
+	});
+
+	it('updates reaction chips in place without duplicating or reordering', () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		state.messages = [inbound('m1', 1), inbound('m2', 2), inbound('m3', 3)];
+
+		state.applyEvent({ type: 'message-updated', message: reacted('m2', 2, '🔥', ['Maya']) });
+
+		expect(state.messages.map((m) => m.id)).toEqual(['m1', 'm2', 'm3']);
+		expect(state.messages[1]!.reactions[0]).toMatchObject({ emoji: '🔥', count: 1 });
+	});
+
+	it('clears the chip when the last actor removes their reaction', () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		state.messages = [reacted('m1', 1, '🔥', ['Maya'])];
+
+		state.applyEvent({ type: 'message-updated', message: inbound('m1', 1) });
+
+		expect(state.messages).toHaveLength(1);
+		expect(state.messages[0]!.reactions).toEqual([]);
+	});
+
+	// A reaction on a message above the loaded window must not conjure a bubble
+	// with a history hole around it — and it must not disturb the unread latch.
+	it('ignores an update for a message that is not loaded', () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		state.chats = [chatRow({ unread: 1 })];
+		state.messages = [inbound('m2', 2)];
+		state.unreadBoundary = { firstUnreadId: 'm2', count: 1, exact: true };
+
+		state.applyEvent({ type: 'message-updated', message: reacted('m0', 0, '🔥', ['Maya']) });
+
+		expect(state.messages.map((m) => m.id)).toEqual(['m2']);
+		expect(state.unreadBoundary).toEqual({ firstUnreadId: 'm2', count: 1, exact: true });
+	});
+
+	it('ignores an update addressed to another chat', () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		state.messages = [inbound('m1', 1)];
+
+		state.applyEvent({
+			type: 'message-updated',
+			message: { ...reacted('m1', 1, '🔥', ['Maya']), chat_jid: 'someone-else@s.whatsapp.net' }
+		});
+
+		expect(state.messages[0]!.reactions).toEqual([]);
 	});
 });
 

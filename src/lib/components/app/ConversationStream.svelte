@@ -7,11 +7,13 @@
 		type ConversationContext
 	} from '$lib/components/ai-elements/conversation/context.js';
 	import MessageBubble from './MessageBubble.svelte';
-	import type { Message } from '$lib/client/types.js';
+	import { buildStreamRows } from './message-runs.js';
+	import type { ChatKind, Message } from '$lib/client/types.js';
 	import { unreadBoundaryLabel, type UnreadBoundary } from '$lib/client/view.js';
 
 	let {
 		chatJid,
+		chatKind = '1:1',
 		messages,
 		hasMore = true,
 		unreadBoundary = null,
@@ -20,6 +22,8 @@
 		onopenmedia
 	}: {
 		chatJid: string;
+		/** From the server's chat row — never sniffed from the JID suffix here. */
+		chatKind?: ChatKind;
 		messages: Message[];
 		hasMore?: boolean;
 		unreadBoundary?: UnreadBoundary | null;
@@ -27,6 +31,10 @@
 		onloadmedia?: (messageId: string) => void;
 		onopenmedia?: (message: Message) => void;
 	} = $props();
+
+	const rows = $derived(
+		buildStreamRows(messages, { isGroup: chatKind === 'group', unreadBoundary })
+	);
 
 	// Rendered inside <Conversation>, so the shared scroll viewport stays the one
 	// scroll owner — this component only asks it to move.
@@ -91,12 +99,6 @@
 		});
 	}
 
-	function isNewDay(index: number): boolean {
-		if (index === 0) return true;
-		const previous = messages[index - 1]!;
-		const current = messages[index]!;
-		return new Date(previous.ts).toDateString() !== new Date(current.ts).toDateString();
-	}
 </script>
 
 <!-- `margin-top: auto` anchors a short thread to the bottom without the
@@ -110,16 +112,16 @@
 			</Button>
 		</div>
 	{/if}
-	{#each messages as message, index (message.id)}
-		{#if isNewDay(index)}
-			<div class="day"><span>{dayLabel(message.ts)}</span></div>
+	{#each rows as row (row.message.id)}
+		{#if row.newDay}
+			<div class="day"><span>{dayLabel(row.message.ts)}</span></div>
 		{/if}
-		{#if unreadBoundary && message.id === unreadBoundary.firstUnreadId}
+		{#if row.unreadMarker && unreadBoundary}
 			<div class="unread" role="separator" aria-label={unreadBoundaryLabel(unreadBoundary)}>
 				<span>{unreadBoundaryLabel(unreadBoundary)}</span>
 			</div>
 		{/if}
-		<MessageBubble {message} {onloadmedia} {onopenmedia} />
+		<MessageBubble message={row.message} senderLabel={row.senderLabel} {onloadmedia} {onopenmedia} />
 	{/each}
 </div>
 

@@ -40,8 +40,11 @@ export default defineConfig({
 		strictPort: false
 	},
 	test: {
-		// Client-side tests cover the pure view-model layer (`src/lib/client/view.ts`);
-		// Svelte components stay untested here on purpose — see the U6 report.
+		// Client-side tests cover the pure view-model layer (`src/lib/client/view.ts`)
+		// plus the per-component logic modules colocated beside their `.svelte` file
+		// (`message-runs.ts`, `scroll-anchor.ts`). Rendering itself stays untested —
+		// no jsdom, no component harness — so the split is deliberate: anything worth
+		// asserting lives in a `.ts` next to the component.
 		include: ['server/**/*.test.ts', 'src/lib/**/*.test.ts', 'scripts/**/*.test.ts'],
 		environment: 'node'
 	}

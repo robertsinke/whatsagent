@@ -8,7 +8,12 @@ import {
 	type OutboxRow,
 	type SessionView
 } from './types.js';
-import { deriveUnreadBoundary, mergeMessages, type UnreadBoundary } from './view.js';
+import {
+	deriveUnreadBoundary,
+	mergeMessages,
+	replaceMessage,
+	type UnreadBoundary
+} from './view.js';
 
 const PAGE_SIZE = 60;
 
@@ -70,7 +75,7 @@ export class AppState {
 
 	start(): void {
 		this.#realtime = createRealtime({
-			onEvent: (event) => this.#apply(event),
+			onEvent: (event) => this.applyEvent(event),
 			// Every reconnect refetches — never trust that we saw every event.
 			onResync: () => void this.refresh()
 		});
@@ -251,7 +256,7 @@ export class AppState {
 	async loadMedia(messageId: string): Promise<void> {
 		try {
 			const updated = await api.loadMedia(messageId);
-			this.messages = this.messages.map((m) => (m.id === updated.id ? updated : m));
+			this.messages = replaceMessage(this.messages, updated);
 		} catch (err) {
 			// The server has already persisted `failed` + reason; refetch to render it.
 			const jid = this.selectedJid;
@@ -295,7 +300,12 @@ export class AppState {
 		}
 	}
 
-	#apply(event: import('./types.js').ServerEvent): void {
+	/**
+	 * The realtime reducer. Public so it can be exercised directly — it is the
+	 * only place server events mutate client state, and its rules (in particular
+	 * replace-vs-insert) are worth testing without standing up a socket.
+	 */
+	applyEvent(event: import('./types.js').ServerEvent): void {
 		switch (event.type) {
 			case 'session':
 				this.session = event.session;
@@ -317,6 +327,13 @@ export class AppState {
 				if (event.message.chat_jid === this.selectedJid) {
 					this.messages = mergeMessages(this.messages, [event.message]);
 				}
+				return;
+			case 'message-updated':
+				// Replace-only. A reaction can land on a message far above the loaded
+				// window; merging would insert it mid-stream with a history hole around
+				// it. Unknown id → the next page load will carry the update anyway.
+				if (event.message.chat_jid !== this.selectedJid) return;
+				this.messages = replaceMessage(this.messages, event.message);
 				return;
 			case 'draft-updated':
 				if (event.draft.chat_jid === this.selectedJid) this.draft = event.draft;
