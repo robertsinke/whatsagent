@@ -15,6 +15,20 @@
 		help: 'true blocks WhatsApp delivery while exercising the full queue. Only explicit false enables live sends after restart.',
 		placeholder: 'true'
 	};
+	const PACING_FIELDS: Field[] = [
+		{
+			key: 'pacing_min_seconds',
+			label: 'Global spacing floor (s)',
+			help: 'Minimum delay before the next queued draft. Defaults to 0 for near-immediate sending.',
+			placeholder: '0'
+		},
+		{
+			key: 'pacing_max_seconds',
+			label: 'Global spacing ceiling (s)',
+			help: 'Upper jitter bound. Defaults to 1 second; values below the floor use the floor.',
+			placeholder: '1'
+		}
+	];
 
 	const FIELDS: Field[] = [
 		{
@@ -28,18 +42,6 @@
 			label: 'Model',
 			help: 'Optional model override for the selected provider.',
 			placeholder: 'default'
-		},
-		{
-			key: 'pacing_min_seconds',
-			label: 'Pacing floor (s)',
-			help: 'Approved drafts are spaced by randomized jitter. Manual sends skip the wait.',
-			placeholder: '30'
-		},
-		{
-			key: 'pacing_max_seconds',
-			label: 'Pacing ceiling (s)',
-			help: 'Upper bound of the send jitter window.',
-			placeholder: '90'
 		},
 		{
 			key: 'memory',
@@ -114,28 +116,26 @@
 			</Tabs.Content>
 
 			<Tabs.Content value="safety" class="panel-content">
-				<label class="field safety-field">
-					<span class="field-label">{DRY_RUN_FIELD.label}</span>
-					<span class="field-row">
-						<Input
-							bind:value={values[DRY_RUN_FIELD.key]}
-							placeholder={DRY_RUN_FIELD.placeholder}
-							class="field-input"
-						/>
-						<Button
-							size="sm"
-							variant="outline"
-							onclick={() => save(DRY_RUN_FIELD.key)}
-						>
-							{#if saved === DRY_RUN_FIELD.key}
-								<Check class="size-3.5" /> Saved
-							{:else}
-								Save
-							{/if}
-						</Button>
-					</span>
-					<span class="field-help">{DRY_RUN_FIELD.help}</span>
-				</label>
+				{#each [DRY_RUN_FIELD, ...PACING_FIELDS] as field (field.key)}
+					<label class="field safety-field">
+						<span class="field-label">{field.label}</span>
+						<span class="field-row">
+							<Input
+								bind:value={values[field.key]}
+								placeholder={field.placeholder}
+								class="field-input"
+							/>
+							<Button size="sm" variant="outline" onclick={() => save(field.key)}>
+								{#if saved === field.key}
+									<Check class="size-3.5" /> Saved
+								{:else}
+									Save
+								{/if}
+							</Button>
+						</span>
+						<span class="field-help">{field.help}</span>
+					</label>
+				{/each}
 				<h2>What this app will never do</h2>
 				<ul class="safety">
 					<li>The agent never sends. Every message leaves only after you press send or approve.</li>
@@ -143,7 +143,7 @@
 					<li>Group chats are readable but structurally excluded from drafting.</li>
 					<li>Media is fetched only when you ask for it, never bulk-downloaded.</li>
 				</ul>
-				<p class="muted">These are structural, not toggles — there is nothing to configure here.</p>
+				<p class="muted">Spacing is tunable after restart. The guarantees above are structural.</p>
 			</Tabs.Content>
 		</Tabs.Root>
 	</section>

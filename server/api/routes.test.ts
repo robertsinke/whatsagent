@@ -150,6 +150,19 @@ afterEach(async () => {
 	}
 });
 
+describe('GET /api/settings', () => {
+	it('surfaces effective near-immediate pacing defaults', async () => {
+		await startTestApp();
+
+		const response = await api('/api/settings');
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			pacing_min_seconds: '0',
+			pacing_max_seconds: '1'
+		});
+	});
+});
+
 describe('GET /api/chats', () => {
 	it('returns needs-reply subset when filtered', async () => {
 		await startTestApp();

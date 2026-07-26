@@ -15,6 +15,7 @@ import {
 	getOutbox,
 	markOutboxSending
 } from '../store/outbox.js';
+import { setSetting } from '../store/settings.js';
 import { OutboxPacer } from './pacer.js';
 
 const NOW = 2_000_000_000_000;
@@ -72,9 +73,27 @@ afterEach(() => {
 });
 
 describe('OutboxPacer', () => {
+	it('reads its jitter window from settings', () => {
+		const database = setup();
+		setSetting(database, 'pacing_min_seconds', '0.25');
+		setSetting(database, 'pacing_max_seconds', '0.75');
+		const instance = pacer(database, transport(), {
+			minDraftDelayMs: undefined,
+			maxDraftDelayMs: undefined,
+			random: () => 0.5
+		});
+
+		expect(instance.jitterMs()).toBe(500);
+	});
+
 	it('globally spaces rapid draft approvals and sends them single-flight in order', async () => {
 		vi.useFakeTimers({ now: NOW });
 		const database = setup();
+		const sendTransport = transport();
+		const instance = pacer(database, sendTransport, {
+			minDraftDelayMs: undefined,
+			maxDraftDelayMs: undefined
+		});
 		const ids = Array.from({ length: 10 }, (_, index) =>
 			enqueueDraftOutbox(database, {
 				chatJid: index % 2 ? 'bob@s.whatsapp.net' : 'alice@s.whatsapp.net',
@@ -82,11 +101,11 @@ describe('OutboxPacer', () => {
 				draftText: `draft ${index}`,
 				basisMsgId: `basis-${index}`,
 				now: NOW,
-				jitterMs: 1_000
+				jitterMs: instance.jitterMs()
 			})
 		);
 		const scheduled = ids.map((id) => getOutbox(database, id)!.send_after);
-		expect(scheduled).toEqual(ids.map((_, index) => NOW + index * 1_000));
+		expect(scheduled).toEqual(Array(10).fill(NOW));
 
 		let active = 0;
 		let maxActive = 0;
@@ -96,8 +115,7 @@ describe('OutboxPacer', () => {
 			await Promise.resolve();
 			active -= 1;
 		});
-		const sendTransport = transport({ sendText });
-		const instance = pacer(database, sendTransport);
+		(sendTransport.sendText as ReturnType<typeof vi.fn>).mockImplementation(sendText);
 		instance.start();
 		await vi.runAllTimersAsync();
 
@@ -192,7 +210,7 @@ describe('OutboxPacer', () => {
 		expect(getOutbox(database, id)?.status).toBe('cancelled');
 	});
 
-	it('recovers three queued rows with stable message ids and preserved spacing', async () => {
+	it('recovers three near-zero-spaced rows once each after restart', async () => {
 		vi.useFakeTimers({ now: NOW });
 		const database = setup();
 		const ids = Array.from({ length: 3 }, (_, index) =>
@@ -202,24 +220,28 @@ describe('OutboxPacer', () => {
 				draftText: `restart-safe ${index}`,
 				basisMsgId: `basis-${index}`,
 				now: NOW,
-				jitterMs: 1_000
+				jitterMs: 0
 			})
 		);
 		const messageIds = ids.map((id) => getOutbox(database, id)!.message_id);
 		expect(markOutboxSending(database, ids[0]!)).toBe(true);
+		database.close();
+		db = openDatabase({ dataDir: dataDir! });
+		const restartedDatabase = db;
 
 		const sendTransport = transport();
-		pacer(database, sendTransport).start();
+		pacer(restartedDatabase, sendTransport, {
+			minDraftDelayMs: undefined,
+			maxDraftDelayMs: undefined
+		}).start();
 		await vi.runAllTimersAsync();
 
 		expect(sendTransport.sendText).toHaveBeenCalledTimes(3);
 		expect((sendTransport.sendText as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[2]))
 			.toEqual(messageIds);
-		expect(ids.map((id) => getOutbox(database, id)?.sent_at)).toEqual([
-			NOW,
-			NOW + 1_000,
-			NOW + 2_000
-		]);
+		expect(ids.map((id) => getOutbox(restartedDatabase, id)?.sent_at)).toEqual(
+			Array(3).fill(NOW)
+		);
 	});
 
 	it('recovers a claimed quoted reply and sends it once with its persisted target', async () => {

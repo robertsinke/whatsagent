@@ -26,7 +26,7 @@ import {
 	getOutbox,
 	listOutbox
 } from '../store/outbox.js';
-import { getSetting, listSettings, setSetting } from '../store/settings.js';
+import { getSetting, listEffectiveSettings, setSetting } from '../store/settings.js';
 import type { Memory } from '../agent/memory/memory.js';
 import type { RefinementAttempt, RefineDraftRequest } from '../agent/refiner.js';
 import { retainDraftLearning } from '../agent/voice.js';
@@ -367,7 +367,7 @@ async function handleApi(
 	}
 
 	if (path === '/api/settings' && method === 'GET') {
-		json(res, 200, listSettings(db));
+		json(res, 200, listEffectiveSettings(db));
 		return;
 	}
 

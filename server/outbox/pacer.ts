@@ -14,6 +14,7 @@ import {
 } from '../store/outbox.js';
 import { BufferJSON, type WAMessage } from 'baileys';
 import { getLastInboundMessage, getMessage } from '../store/messages.js';
+import { getOutboxPacingSettings } from '../store/settings.js';
 import type { WhatsAppSendTransport } from '../channels/whatsapp/send.js';
 
 export type OutboxPacerOptions = {
@@ -32,9 +33,6 @@ export type OutboxPacerOptions = {
 	/** Runtime starts paused until terminal history sync; tests default unpaused. */
 	draftsPaused?: boolean;
 };
-
-const DEFAULT_MIN_DRAFT_DELAY_MS = 30_000;
-const DEFAULT_MAX_DRAFT_DELAY_MS = 90_000;
 
 export class QuotedReplyTargetError extends Error {
 	constructor(message: string) {
@@ -77,12 +75,13 @@ export class OutboxPacer {
 	#draftsPaused: boolean;
 
 	constructor(options: OutboxPacerOptions) {
+		const pacing = getOutboxPacingSettings(options.db);
 		this.#options = options;
 		this.#now = options.now ?? Date.now;
 		this.#random = options.random ?? Math.random;
 		this.#sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
-		this.#minDraftDelayMs = options.minDraftDelayMs ?? DEFAULT_MIN_DRAFT_DELAY_MS;
-		this.#maxDraftDelayMs = options.maxDraftDelayMs ?? DEFAULT_MAX_DRAFT_DELAY_MS;
+		this.#minDraftDelayMs = options.minDraftDelayMs ?? pacing.minSpacingMs;
+		this.#maxDraftDelayMs = options.maxDraftDelayMs ?? pacing.maxSpacingMs;
 		this.#manualPresenceMs = options.manualPresenceMs ?? 2_500;
 		this.#retryDelayMs = options.retryDelayMs ?? 5_000;
 		this.#draftsPaused = options.draftsPaused ?? false;

@@ -21,7 +21,12 @@ import {
 	upsertMessageReaction
 } from './messages.js';
 import { enqueueOutbox, listPendingOutbox } from './outbox.js';
-import { getSetting, setSetting } from './settings.js';
+import {
+	getOutboxPacingSettings,
+	getSetting,
+	listEffectiveSettings,
+	setSetting
+} from './settings.js';
 
 let dataDir: string | undefined;
 let db: AppDatabase | undefined;
@@ -366,5 +371,36 @@ describe('permissions helper', () => {
 		db!.close();
 		db = openDatabase({ dataDir: dataDir! });
 		expect(statSync(dbPath).mode & 0o777).toBe(0o600);
+	});
+});
+
+describe('outbox pacing settings', () => {
+	it('provides near-immediate effective defaults without persisting rows', () => {
+		const database = openTempDb();
+
+		expect(getOutboxPacingSettings(database)).toEqual({
+			minSpacingMs: 0,
+			maxSpacingMs: 1_000
+		});
+		expect(listEffectiveSettings(database)).toMatchObject({
+			pacing_min_seconds: '0',
+			pacing_max_seconds: '1'
+		});
+		expect(getSetting(database, 'pacing_min_seconds')).toBeUndefined();
+	});
+
+	it('normalizes invalid values and never puts the ceiling below the floor', () => {
+		const database = openTempDb();
+		setSetting(database, 'pacing_min_seconds', '2.5');
+		setSetting(database, 'pacing_max_seconds', '-1');
+
+		expect(getOutboxPacingSettings(database)).toEqual({
+			minSpacingMs: 2_500,
+			maxSpacingMs: 2_500
+		});
+		expect(listEffectiveSettings(database)).toMatchObject({
+			pacing_min_seconds: '2.5',
+			pacing_max_seconds: '2.5'
+		});
 	});
 });
