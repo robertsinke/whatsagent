@@ -113,6 +113,29 @@ describe('DraftScheduler', () => {
 		expect(getDraft(database, 'team@g.us')).toBeUndefined();
 	});
 
+	it('schedules only the exact outbound message named by the development override', async () => {
+		vi.useFakeTimers();
+		const database = setup();
+		const allowed = addMessage(database, 'self@s.whatsapp.net', 'self-test', NOW, {
+			fromMe: true,
+			text: 'Want to play golf tomorrow?'
+		});
+		const other = addMessage(database, 'bob@s.whatsapp.net', 'other-outbound', NOW, {
+			fromMe: true
+		});
+		const draft = vi.fn(async () => ({ kind: 'draft' as const, text: 'Yes.' }));
+		const agent = scheduler(database, { draft }, { devDraftFromMeMessageId: 'self-test' });
+
+		agent.onMessage(other);
+		agent.onMessage(allowed);
+		await vi.advanceTimersByTimeAsync(60_000);
+		await agent.waitForIdle();
+
+		expect(draft).toHaveBeenCalledOnce();
+		expect(getDraft(database, 'self@s.whatsapp.net')?.basis_msg_id).toBe('self-test');
+		expect(getDraft(database, 'bob@s.whatsapp.net')).toBeUndefined();
+	});
+
 	it('processes backlog oldest-first with a concurrency cap and continues after failure', async () => {
 		vi.useFakeTimers();
 		const database = setup();

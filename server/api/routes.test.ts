@@ -6,6 +6,7 @@ import WebSocket from 'ws';
 import { createApp, type App } from '../index.js';
 import { openDatabase, type AppDatabase } from '../store/db.js';
 import { upsertChat } from '../store/chats.js';
+import { linkContactIdentity, upsertContact } from '../store/contacts.js';
 import { upsertDraft } from '../store/drafts.js';
 import { listDraftFeedback } from '../store/draft-feedback.js';
 import { upsertMessage } from '../store/messages.js';
@@ -150,6 +151,34 @@ describe('GET /api/chats', () => {
 		expect(filtered.status).toBe(200);
 		const body = (await filtered.json()) as { items: { jid: string }[] };
 		expect(body.items.map((c) => c.jid)).toEqual(['alice@s.whatsapp.net']);
+	});
+
+	it('projects saved contact names and phone aliases without changing the routing jid', async () => {
+		await startTestApp();
+		upsertChat(db!, {
+			jid: '203663104602149@lid',
+			kind: '1:1',
+			last_msg_at: 100
+		});
+		upsertContact(db!, {
+			jid: '31683799485@s.whatsapp.net',
+			name: 'Robert'
+		});
+		linkContactIdentity(db!, {
+			lidJid: '203663104602149@lid',
+			phoneJid: '31683799485@s.whatsapp.net'
+		});
+
+		const response = await api('/api/chats');
+		const body = (await response.json()) as {
+			items: Array<{ jid: string; display_jid: string; name: string | null }>;
+		};
+
+		expect(body.items[0]).toMatchObject({
+			jid: '203663104602149@lid',
+			display_jid: '31683799485@s.whatsapp.net',
+			name: 'Robert'
+		});
 	});
 });
 

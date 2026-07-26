@@ -10,6 +10,7 @@ import { countMessages, getMessage, listMessages } from '../../store/messages.js
 import { deepenChatHistory } from './history.js';
 import {
 	attachIngest,
+	handleLidMappingUpdate,
 	handleHistorySet,
 	handleMessagesUpsert,
 	isChatMuted
@@ -42,6 +43,41 @@ describe('ingest helpers', () => {
 		expect(isChatMuted(Date.now() - 60_000)).toBe(false);
 		expect(isChatMuted(null)).toBe(false);
 		expect(isChatMuted(undefined)).toBe(false);
+	});
+
+	it('links LID and phone aliases while preserving the saved contact name', () => {
+		const database = openTempDb();
+		handleHistorySet(database, {
+			chats: [],
+			contacts: [
+				{
+					id: '203663104602149@lid',
+					lid: '203663104602149@lid',
+					phoneNumber: '31683799485@s.whatsapp.net',
+					name: 'Robert'
+				}
+			],
+			messages: []
+		});
+
+		expect(getContact(database, '203663104602149@lid')).toMatchObject({
+			name: 'Robert',
+			lid_jid: '203663104602149@lid',
+			phone_jid: '31683799485@s.whatsapp.net'
+		});
+		expect(getContact(database, '31683799485@s.whatsapp.net')).toMatchObject({
+			name: 'Robert',
+			lid_jid: '203663104602149@lid',
+			phone_jid: '31683799485@s.whatsapp.net'
+		});
+
+		handleLidMappingUpdate(database, {
+			lid: '999@lid',
+			pn: '31123456789@s.whatsapp.net'
+		});
+		expect(getContact(database, '999@lid')?.phone_jid).toBe(
+			'31123456789@s.whatsapp.net'
+		);
 	});
 });
 

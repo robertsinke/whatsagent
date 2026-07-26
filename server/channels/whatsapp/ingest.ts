@@ -6,11 +6,16 @@ import {
 	type Chat,
 	type ChatUpdate,
 	type Contact,
+	type LIDMapping,
 	type MessageUpsertType,
 	type WAMessage
 } from 'baileys';
 import { getChat, upsertChat, type ChatKind } from '../../store/chats.js';
-import { upsertContact } from '../../store/contacts.js';
+import {
+	getContact,
+	linkContactIdentity,
+	upsertContact
+} from '../../store/contacts.js';
 import type { AppDatabase } from '../../store/db.js';
 import { getMessage, upsertMessage, type Message } from '../../store/messages.js';
 
@@ -45,6 +50,8 @@ export type AttachIngestOptions = {
 	onSyncProgress?: (progress: SyncProgress) => void;
 	onMessageIngested?: (message: Message) => void;
 };
+
+type ContactPatch = Partial<Contact> & Pick<Contact, 'id'>;
 
 type LongLike = { toNumber(): number };
 
@@ -139,6 +146,26 @@ function chatJidFromMessage(msg: WAMessage): string | undefined {
 	return key.remoteJid ?? key.remoteJidAlt ?? undefined;
 }
 
+function lidPhonePair(
+	first: string | null | undefined,
+	second: string | null | undefined
+): LIDMapping | undefined {
+	if (!first || !second || first === second) return undefined;
+	if (first.endsWith('@lid') && second.endsWith('@s.whatsapp.net')) {
+		return { lid: first, pn: second };
+	}
+	if (second.endsWith('@lid') && first.endsWith('@s.whatsapp.net')) {
+		return { lid: second, pn: first };
+	}
+	return undefined;
+}
+
+export function handleLidMappingUpdate(db: AppDatabase, mapping: LIDMapping): void {
+	const pair = lidPhonePair(mapping.lid, mapping.pn);
+	if (!pair) return;
+	linkContactIdentity(db, { lidJid: pair.lid, phoneJid: pair.pn });
+}
+
 /**
  * Upsert a chat while preserving unspecified fields from any existing row.
  * Always runs before message/draft/outbox writes (FK order).
@@ -219,13 +246,28 @@ export function ingestBaileysChatUpdate(db: AppDatabase, update: ChatUpdate): vo
 	upsertChatMerged(db, patch);
 }
 
-export function ingestBaileysContact(db: AppDatabase, contact: Contact): void {
+export function ingestBaileysContact(db: AppDatabase, contact: ContactPatch): void {
 	if (!contact.id) return;
+	const name = contact.name ?? contact.verifiedName ?? null;
+	const pushName = contact.notify ?? null;
+	const lidJid = contact.lid ?? (contact.id.endsWith('@lid') ? contact.id : undefined);
+	const phoneJid =
+		contact.phoneNumber ??
+		(contact.id.endsWith('@s.whatsapp.net') ? contact.id : undefined);
+
+	if (lidJid && phoneJid) {
+		linkContactIdentity(db, { lidJid, phoneJid, name, pushName });
+		return;
+	}
+
+	const existing = getContact(db, contact.id);
 	upsertContact(db, {
 		jid: contact.id,
 		channel: 'whatsapp',
-		name: contact.name ?? contact.verifiedName ?? null,
-		push_name: contact.notify ?? null
+		name,
+		push_name: pushName,
+		lid_jid: lidJid ?? existing?.lid_jid ?? null,
+		phone_jid: phoneJid ?? existing?.phone_jid ?? null
 	});
 }
 
@@ -245,6 +287,10 @@ export function ingestBaileysMessage(
 	const sender = fromMe
 		? null
 		: (msg.key?.participant ?? msg.participant ?? chatJid);
+	const chatIdentity = lidPhonePair(msg.key?.remoteJid, msg.key?.remoteJidAlt);
+	if (chatIdentity) handleLidMappingUpdate(db, chatIdentity);
+	const senderIdentity = lidPhonePair(msg.key?.participant, msg.key?.participantAlt);
+	if (senderIdentity) handleLidMappingUpdate(db, senderIdentity);
 
 	// FK: chat row must exist before the message row.
 	const existing = getChat(db, chatJid);
@@ -324,6 +370,13 @@ export function handleContactsUpsert(db: AppDatabase, contacts: Contact[]): void
 	apply();
 }
 
+export function handleContactsUpdate(db: AppDatabase, contacts: ContactPatch[]): void {
+	const apply = db.transaction(() => {
+		for (const contact of contacts) ingestBaileysContact(db, contact);
+	});
+	apply();
+}
+
 /** Bind Baileys socket events → SQLite upserts. */
 export function attachIngest(
 	ev: IngestListener,
@@ -353,12 +406,16 @@ export function attachIngest(
 	const onChats = (chats: Chat[]) => handleChatsUpsert(db, chats);
 	const onChatUpdates = (updates: ChatUpdate[]) => handleChatsUpdate(db, updates);
 	const onContacts = (contacts: Contact[]) => handleContactsUpsert(db, contacts);
+	const onContactUpdates = (contacts: ContactPatch[]) => handleContactsUpdate(db, contacts);
+	const onLidMapping = (mapping: LIDMapping) => handleLidMappingUpdate(db, mapping);
 
 	ev.on('messaging-history.set', onHistory);
 	ev.on('messages.upsert', onMessages);
 	ev.on('chats.upsert', onChats);
 	ev.on('chats.update', onChatUpdates);
 	ev.on('contacts.upsert', onContacts);
+	ev.on('contacts.update', onContactUpdates);
+	ev.on('lid-mapping.update', onLidMapping);
 
 	return () => {
 		// Baileys EventEmitter has .off; FakeSocket in tests may not — best-effort.
@@ -368,5 +425,7 @@ export function attachIngest(
 		off?.('chats.upsert', onChats);
 		off?.('chats.update', onChatUpdates);
 		off?.('contacts.upsert', onContacts);
+		off?.('contacts.update', onContactUpdates);
+		off?.('lid-mapping.update', onLidMapping);
 	};
 }

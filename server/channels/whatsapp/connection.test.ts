@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { upsertChat } from '../../store/chats.js';
+import { getContact, upsertContact } from '../../store/contacts.js';
 import { openDatabase, type AppDatabase } from '../../store/db.js';
 import { upsertMessage } from '../../store/messages.js';
 import type { ChannelEvent } from '../channel.js';
@@ -181,6 +182,35 @@ describe('WhatsApp connection', () => {
 			await config.getMessage?.({ id: 'stored-id', remoteJid: 'alice@s.whatsapp.net' })
 		).toMatchObject({ conversation: 'stored hello' });
 		expect(await config.getMessage?.({ id: 'missing' })).toBeUndefined();
+	});
+
+	it('backfills encrypted LID mappings into contact aliases before connecting', async () => {
+		const database = openTempDb();
+		const authStore = createSqliteAuthStore(database, Buffer.alloc(32, 4));
+		await authStore.state.keys.set({
+			'lid-mapping': {
+				'203663104602149_reverse': '31683799485'
+			}
+		});
+		upsertContact(database, {
+			jid: '31683799485@s.whatsapp.net',
+			name: 'Robert'
+		});
+		const fake = fakeSocketFactory();
+		const connection = new WhatsAppConnection(database, {
+			authStore,
+			socketFactory: fake.factory,
+			waVersion: WA_WEB_VERSION_FALLBACK
+		});
+
+		await connection.start();
+
+		expect(getContact(database, '203663104602149@lid')).toMatchObject({
+			name: 'Robert',
+			lid_jid: '203663104602149@lid',
+			phone_jid: '31683799485@s.whatsapp.net'
+		});
+		expect(fake.sockets).toHaveLength(1);
 	});
 
 	it('resetAuth clears stored credentials and hands the socket a fresh session', async () => {

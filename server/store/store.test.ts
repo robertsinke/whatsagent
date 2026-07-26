@@ -86,6 +86,25 @@ describe('migrations', () => {
 		const mode = statSync(dbPath).mode & 0o777;
 		expect(mode).toBe(0o600);
 	});
+
+	it('preserves contact names across partial identity updates', () => {
+		const database = openTempDb();
+		upsertContact(database, {
+			jid: 'alice@s.whatsapp.net',
+			name: 'Alice',
+			phone_jid: 'alice@s.whatsapp.net'
+		});
+		upsertContact(database, {
+			jid: 'alice@s.whatsapp.net',
+			lid_jid: '123@lid'
+		});
+
+		expect(getContact(database, 'alice@s.whatsapp.net')).toMatchObject({
+			name: 'Alice',
+			lid_jid: '123@lid',
+			phone_jid: 'alice@s.whatsapp.net'
+		});
+	});
 });
 
 describe('chats + messages', () => {

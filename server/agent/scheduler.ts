@@ -12,6 +12,8 @@ export type DraftSchedulerOptions = {
 	provider: DraftProvider;
 	providerName: string;
 	memory: Memory;
+	/** Exact owner-authored message permitted only for a development test. */
+	devDraftFromMeMessageId?: string;
 	debounceMs?: number;
 	concurrency?: number;
 	conversationLimit?: number;
@@ -45,7 +47,9 @@ export class DraftScheduler {
 	/** Scan persisted backlog and enqueue eligible chats oldest-first. */
 	start(): void {
 		this.#stopped = false;
-		for (const candidate of listNeedsReplyCandidates(this.#options.db)) {
+		for (const candidate of listNeedsReplyCandidates(this.#options.db, {
+			devDraftFromMeMessageId: this.#options.devDraftFromMeMessageId
+		})) {
 			const draft = getDraft(this.#options.db, candidate.chat.jid);
 			if (draft && draft.basis_msg_id === candidate.lastInbound.id && draft.status !== 'stale') {
 				continue;
@@ -63,7 +67,7 @@ export class DraftScheduler {
 
 	/** Call after an inbound message has been committed by ingestion. */
 	onMessage(message: Message): void {
-		if (message.from_me) return;
+		if (message.from_me && message.id !== this.#options.devDraftFromMeMessageId) return;
 		const chat = getChat(this.#options.db, message.chat_jid);
 		if (!chat || chat.kind !== '1:1') return;
 
@@ -143,6 +147,7 @@ export class DraftScheduler {
 				providerName: this.#options.providerName,
 				memory: this.#options.memory,
 				chatJid,
+				devDraftFromMeMessageId: this.#options.devDraftFromMeMessageId,
 				conversationLimit: this.#options.conversationLimit,
 				now: this.#now,
 				hooks: this.#options.hooks

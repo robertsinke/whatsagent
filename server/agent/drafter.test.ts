@@ -108,6 +108,42 @@ describe('draftChat', () => {
 		expect(getChat(database, 'alice@s.whatsapp.net')?.agent_state).toBe('quiet');
 	});
 
+	it('drafts against one exact owner-authored message in development mode', async () => {
+		const database = setup();
+		upsertMessage(database, {
+			id: 'self-test',
+			chat_jid: 'alice@s.whatsapp.net',
+			from_me: true,
+			ts: 300,
+			text: 'Want to play golf tomorrow?'
+		});
+		const draft = vi.fn(async (_input: DraftInput) => ({
+			kind: 'draft' as const,
+			text: 'Yes, that sounds fun.'
+		}));
+
+		const result = await draftChat({
+			db: database,
+			provider: { draft },
+			providerName: 'fake',
+			memory: new NullMemory(),
+			chatJid: 'alice@s.whatsapp.net',
+			devDraftFromMeMessageId: 'self-test',
+			now: () => 500
+		});
+
+		expect(result.kind).toBe('ready');
+		expect(draft.mock.calls[0]![0].system).toContain('Development test');
+		expect(draft.mock.calls[0]![0].conversation.at(-1)).toEqual({
+			role: 'user',
+			content: 'Want to play golf tomorrow?'
+		});
+		expect(getDraft(database, 'alice@s.whatsapp.net')).toMatchObject({
+			status: 'ready',
+			basis_msg_id: 'self-test'
+		});
+	});
+
 	it('stores a ProviderError code as failed without an agent retry', async () => {
 		const database = setup();
 		const provider: DraftProvider = {

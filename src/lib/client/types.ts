@@ -8,6 +8,8 @@ export type ChatKind = '1:1' | 'group';
 
 export type Chat = {
 	jid: string;
+	/** Display-only phone alias for LID-backed chats; `jid` remains the routing ID. */
+	display_jid: string;
 	channel: string;
 	name: string | null;
 	kind: ChatKind;

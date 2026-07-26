@@ -1,5 +1,6 @@
 import type { AppDatabase } from '../store/db.js';
 import type { Chat } from '../store/chats.js';
+import { getContact } from '../store/contacts.js';
 import { getDraft } from '../store/drafts.js';
 import { getLastMessage } from '../store/messages.js';
 import { isMediaType } from './message-view.js';
@@ -11,6 +12,8 @@ import { isMediaType } from './message-view.js';
  * rule both live server-side).
  */
 export type ChatView = Chat & {
+	/** Phone JID when a LID-backed chat has a known phone alias; never used for routing. */
+	display_jid: string;
 	needs_reply: boolean;
 	/** One-line preview of the last message (typed placeholder for media). */
 	preview: string | null;
@@ -33,6 +36,8 @@ export function toChatView(
 ): ChatView {
 	const last = getLastMessage(db, chat.jid);
 	const draft = getDraft(db, chat.jid);
+	const contact = getContact(db, chat.jid);
+	const contactName = contact?.name?.trim() || contact?.push_name?.trim() || null;
 
 	let preview: string | null = null;
 	if (last) {
@@ -41,6 +46,8 @@ export function toChatView(
 
 	return {
 		...chat,
+		name: chat.name?.trim() || contactName,
+		display_jid: contact?.phone_jid ?? chat.jid,
 		needs_reply: needsReply(chat),
 		preview,
 		preview_from_me: last?.from_me ?? false,

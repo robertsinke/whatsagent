@@ -38,6 +38,8 @@ export type DraftChatOptions = {
 	providerName: string;
 	memory: Memory;
 	chatJid: string;
+	/** Exact owner-authored message permitted only for a development test. */
+	devDraftFromMeMessageId?: string;
 	conversationLimit?: number;
 	now?: () => number;
 	hooks?: AgentDraftHooks;
@@ -47,11 +49,19 @@ function messageContent(message: Message): string {
 	return message.text?.trim() || `[${message.type} message]`;
 }
 
-function conversationFor(db: AppDatabase, chatJid: string, limit: number): Turn[] {
+function conversationFor(
+	db: AppDatabase,
+	chatJid: string,
+	limit: number,
+	devInboundMessageId?: string
+): Turn[] {
 	return listMessagesPage(db, chatJid, { limit })
 		.reverse()
 		.map((message) => ({
-			role: message.from_me ? 'assistant' : 'user',
+			role:
+				message.from_me && message.id !== devInboundMessageId
+					? ('assistant' as const)
+					: ('user' as const),
 			content: messageContent(message)
 		}));
 }
@@ -60,7 +70,8 @@ async function buildDraftInput(
 	db: AppDatabase,
 	memory: Memory,
 	chat: Chat,
-	conversationLimit: number
+	conversationLimit: number,
+	devInboundMessageId?: string
 ): Promise<DraftInput> {
 	let style: string | null = null;
 	try {
@@ -76,8 +87,11 @@ async function buildDraftInput(
 		system:
 			'Draft a natural reply as the owner. Match the language used in this conversation. ' +
 			'Use the owner voice, stay concise, and return no_reply_needed when no response is warranted.' +
+			(devInboundMessageId
+				? ' Development test: treat the final owner-authored message as inbound and draft a direct reply to it.'
+				: '') +
 			styleInstruction,
-		conversation: conversationFor(db, chat.jid, conversationLimit)
+		conversation: conversationFor(db, chat.jid, conversationLimit, devInboundMessageId)
 	};
 }
 
@@ -112,8 +126,21 @@ function markSuperseded(options: DraftChatOptions): DraftAttempt {
 export async function draftChat(options: DraftChatOptions): Promise<DraftAttempt> {
 	const chat = getChat(options.db, options.chatJid);
 	if (!chat) return { kind: 'not_needed' };
-	const candidate = classifyNeedsReply(options.db, chat);
+	const candidate = classifyNeedsReply(options.db, chat, {
+		devDraftFromMeMessageId: options.devDraftFromMeMessageId
+	});
 	if (!candidate) return { kind: 'not_needed' };
+	const devInboundMessageId =
+		candidate.lastInbound.from_me &&
+		candidate.lastInbound.id === options.devDraftFromMeMessageId
+			? candidate.lastInbound.id
+			: undefined;
+	const isCurrentBasis = (message: Message | undefined): boolean =>
+		Boolean(
+			message &&
+				message.id === candidate.lastInbound.id &&
+				(!message.from_me || message.id === devInboundMessageId)
+		);
 
 	const now = options.now ?? Date.now;
 	const prior = getDraft(options.db, options.chatJid);
@@ -132,15 +159,16 @@ export async function draftChat(options: DraftChatOptions): Promise<DraftAttempt
 			options.db,
 			options.memory,
 			chat,
-			options.conversationLimit ?? 50
+			options.conversationLimit ?? 50,
+			devInboundMessageId
 		);
 		const beforeCall = getLastMessage(options.db, options.chatJid);
-		if (!beforeCall || beforeCall.id !== candidate.lastInbound.id || beforeCall.from_me) {
+		if (!isCurrentBasis(beforeCall)) {
 			return markSuperseded(options);
 		}
 		const result = await options.provider.draft(input);
 		const currentLast = getLastMessage(options.db, options.chatJid);
-		if (!currentLast || currentLast.id !== candidate.lastInbound.id || currentLast.from_me) {
+		if (!isCurrentBasis(currentLast)) {
 			return markSuperseded(options);
 		}
 
@@ -167,7 +195,7 @@ export async function draftChat(options: DraftChatOptions): Promise<DraftAttempt
 		return { kind: 'ready', draft };
 	} catch (error) {
 		const currentLast = getLastMessage(options.db, options.chatJid);
-		if (!currentLast || currentLast.id !== candidate.lastInbound.id || currentLast.from_me) {
+		if (!isCurrentBasis(currentLast)) {
 			return markSuperseded(options);
 		}
 		const providerError =

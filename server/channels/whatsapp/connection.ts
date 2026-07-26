@@ -17,7 +17,7 @@ import {
 	loadKeychainEncryptionKey,
 	type SqliteAuthStore
 } from './auth-store.js';
-import { attachIngest } from './ingest.js';
+import { attachIngest, handleLidMappingUpdate } from './ingest.js';
 import { deepenChatHistory } from './history.js';
 import type { WhatsAppSendSocket } from './send.js';
 
@@ -147,6 +147,7 @@ export class WhatsAppConnection implements Channel {
 	#running = false;
 	#reconnectAttempt = 0;
 	#state?: ChannelConnectionState;
+	#identityMappingsBackfilled = false;
 
 	constructor(db: AppDatabase, options: WhatsAppConnectionOptions = {}) {
 		this.#db = db;
@@ -179,6 +180,7 @@ export class WhatsAppConnection implements Channel {
 	async start(): Promise<void> {
 		if (this.#running) return;
 		this.#running = true;
+		await this.#backfillIdentityMappings();
 		await this.#connect();
 	}
 
@@ -226,6 +228,44 @@ export class WhatsAppConnection implements Channel {
 			chatId,
 			count
 		);
+	}
+
+	/**
+	 * Baileys already persists encrypted LID↔phone mappings in the auth store.
+	 * Mirror them into contact aliases so the UI can resolve saved names and
+	 * real phone numbers without exposing or duplicating auth credentials.
+	 */
+	async #backfillIdentityMappings(): Promise<void> {
+		if (this.#identityMappingsBackfilled) return;
+		const ids = (
+			this.#db
+				.prepare(
+					`SELECT id FROM wa_auth_keys
+					 WHERE type = 'lid-mapping' AND id LIKE '%_reverse'`
+				)
+				.all() as Array<{ id: string }>
+		).map(({ id }) => id);
+
+		const apply = this.#db.transaction((entries: Array<{ lid: string; pn: string }>) => {
+			for (const entry of entries) handleLidMappingUpdate(this.#db, entry);
+		});
+		for (let offset = 0; offset < ids.length; offset += 250) {
+			const batch = ids.slice(offset, offset + 250);
+			const stored = await this.#authStore.state.keys.get('lid-mapping', batch);
+			const mappings: Array<{ lid: string; pn: string }> = [];
+			for (const id of batch) {
+				const pnUser = stored[id];
+				if (typeof pnUser !== 'string' || !id.endsWith('_reverse')) continue;
+				const lidUser = id.slice(0, -'_reverse'.length);
+				if (!lidUser || !pnUser) continue;
+				mappings.push({
+					lid: `${lidUser}@lid`,
+					pn: `${pnUser}@s.whatsapp.net`
+				});
+			}
+			apply(mappings);
+		}
+		this.#identityMappingsBackfilled = true;
 	}
 
 	async #connect(): Promise<void> {

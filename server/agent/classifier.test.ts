@@ -80,6 +80,37 @@ describe('classifyNeedsReply', () => {
 		expect(listNeedsReplyCandidates(database)).toEqual([]);
 	});
 
+	it('allows only one exact outbound message under the development override', () => {
+		const database = setup();
+		chat(database);
+		message(database, 'alice@s.whatsapp.net', true, 101);
+
+		expect(
+			listNeedsReplyCandidates(database, {
+				devDraftFromMeMessageId: 'different-message'
+			})
+		).toEqual([]);
+		expect(
+			listNeedsReplyCandidates(database, {
+				devDraftFromMeMessageId: 'alice@s.whatsapp.net-101'
+			}).map(({ lastInbound }) => lastInbound.id)
+		).toEqual(['alice@s.whatsapp.net-101']);
+	});
+
+	it('prioritizes the exact development message ahead of the normal backlog', () => {
+		const database = setup();
+		chat(database, { jid: 'old@s.whatsapp.net', last_msg_at: 100 });
+		message(database, 'old@s.whatsapp.net', false, 100);
+		chat(database, { jid: 'self@s.whatsapp.net', last_msg_at: 300 });
+		message(database, 'self@s.whatsapp.net', true, 300);
+
+		expect(
+			listNeedsReplyCandidates(database, {
+				devDraftFromMeMessageId: 'self@s.whatsapp.net-300'
+			}).map(({ chat }) => chat.jid)
+		).toEqual(['self@s.whatsapp.net', 'old@s.whatsapp.net']);
+	});
+
 	it('orders a backlog oldest-first', () => {
 		const database = setup();
 		for (const [jid, ts] of [

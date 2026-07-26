@@ -126,6 +126,11 @@ The outbox pacer is the **only** path that can call WhatsApp `sendMessage`.
 
 Manual composer sends and approved drafts both go through the same paced outbox.
 
+For a one-message self-chat acceptance test, a non-production backend may be
+started with `WHATSAGENT_DEV_DRAFT_FROM_ME_MESSAGE_ID=<exact-message-id>`. The
+override applies only to that persisted message; it does not relax group
+exclusion or the outbox send path. Remove it and restart after the test.
+
 ## App data and credential security
 
 App data lives **outside the repo**:
