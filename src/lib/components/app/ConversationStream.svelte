@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { getContext, tick } from 'svelte';
+	import { getContext, onDestroy, tick } from 'svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Spinner } from '$lib/components/ui/spinner/index.js';
 	import {
@@ -35,6 +35,11 @@
 	let loadingOlder = $state(false);
 	let lastChatJid: string | null = null;
 	let lastMessageId: string | null = null;
+	// A chat switch tears this component down while the pane shows its loading
+	// state; props of a destroyed component keep their last value, so the flag —
+	// not the jid — is what proves the capture is still current.
+	let destroyed = false;
+	onDestroy(() => (destroyed = true));
 
 	/**
 	 * Positioning rules, in one place:
@@ -64,11 +69,15 @@
 	async function loadOlder() {
 		if (loadingOlder) return;
 		loadingOlder = true;
+		// Geometry captured here describes *this* conversation. If the owner switches
+		// chats while the page is in flight, the restore would fight the new chat's
+		// open-at-newest scroll with a stale offset — so it is dropped instead.
+		const jidAtCapture = chatJid;
 		const restoreAnchor = ctx.captureAnchor();
 		try {
 			await onloadolder?.();
 			await tick();
-			restoreAnchor();
+			if (!destroyed && jidAtCapture === chatJid) restoreAnchor();
 		} finally {
 			loadingOlder = false;
 		}
