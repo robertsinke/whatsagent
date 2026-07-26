@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppState } from './state.svelte.js';
 import type { Chat, Draft, Message } from './types.js';
+import { deriveUnreadBoundaryFromCursor } from './view.js';
 
 function jsonResponse(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), {
@@ -23,6 +24,7 @@ function chatRow(overrides: Partial<Chat> = {}): Chat {
 		muted: false,
 		archived: false,
 		agent_state: null,
+		last_read_msg_id: null,
 		needs_reply: false,
 		preview: null,
 		preview_from_me: false,
@@ -143,6 +145,72 @@ describe('AppState unread boundary', () => {
 
 		state.messages = [...state.messages, inbound('i5', 5), inbound('i6', 6)];
 		expect(state.unreadBoundary).toEqual(boundary);
+	});
+
+	it('derives the boundary from the persisted cursor when present (U4)', async () => {
+		const state = new AppState();
+		// Cursor at i2 → first unread is i3; unread count labels the marker.
+		state.chats = [chatRow({ unread: 2, last_read_msg_id: 'i2' })];
+		mockConversation([
+			inbound('i1', 1),
+			inbound('o1', 2, true),
+			inbound('i2', 3),
+			inbound('i3', 4),
+			inbound('i4', 5)
+		]);
+
+		await state.openChat(JID);
+
+		expect(state.unreadBoundary).toEqual({ firstUnreadId: 'i3', count: 2, exact: true });
+	});
+
+	it('falls back to count-based derivation when the cursor is null (chat never opened)', async () => {
+		const state = new AppState();
+		state.chats = [chatRow({ unread: 2, last_read_msg_id: null })];
+		mockConversation([
+			inbound('i1', 1),
+			inbound('o1', 2, true),
+			inbound('i2', 3),
+			inbound('i3', 4)
+		]);
+
+		await state.openChat(JID);
+
+		// Same placement as the W2-U1 latch — the boundary never regresses.
+		expect(state.unreadBoundary).toEqual({ firstUnreadId: 'i2', count: 2, exact: true });
+	});
+
+	it('survives a simulated restart: a fresh AppState re-derives from the persisted cursor', async () => {
+		// First session: open the chat, server advances the cursor to the latest
+		// message (i3) and returns it in the markRead response.
+		const state = new AppState();
+		state.chats = [chatRow({ unread: 2, last_read_msg_id: 'i1' })];
+		mockConversation([inbound('i1', 1), inbound('i2', 2), inbound('i3', 3)]);
+
+		await state.openChat(JID);
+		// The markRead response is chatRow({ unread: 0 }) which has a null cursor
+		// in the mock; emulate the real server by stamping the returned cursor.
+		state.chats = state.chats.map((c) =>
+			c.jid === JID ? { ...c, unread: 0, last_read_msg_id: 'i3' } : c
+		);
+
+		// New session: brand-new AppState (in-memory latch is gone), but the
+		// server-supplied chat row carries the persisted cursor.
+		const reopened = new AppState();
+		reopened.chats = [chatRow({ unread: 0, last_read_msg_id: 'i3' })];
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.includes('/messages')) {
+				return jsonResponse({ items: [inbound('i1', 1), inbound('i2', 2), inbound('i3', 3)] });
+			}
+			if (url.endsWith('/draft')) return jsonResponse({ error: 'Not found' }, 404);
+			throw new Error(`Unexpected request: ${url}`);
+		});
+		await reopened.openChat(JID, { markRead: false });
+
+		// Cursor is at the last inbound → no unread boundary, exactly as the
+		// owner left it before the "restart".
+		expect(reopened.unreadBoundary).toBeNull();
 	});
 });
 

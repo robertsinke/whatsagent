@@ -6,6 +6,7 @@ import {
 	canRefine,
 	deepenStatusView,
 	deriveUnreadBoundary,
+	deriveUnreadBoundaryFromCursor,
 	draftBadge,
 	filterChats,
 	formatBytes,
@@ -37,6 +38,7 @@ function chat(overrides: Partial<Chat> = {}): Chat {
 		muted: false,
 		archived: false,
 		agent_state: null,
+		last_read_msg_id: null,
 		needs_reply: false,
 		preview: 'see you then',
 		preview_from_me: false,
@@ -461,6 +463,71 @@ describe('unread boundary', () => {
 		expect(unreadBoundaryLabel({ firstUnreadId: 'i1', count: 9, exact: false })).toContain(
 			'not loaded yet'
 		);
+	});
+});
+
+describe('unread boundary from cursor (U4)', () => {
+	const line = (id: string, ts: number, fromMe = false): Message => ({
+		id,
+		chat_jid: 'alice@s.whatsapp.net',
+		channel: 'whatsapp',
+		from_me: fromMe,
+		sender: null,
+		ts,
+		type: 'text',
+		text: id,
+		media: null,
+		quote: null,
+		reactions: []
+	});
+
+	const thread = [
+		line('i1', 1),
+		line('o1', 2, true),
+		line('i2', 3),
+		line('i3', 4),
+		line('i4', 5)
+	];
+
+	it('returns null when the cursor is null (chat never opened locally)', () => {
+		// Caller must fall back to count-based derivation in this case.
+		expect(deriveUnreadBoundaryFromCursor(thread, null, 2)).toBeNull();
+	});
+
+	it('returns null when the unread count is zero', () => {
+		expect(deriveUnreadBoundaryFromCursor(thread, 'i4', 0)).toBeNull();
+	});
+
+	it('places the marker at the first inbound strictly newer than the cursor', () => {
+		// Cursor at i2 → first unread is i3.
+		expect(deriveUnreadBoundaryFromCursor(thread, 'i2', 2)).toEqual({
+			firstUnreadId: 'i3',
+			count: 2,
+			exact: true
+		});
+	});
+
+	it('skips own messages when finding the first unread after the cursor', () => {
+		// Cursor at i1 → next inbound is i2 (o1 is own and skipped).
+		expect(deriveUnreadBoundaryFromCursor(thread, 'i1', 3)).toEqual({
+			firstUnreadId: 'i2',
+			count: 3,
+			exact: true
+		});
+	});
+
+	it('returns null when the cursor is already at the last inbound', () => {
+		expect(deriveUnreadBoundaryFromCursor(thread, 'i4', 0)).toBeNull();
+	});
+
+	it('is approximate when the cursor is off-page (older than every loaded inbound)', () => {
+		// Cursor at an id not in the loaded page → marker at oldest loaded inbound.
+		const boundary = deriveUnreadBoundaryFromCursor(thread, 'gone', 9);
+		expect(boundary).toEqual({ firstUnreadId: 'i1', count: 9, exact: false });
+	});
+
+	it('has no boundary when nothing inbound is loaded yet', () => {
+		expect(deriveUnreadBoundaryFromCursor([line('o1', 1, true)], 'o1', 3)).toBeNull();
 	});
 });
 

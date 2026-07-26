@@ -11,6 +11,7 @@ import {
 } from './types.js';
 import {
 	deriveUnreadBoundary,
+	deriveUnreadBoundaryFromCursor,
 	mergeMessages,
 	replaceMessage,
 	type UnreadBoundary
@@ -58,9 +59,10 @@ export class AppState {
 	 */
 	refineError = $state<string | null>(null);
 	/**
-	 * One "New" marker for the open chat, derived from the unread count captured
-	 * *before* `markRead` zeroed it. Marking read must not erase the boundary the
-	 * owner is still reading against, so this is latched, not reactive: it is
+	 * One "New" marker for the open chat. U4: derived from the persisted read
+	 * cursor (`last_read_msg_id`) when it is present, falling back to the
+	 * count-based placement from W2-U1 for chats that have never been opened
+	 * locally since migration 010. The marker is latched, not reactive: it is
 	 * recomputed only when a chat opens and when older pages are prepended.
 	 */
 	unreadBoundary = $state<UnreadBoundary | null>(null);
@@ -79,6 +81,13 @@ export class AppState {
 	#conversationEpoch = 0;
 	/** Server unread count at the moment this chat was opened. */
 	#unreadAtOpen = 0;
+	/**
+	 * U4 — persisted read cursor snapshotted at open, so the boundary stays put
+	 * even after `markRead` advances the server-side cursor. `null` for chats
+	 * that have never been opened locally since migration 010; the count-based
+	 * {@link deriveUnreadBoundary} is used as the fallback in that case.
+	 */
+	#cursorAtOpen: string | null = null;
 
 	get connected(): boolean {
 		return this.#realtime?.connected ?? false;
@@ -128,7 +137,9 @@ export class AppState {
 		// unread snapshot — by then the chat is already read and the count is 0.
 		const chatChanged = this.selectedJid !== jid;
 		const resnapshotUnread = chatChanged || options.markRead !== false;
-		const unreadBeforeOpen = this.chats.find((c) => c.jid === jid)?.unread ?? 0;
+		const chatBeforeOpen = this.chats.find((c) => c.jid === jid);
+		const unreadBeforeOpen = chatBeforeOpen?.unread ?? 0;
+		const cursorBeforeOpen = chatBeforeOpen?.last_read_msg_id ?? null;
 		this.selectedJid = jid;
 		if (chatChanged) this.replyTarget = null;
 		this.loadingMessages = true;
@@ -147,7 +158,13 @@ export class AppState {
 			this.hasMoreMessages = messages.length >= PAGE_SIZE;
 			if (resnapshotUnread) {
 				this.#unreadAtOpen = unreadBeforeOpen;
-				this.unreadBoundary = deriveUnreadBoundary(this.messages, unreadBeforeOpen);
+				this.#cursorAtOpen = cursorBeforeOpen;
+				// U4: prefer the persisted cursor. Fall back to the count-based
+				// placement for chats that have never been opened locally since
+				// migration 010 — the boundary never regresses.
+				this.unreadBoundary = cursorBeforeOpen
+					? deriveUnreadBoundaryFromCursor(messages, cursorBeforeOpen, unreadBeforeOpen)
+					: deriveUnreadBoundary(messages, unreadBeforeOpen);
 			}
 			const draft = await api.draft(jid).catch(() => null);
 			if (epoch !== this.#conversationEpoch || this.selectedJid !== jid) return;
@@ -180,7 +197,9 @@ export class AppState {
 		// A prepend is the only event that can sharpen an approximate boundary:
 		// once it is exact it stays put, so the marker never moves under the reader.
 		if (this.unreadBoundary && !this.unreadBoundary.exact) {
-			this.unreadBoundary = deriveUnreadBoundary(this.messages, this.#unreadAtOpen);
+			this.unreadBoundary = this.#cursorAtOpen
+				? deriveUnreadBoundaryFromCursor(this.messages, this.#cursorAtOpen, this.#unreadAtOpen)
+				: deriveUnreadBoundary(this.messages, this.#unreadAtOpen);
 		}
 	}
 

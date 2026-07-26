@@ -12,7 +12,8 @@ const chat: Chat = {
 	unread: 0,
 	muted: false,
 	archived: false,
-	agent_state: null
+	agent_state: null,
+	last_read_msg_id: null
 };
 
 function fakeClient(overrides: Partial<HindsightClientLike> = {}): HindsightClientLike {

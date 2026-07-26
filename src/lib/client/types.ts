@@ -18,6 +18,14 @@ export type Chat = {
 	muted: boolean;
 	archived: boolean;
 	agent_state: string | null;
+	/**
+	 * U4 — persistent local read cursor. Id of the last message the owner has
+	 * read in this chat; `null` until the chat is first opened after migration
+	 * 010 (or when the chat has no messages). The unread boundary is derived
+	 * from this cursor, not the in-memory latch from W2-U1. LOCAL only — it
+	 * never drives WhatsApp read receipts.
+	 */
+	last_read_msg_id: string | null;
 	/** Server verdict (deterministic classifier floor) — never re-derived here. */
 	needs_reply: boolean;
 	preview: string | null;

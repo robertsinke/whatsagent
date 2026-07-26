@@ -9,7 +9,7 @@ function migrationFileCount(): number {
 	const dir = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
 	return readdirSync(dir).filter((name) => /^\d+.*\.sql$/.test(name)).length;
 }
-import { listChats, upsertChat } from './chats.js';
+import { listChats, markChatRead, upsertChat, getLastReadMsgId } from './chats.js';
 import { upsertContact, getContact } from './contacts.js';
 import { openDatabase, type AppDatabase } from './db.js';
 import { getDraft, upsertDraft } from './drafts.js';
@@ -402,5 +402,80 @@ describe('outbox pacing settings', () => {
 			pacing_min_seconds: '2.5',
 			pacing_max_seconds: '2.5'
 		});
+	});
+});
+
+describe('read cursor (U4)', () => {
+	it('starts null and advances to the latest message id when markChatRead runs', () => {
+		const database = openTempDb();
+		upsertChat(database, {
+			jid: 'alice@s.whatsapp.net',
+			kind: '1:1',
+			last_msg_at: 300,
+			unread: 3
+		});
+		upsertMessage(database, {
+			id: 'm1',
+			chat_jid: 'alice@s.whatsapp.net',
+			from_me: false,
+			ts: 100,
+			text: 'hi'
+		});
+		upsertMessage(database, {
+			id: 'm2',
+			chat_jid: 'alice@s.whatsapp.net',
+			from_me: true,
+			ts: 200,
+			text: 'hello'
+		});
+		upsertMessage(database, {
+			id: 'm3',
+			chat_jid: 'alice@s.whatsapp.net',
+			from_me: false,
+			ts: 300,
+			text: 'ping'
+		});
+
+		expect(getLastReadMsgId(database, 'alice@s.whatsapp.net')).toBeNull();
+		expect(markChatRead(database, 'alice@s.whatsapp.net')).toBe(true);
+
+		// Cursor points at the latest message by ts/id ordering, and unread is zeroed.
+		const chat = listChats(database).find((c) => c.jid === 'alice@s.whatsapp.net')!;
+		expect(chat.last_read_msg_id).toBe('m3');
+		expect(chat.unread).toBe(0);
+		expect(getLastReadMsgId(database, 'alice@s.whatsapp.net')).toBe('m3');
+	});
+
+	it('survives a simulated restart — close and reopen the DB', () => {
+		// Use a stable dataDir for this test only (afterEach clears it).
+		const stableDir = mkdtempSync(join(tmpdir(), 'whatsagent-cursor-'));
+		try {
+			let db1 = openDatabase({ dataDir: stableDir });
+			upsertChat(db1, { jid: 'bob@s.whatsapp.net', kind: '1:1', unread: 2 });
+			upsertMessage(db1, {
+				id: 'b1',
+				chat_jid: 'bob@s.whatsapp.net',
+				from_me: false,
+				ts: 10,
+				text: 'a'
+			});
+			upsertMessage(db1, {
+				id: 'b2',
+				chat_jid: 'bob@s.whatsapp.net',
+				from_me: false,
+				ts: 20,
+				text: 'b'
+			});
+			markChatRead(db1, 'bob@s.whatsapp.net');
+			db1.close();
+
+			// Simulate a restart: reopen the same DB file.
+			let db2 = openDatabase({ dataDir: stableDir });
+			expect(getLastReadMsgId(db2, 'bob@s.whatsapp.net')).toBe('b2');
+			expect(listChats(db2)[0]!.unread).toBe(0);
+			db2.close();
+		} finally {
+			rmSync(stableDir, { recursive: true, force: true });
+		}
 	});
 });
