@@ -379,7 +379,7 @@ describe('voice bootstrap plumbing (W4-U5)', () => {
 		expect(await memory.recallStyleFor(chat)).not.toContain("don't have information");
 	});
 
-	it('looksLikeVoiceDocument accepts a real habit list and rejects the failure modes', () => {
+	it('looksLikeVoiceDocument accepts real habit shapes and rejects the failure modes', () => {
 		expect(looksLikeVoiceDocument('')).toBe(false);
 		expect(looksLikeVoiceDocument('Generating content...')).toBe(false);
 		expect(looksLikeVoiceDocument("I don't have information about the owner's writing habits.")).toBe(false);
@@ -387,10 +387,56 @@ describe('voice bootstrap plumbing (W4-U5)', () => {
 		expect(looksLikeVoiceDocument('No discernible voice was found.')).toBe(false);
 		// A "no information" restated as a single list item is still rejected.
 		expect(looksLikeVoiceDocument('- No information about the owner\'s writing habits.')).toBe(false);
-		// A real voice document with concrete habits is accepted.
+		// Classic list-of-habits shape.
 		expect(looksLikeVoiceDocument('- Writes short, lowercase replies.\n- Signs off with "grtjs".')).toBe(true);
-		// A single declarative sentence with no list is rejected (a real voice doc is a list).
+		// A single declarative sentence with no list and no labeled evidence is rejected.
 		expect(looksLikeVoiceDocument('The owner writes informally.')).toBe(false);
+
+		// Live shape that the list-only filter rejected: bold labels + blockquote evidence.
+		const blockquoteDoc = [
+			'# Owner Voice — Global Writing Habits',
+			'',
+			'## Tone',
+			'',
+			"The owner's default tone is **casual, warm, and upbeat**.",
+			'',
+			'**Casual & relaxed:**',
+			'> "No worries all good haha!"',
+			'> "Nah all good man, no trouble for me!"',
+			'',
+			'**Warm & appreciative:**',
+			'> "Perfect thank you!"',
+			'> "Dankjewel wat lief!"'
+		].join('\n');
+		expect(looksLikeVoiceDocument(blockquoteDoc)).toBe(true);
+
+		// Prior live shape: list items with bold labels and italic quotes.
+		const listWithItalicQuotes = [
+			"# Owner's Durable Writing Habits",
+			'',
+			'## Tone',
+			'',
+			'- **Casual & friendly**: *"My friend! I\'m doing very well over here!"*',
+			'- **Reassuring & laid-back**: *"Nah all good man, no trouble for me!"*'
+		].join('\n');
+		expect(looksLikeVoiceDocument(listWithItalicQuotes)).toBe(true);
+
+		// Prior live shape: Evidence sections under headings.
+		const evidenceSections = [
+			"# Owner's Writing Habits",
+			'',
+			'## Tone',
+			"The owner's tone is **warm, informal, and friendly**.",
+			'',
+			'**Evidence:**',
+			'- *"Jo Bor danke maat!"* — casual gratitude',
+			'- *"Dank Boor! ❤️"* — short, warm thanks'
+		].join('\n');
+		expect(looksLikeVoiceDocument(evidenceSections)).toBe(true);
+
+		// Mid-token truncation (the live defect ended `**Supportive/`) — not yet valid.
+		expect(looksLikeVoiceDocument(`${blockquoteDoc}\n\n**Supportive/`)).toBe(false);
+		expect(looksLikeVoiceDocument(`${evidenceSections}\n\n- `)).toBe(false);
 	});
 
 	/**
@@ -656,13 +702,13 @@ describe('change-driven voice mirror (W4-U6)', () => {
 		expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toContain('First voice document');
 	});
 
-	it('remembers a rejected document refresh timestamp so it does not re-fetch every tick', async () => {
+	it('does not treat a rejected document as seen — a later valid refresh reaches disk', async () => {
 		const dataDir = tempDataDir();
 		seedVoiceFiles(dataDir, { global: '- Last good voice.' });
 		// The nightly cron refreshed the model, but the content is the "no information"
-		// failure mode. The mirror rejects it (keeps the last good file) but must record
-		// the refresh timestamp, or it would re-fetch this same rejected document every
-		// 60s until the cron refreshes it again.
+		// failure mode. The mirror rejects it (keeps the last good file) and must NOT
+		// record the refresh timestamp — otherwise a good document that the filter
+		// wrongly rejected (or a truncated one) would freeze forever.
 		const models: ModelRow[] = [
 			{
 				id: 'voice-global',
@@ -670,33 +716,71 @@ describe('change-driven voice mirror (W4-U6)', () => {
 				last_refreshed_at: '2026-07-26T03:00:00Z'
 			}
 		];
-		let listCalls = 0;
-		const countingFetch = vi.fn(async (input: string | URL | Request) => {
-			const url = new URL(typeof input === 'string' ? input : input.toString());
-			if (url.pathname === '/v1/default/banks/whatsagent-owner-voice/mental-models') {
-				listCalls += 1;
-				const limit = Number(url.searchParams.get('limit') ?? '100');
-				const offset = Number(url.searchParams.get('offset') ?? '0');
-				return new Response(JSON.stringify({ items: models.slice(offset, offset + limit) }), { status: 200 });
-			}
-			return new Response('{}', { status: 200 });
-		}) as unknown as typeof fetch;
 		const memory = new HindsightMemory({
 			dataDir,
 			client: fakeClient({}, models),
-			fetchImpl: countingFetch,
+			fetchImpl: mirrorFetch(models),
 			log: { warn: vi.fn() }
 		});
 
 		await memory.drain!();
 		expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toContain('Last good voice');
-		const callsAfterFirstDrain = listCalls;
 
-		// Second drain: the refresh timestamp is unchanged, so the rejected document is
-		// not re-fetched (it would just be rejected again). The list is still polled.
+		// Same refresh timestamp, but content is now a valid voice document (the filter
+		// was wrong, or a truncated write finished). Because the rejection was not
+		// cached, drain reconsidered and wrote it.
+		models[0] = {
+			id: 'voice-global',
+			content: [
+				'**Casual & relaxed:**',
+				'> "No worries all good haha!"'
+			].join('\n'),
+			last_refreshed_at: '2026-07-26T03:00:00Z'
+		};
 		await memory.drain!();
-		expect(listCalls).toBe(callsAfterFirstDrain + 1);
+		expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toContain('No worries');
+	});
+
+	it('reconsiders a rejected truncated document on every drain until a complete one lands', async () => {
+		const dataDir = tempDataDir();
+		seedVoiceFiles(dataDir, { global: '- Last good voice.' });
+		const models: ModelRow[] = [
+			{
+				id: 'voice-global',
+				content: [
+					'**Casual & relaxed:**',
+					'> "No worries all good haha!"',
+					'',
+					'**Supportive/'
+				].join('\n'),
+				last_refreshed_at: '2026-07-26T21:13:24Z'
+			}
+		];
+		const memory = new HindsightMemory({
+			dataDir,
+			client: fakeClient({}, models),
+			fetchImpl: mirrorFetch(models),
+			log: { warn: vi.fn() }
+		});
+
+		await memory.drain!();
 		expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toContain('Last good voice');
+
+		// Next refresh produces a complete document — must reach disk even though the
+		// truncated one shared the prior "advanced" timestamp path.
+		models[0] = {
+			id: 'voice-global',
+			content: [
+				'**Casual & relaxed:**',
+				'> "No worries all good haha!"',
+				'',
+				'**Supportive:**',
+				'> "Sure no problem"'
+			].join('\n'),
+			last_refreshed_at: '2026-07-26T22:00:00Z'
+		};
+		await memory.drain!();
+		expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toContain('Sure no problem');
 	});
 
 	/**

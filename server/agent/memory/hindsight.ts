@@ -19,10 +19,17 @@ const GLOBAL_MODEL_ID = `${VOICE_MODEL_PREFIX}${GLOBAL_VOICE_STEM}`;
 
 /**
  * Positive test for "is this a real voice document?", replacing the two-string blocklist
- * that could not anticipate what an LLM writes when it has nothing to say. A valid voice
- * document carries at least one concrete habit as a markdown list item; an LLM with no
- * data writes a single declarative sentence about not having information (and the
- * in-flight placeholder is a single line of boilerplate). Both fail this test.
+ * that could not anticipate what an LLM writes when it has nothing to say.
+ *
+ * The signal is *meaning*, not markup: quoted evidence attached to named habits. The
+ * reflect model does not format consistently between runs — list items, bold labels with
+ * blockquotes, and "Evidence:" sections with italic quotes have all appeared in the wild.
+ * Coupling the filter to `^\s*[-*]\s+` silently froze voice when a good document arrived
+ * as blockquotes instead (see docs/solutions/2026-07-26-voice-filter-rejects-valid-documents.md).
+ *
+ * Still rejects: empty, the in-flight placeholder, "no information" verdicts, mid-token
+ * truncations (unclosed `**…`, heading cut at `/`), and bare prose with neither a habit
+ * list nor labeled evidence.
  *
  * Exported for testing — do not call from outside the module.
  */
@@ -43,12 +50,10 @@ export function looksLikeVoiceDocument(content: string): boolean {
 	) {
 		return false;
 	}
-	// A real voice document is a list of habits. Require at least one markdown list item
-	// (`- `) that is more than a bare label — it has to carry a description of the habit.
+	if (isTruncatedVoiceDocument(trimmed)) return false;
+
+	// Shape A — markdown list of habits (classic). Require at least one substantive item.
 	const items = trimmed.split(/\r?\n/).filter((line) => /^\s*[-*]\s+\S/.test(line));
-	if (items.length === 0) return false;
-	// Reject a single-line "list" that is really just the no-information verdict restated
-	// (e.g. "- No information about the owner's writing habits.").
 	const substantive = items.filter((line) => {
 		const text = line.replace(/^\s*[-*]\s+/, '').toLowerCase();
 		return (
@@ -59,8 +64,41 @@ export function looksLikeVoiceDocument(content: string): boolean {
 			!text.startsWith('unable to')
 		);
 	});
-	return substantive.length > 0;
+	if (substantive.length > 0) return true;
+
+	// Shape B — labeled habits with quoted evidence (bold labels + blockquotes, or
+	// headings + quote marks). No list items required.
+	const hasNamedHabit = /\*\*[^*]+\*\*/.test(trimmed) || /^#{1,3}\s+\S/m.test(trimmed);
+	const hasQuotedEvidence =
+		/^\s*>\s*\S/m.test(trimmed) || /["“”*][^"“”\n]+["“”*]/.test(trimmed);
+	return hasNamedHabit && hasQuotedEvidence;
 }
+
+/**
+ * A document cut mid-generation (max_tokens ceiling) is not yet valid voice. The live
+ * failure ended literally `**Supportive/` — unclosed bold, mid-heading slash. Length is
+ * not a quality signal; truncation structure is.
+ *
+ * Exported for testing — do not call from outside the module.
+ */
+export function isTruncatedVoiceDocument(content: string): boolean {
+	const trimmed = content.trim();
+	if (!trimmed) return false;
+	const boldMarkers = trimmed.match(/\*\*/g);
+	if (boldMarkers && boldMarkers.length % 2 !== 0) return true;
+	if (/[A-Za-z0-9]\/\s*$/.test(trimmed)) return true;
+	const lastLine = trimmed.split(/\r?\n/).pop()!.trim();
+	if (/^\*\*[^*]*$/.test(lastLine)) return true;
+	// Bare list marker with no item text — cut mid-bullet.
+	if (/^[-*]\s*$/.test(lastLine)) return true;
+	return false;
+}
+
+/**
+ * Token ceiling for the global voice document. 1200 truncated mid-word in production;
+ * even 4096 has been observed to cut a labeled-evidence draft mid-list. Use the API max.
+ */
+const GLOBAL_VOICE_MAX_TOKENS = 8_192;
 
 /**
  * The floor retain timeout. The steady-state `timeoutMs` (2 s) is a reasonable budget for a
@@ -475,8 +513,11 @@ export class HindsightMemory implements Memory {
 	 * `last_refreshed_at` (a freshly created model that has not yet refreshed) is treated
 	 * as "never mirrored" so the first refresh reaches disk promptly rather than waiting
 	 * for the 6-hourly `reflect`. The `looksLikeVoiceDocument` write filter still gates
-	 * what reaches disk — it is verified against the live document and rejects the
-	 * in-flight placeholder and the "no information" failure mode alike.
+	 * what reaches disk.
+	 *
+	 * A rejected document must NOT advance `#lastMirroredAt`. Caching a rejection treated
+	 * a good-but-misformatted (or truncated) document as seen forever — the drafter kept
+	 * reading the older file and the rejected content was never reconsidered.
 	 */
 	async #mirrorChanged(): Promise<void> {
 		for (const model of await this.#listVoiceModelsPaginated()) {
@@ -484,9 +525,7 @@ export class HindsightMemory implements Memory {
 			if (model.lastRefreshed === last && last !== null) continue;
 			const content = (model.content ?? '').trim();
 			if (!looksLikeVoiceDocument(content)) {
-				// Even a rejected document advances the cache: remember its refresh timestamp
-				// so we do not re-fetch it every tick until the nightly cron refreshes it.
-				if (model.lastRefreshed) this.#lastMirroredAt.set(model.id, model.lastRefreshed);
+				// Leave the cache alone — reconsider on every tick until a valid write lands.
 				continue;
 			}
 			this.#files.write(model.id.slice(VOICE_MODEL_PREFIX.length), content);
@@ -495,7 +534,7 @@ export class HindsightMemory implements Memory {
 	}
 
 	async #ensureGlobalModel(): Promise<void> {
-		await this.#ensureModel(GLOBAL_MODEL_ID, GLOBAL_SOURCE_QUERY, ['voice'], 1_200);
+		await this.#ensureModel(GLOBAL_MODEL_ID, GLOBAL_SOURCE_QUERY, ['voice'], GLOBAL_VOICE_MAX_TOKENS);
 	}
 
 	async #ensureChatModel(chatJid: string): Promise<void> {
@@ -527,6 +566,9 @@ export class HindsightMemory implements Memory {
 	): Promise<void> {
 		try {
 			await this.#withTimeout((signal) => this.#client.getMentalModel(this.#bankId, id, { signal }));
+			// Model already exists — still raise the token ceiling. Without this, a model
+			// created under the old 1200 ceiling keeps truncating on every refresh.
+			await this.#ensureMaxTokens(id, maxTokens);
 			return;
 		} catch {
 			// Not there yet — fall through and create it.
@@ -543,6 +585,24 @@ export class HindsightMemory implements Memory {
 			signal
 		}));
 		await this.#configureRefreshCron(id, tags);
+	}
+
+	/**
+	 * PATCH `max_tokens` on an existing mental model. The typed client's update path is
+	 * unused elsewhere; raw REST matches `#configureRefreshCron`. Failures are thrown so
+	 * `#ensureModel`'s catch logs them without failing the retain.
+	 */
+	async #ensureMaxTokens(id: string, maxTokens: number): Promise<void> {
+		const url = `${this.#baseUrl}/v1/default/banks/${encodeURIComponent(this.#bankId)}/mental-models/${encodeURIComponent(id)}`;
+		const response = await this.#withTimeout((signal) => this.#fetch(url, {
+			method: 'PATCH',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ max_tokens: maxTokens }),
+			signal
+		}));
+		if (!response.ok) {
+			throw new Error(`Hindsight max_tokens PATCH failed for ${id}: ${response.status}`);
+		}
 	}
 
 	/**
