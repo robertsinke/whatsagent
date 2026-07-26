@@ -350,9 +350,13 @@ export function createApp(options: CreateAppOptions = {}): App {
 		pacer?.start();
 		const reflectMs = options.memoryReflectMs ?? 6 * 60 * 60 * 1_000;
 		if (reflectMs > 0) {
-			reflectTimer = setInterval(() => {
+			const sync = () =>
 				void memory.reflect().catch((error) => console.warn('[memory] reflection failed', error));
-			}, reflectMs);
+			// `setInterval` does not fire immediately, and this call is now the voice mirror's
+			// heartbeat — without a run at start, a restart would draft against files up to
+			// one full interval stale.
+			sync();
+			reflectTimer = setInterval(sync, reflectMs);
 		}
 	}
 
@@ -402,7 +406,7 @@ async function main(): Promise<void> {
 	const settings = listSettings(db);
 	const channel = new WhatsAppConnection(db);
 	const providerName = (settings.provider ?? 'claude') as DraftProviderName;
-	const memory = createRuntimeMemory(settings);
+	const memory = createRuntimeMemory(settings, { dataDir: getDefaultDataDir() });
 	const dryRunSetting = getSetting(db, 'outbox_dry_run');
 	const devDraftFromMeMessageId =
 		process.env.NODE_ENV === 'production'

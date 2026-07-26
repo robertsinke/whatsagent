@@ -66,6 +66,8 @@ export function conversationFor(
 		}));
 }
 
+const MAX_STYLE_CHARS = 8_000;
+
 async function buildDraftInput(
 	db: AppDatabase,
 	memory: Memory,
@@ -80,8 +82,10 @@ async function buildDraftInput(
 		// Optional memory must never make the core drafting loop unavailable.
 	}
 
+	// D4: a hard ceiling here as well as inside the memory, so no Memory implementation
+	// can push two markdown voice documents past the conversation they are meant to serve.
 	const styleInstruction = style
-		? `\nOwner voice and style context:\n${style}`
+		? `\nOwner voice and style context:\n${style.slice(0, MAX_STYLE_CHARS)}`
 		: '';
 	return {
 		system:
