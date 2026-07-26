@@ -20,7 +20,8 @@
 		onloadolder,
 		onloadmedia,
 		onopenmedia,
-		onreply
+		onreply,
+		onreact
 	}: {
 		chatJid: string;
 		/** From the server's chat row — never sniffed from the JID suffix here. */
@@ -32,6 +33,8 @@
 		onloadmedia?: (messageId: string) => void;
 		onopenmedia?: (message: Message) => void;
 		onreply?: (message: Message) => void;
+		/** D2 (Wave 3 U2): add/remove a reaction. Empty emoji removes. */
+		onreact?: (messageId: string, emoji: string) => void;
 	} = $props();
 
 	const rows = $derived(
@@ -129,6 +132,7 @@
 			{onloadmedia}
 			{onopenmedia}
 			{onreply}
+			{onreact}
 		/>
 	{/each}
 </div>

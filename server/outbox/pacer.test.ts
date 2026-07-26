@@ -12,6 +12,7 @@ import {
 	cancelOutbox,
 	enqueueDraftOutbox,
 	enqueueManualOutbox,
+	enqueueReactionOutbox,
 	getOutbox,
 	markOutboxSending
 } from '../store/outbox.js';
@@ -36,6 +37,7 @@ function transport(overrides: Partial<WhatsAppSendTransport> = {}): WhatsAppSend
 	return {
 		setPresence: vi.fn(async () => undefined),
 		sendText: vi.fn(async () => undefined),
+		sendReaction: vi.fn(async () => undefined),
 		markRead: vi.fn(async () => undefined),
 		...overrides
 	};
@@ -414,5 +416,178 @@ describe('OutboxPacer', () => {
 		});
 		expect(database.prepare('SELECT status FROM drafts WHERE chat_jid = ?').get('alice@s.whatsapp.net'))
 			.toEqual({ status: 'sent' });
+	});
+
+	describe('reaction payload', () => {
+		function seedTargetMessage(
+			database: AppDatabase,
+			jid: string = 'alice@s.whatsapp.net',
+			id: string = 'react-target'
+		): WAMessage {
+			const target = {
+				key: { id, remoteJid: jid, fromMe: false },
+				message: { conversation: 'React to me' },
+				messageTimestamp: Math.floor(NOW / 1_000)
+			} satisfies WAMessage;
+			upsertMessage(database, {
+				id,
+				chat_jid: jid,
+				from_me: false,
+				ts: NOW,
+				text: 'React to me',
+				raw: JSON.stringify(target, BufferJSON.replacer)
+			});
+			return target;
+		}
+
+		it('sends exactly one react payload for a reaction row', async () => {
+			vi.useFakeTimers({ now: NOW });
+			const database = setup();
+			const target = seedTargetMessage(database);
+			const id = enqueueReactionOutbox(database, {
+				chatJid: 'alice@s.whatsapp.net',
+				targetMsgId: 'react-target',
+				emoji: '👍',
+				now: NOW
+			});
+			const sendTransport = transport();
+			pacer(database, sendTransport).start();
+			await vi.runAllTimersAsync();
+
+			expect(sendTransport.sendReaction).toHaveBeenCalledOnce();
+			expect(sendTransport.sendReaction).toHaveBeenCalledWith(
+				'alice@s.whatsapp.net',
+				target.key,
+				'👍'
+			);
+			expect(sendTransport.sendText).not.toHaveBeenCalled();
+			expect(getOutbox(database, id)?.status).toBe('sent');
+		});
+
+		it('removal sends the empty-emoji form', async () => {
+			vi.useFakeTimers({ now: NOW });
+			const database = setup();
+			const target = seedTargetMessage(database);
+			const id = enqueueReactionOutbox(database, {
+				chatJid: 'alice@s.whatsapp.net',
+				targetMsgId: 'react-target',
+				emoji: '',
+				now: NOW
+			});
+			const sendTransport = transport();
+			pacer(database, sendTransport).start();
+			await vi.runAllTimersAsync();
+
+			expect(sendTransport.sendReaction).toHaveBeenCalledWith(
+				'alice@s.whatsapp.net',
+				target.key,
+				''
+			);
+			expect(getOutbox(database, id)?.status).toBe('sent');
+		});
+
+		it('dry-run suppresses the react call entirely', async () => {
+			vi.useFakeTimers({ now: NOW });
+			vi.spyOn(console, 'info').mockImplementation(() => undefined);
+			const database = setup();
+			seedTargetMessage(database);
+			const id = enqueueReactionOutbox(database, {
+				chatJid: 'alice@s.whatsapp.net',
+				targetMsgId: 'react-target',
+				emoji: '👍',
+				now: NOW
+			});
+			const sendTransport = transport();
+			pacer(database, sendTransport, { dryRun: true }).start();
+			await vi.runAllTimersAsync();
+
+			expect(sendTransport.sendReaction).not.toHaveBeenCalled();
+			expect(getOutbox(database, id)?.status).toBe('sent');
+		});
+
+		it('a reaction never bypasses the pacer', async () => {
+			vi.useFakeTimers({ now: NOW });
+			const database = setup();
+			seedTargetMessage(database);
+			// No pacer is started — the row stays pending.
+			enqueueReactionOutbox(database, {
+				chatJid: 'alice@s.whatsapp.net',
+				targetMsgId: 'react-target',
+				emoji: '👍',
+				now: NOW
+			});
+			// Advance timers with no pacer running.
+			await vi.advanceTimersByTimeAsync(10_000);
+			const rows = database
+				.prepare("SELECT status FROM outbox WHERE payload_kind = 'reaction'")
+				.all() as { status: string }[];
+			expect(rows).toEqual([{ status: 'pending' }]);
+		});
+
+		it('restart mid-queue does not double-apply a reaction', async () => {
+			vi.useFakeTimers({ now: NOW });
+			const beforeRestart = setup();
+			seedTargetMessage(beforeRestart);
+			const id = enqueueReactionOutbox(beforeRestart, {
+				chatJid: 'alice@s.whatsapp.net',
+				targetMsgId: 'react-target',
+				emoji: '👍',
+				now: NOW
+			});
+			// Crash after claim, before send.
+			expect(markOutboxSending(beforeRestart, id)).toBe(true);
+			beforeRestart.close();
+			db = openDatabase({ dataDir: dataDir! });
+			const database = db;
+
+			const sendTransport = transport();
+			pacer(database, sendTransport, {
+				minDraftDelayMs: undefined,
+				maxDraftDelayMs: undefined
+			}).start();
+			await vi.runAllTimersAsync();
+
+			// Recovered from 'sending' → 'pending' → sent exactly once.
+			expect(sendTransport.sendReaction).toHaveBeenCalledOnce();
+			expect(getOutbox(database, id)?.status).toBe('sent');
+		});
+
+		it('cancels a reaction with a corrupt target and releases the next row', async () => {
+			vi.useFakeTimers({ now: NOW });
+			const database = setup();
+			upsertMessage(database, {
+				id: 'broken-target',
+				chat_jid: 'alice@s.whatsapp.net',
+				from_me: false,
+				ts: NOW,
+				text: 'Cannot reconstruct',
+				raw: '{not-json'
+			});
+			seedTargetMessage(database, 'bob@s.whatsapp.net', 'good-target');
+			const brokenId = enqueueReactionOutbox(database, {
+				chatJid: 'alice@s.whatsapp.net',
+				targetMsgId: 'broken-target',
+				emoji: '👍',
+				now: NOW
+			});
+			const nextId = enqueueReactionOutbox(database, {
+				chatJid: 'bob@s.whatsapp.net',
+				targetMsgId: 'good-target',
+				emoji: '❤️',
+				now: NOW
+			});
+			const onError = vi.fn();
+			const sendTransport = transport();
+			pacer(database, sendTransport, { onError }).start();
+			await vi.runAllTimersAsync();
+
+			expect(getOutbox(database, brokenId)?.status).toBe('cancelled');
+			expect(onError).toHaveBeenCalledWith(
+				expect.objectContaining({ name: 'QuotedReplyTargetError' }),
+				expect.objectContaining({ id: brokenId })
+			);
+			expect(sendTransport.sendReaction).toHaveBeenCalledOnce();
+			expect(getOutbox(database, nextId)?.status).toBe('sent');
+		});
 	});
 });

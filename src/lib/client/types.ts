@@ -138,6 +138,12 @@ export type OutboxRow = {
 	basis_msg_id: string | null;
 	/** Stored message id only; raw WhatsApp envelopes never cross this boundary. */
 	reply_to_msg_id: string | null;
+	/** D2 (Wave 3 U2): `text` is an ordinary send, `reaction` is a react call. */
+	payload_kind: 'text' | 'reaction';
+	/** Emoji for reaction rows; empty string removes a reaction. Null on text rows. */
+	reaction_emoji: string | null;
+	/** Target message id for reaction rows. Null on text rows. */
+	reaction_target_msg_id: string | null;
 };
 
 /** D5 — derived session view. */

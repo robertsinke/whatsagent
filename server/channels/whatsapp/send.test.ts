@@ -40,4 +40,28 @@ describe('createWhatsAppSendTransport', () => {
 			{ messageId: 'stable-id' }
 		);
 	});
+
+	it('sends a reaction as a Baileys react payload with the target key', async () => {
+		const activeSocket = socket();
+		const transport = createWhatsAppSendTransport(() => activeSocket);
+		const targetKey = { id: 'target-msg', remoteJid: 'alice@s.whatsapp.net', fromMe: false };
+
+		await transport.sendReaction('alice@s.whatsapp.net', targetKey, '👍');
+
+		expect(activeSocket.sendMessage).toHaveBeenCalledWith('alice@s.whatsapp.net', {
+			react: { text: '👍', key: targetKey }
+		});
+	});
+
+	it('sends a removal as a react payload with an empty emoji string', async () => {
+		const activeSocket = socket();
+		const transport = createWhatsAppSendTransport(() => activeSocket);
+		const targetKey = { id: 'target-msg', remoteJid: 'alice@s.whatsapp.net', fromMe: false };
+
+		await transport.sendReaction('alice@s.whatsapp.net', targetKey, '');
+
+		expect(activeSocket.sendMessage).toHaveBeenCalledWith('alice@s.whatsapp.net', {
+			react: { text: '', key: targetKey }
+		});
+	});
 });

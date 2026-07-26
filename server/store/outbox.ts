@@ -3,6 +3,14 @@ import { randomBytes } from 'node:crypto';
 
 export type OutboxSource = 'draft' | 'manual';
 
+/**
+ * D2 (Wave 3 U2): the outbox carries two payload kinds. `text` is an ordinary
+ * message send; `reaction` is a Baileys `sendMessage(jid, { react })` call — a
+ * send under R9, so it rides the same pacer. The reaction columns are NULL on
+ * text rows and required on reaction rows.
+ */
+export type OutboxPayloadKind = 'text' | 'reaction';
+
 export type OutboxRow = {
 	id: number;
 	chat_jid: string;
@@ -16,6 +24,9 @@ export type OutboxRow = {
 	draft_text: string | null;
 	basis_msg_id: string | null;
 	reply_to_msg_id: string | null;
+	payload_kind: OutboxPayloadKind;
+	reaction_emoji: string | null;
+	reaction_target_msg_id: string | null;
 };
 
 export type OutboxInput = {
@@ -26,21 +37,28 @@ export type OutboxInput = {
 	sent_at?: number | null;
 	status?: string;
 	source?: OutboxSource;
-	message_id?: string;
+	/** Null for reaction rows (a reaction is not a new message). */
+	message_id?: string | null;
 	draft_text?: string | null;
 	basis_msg_id?: string | null;
 	reply_to_msg_id?: string | null;
+	payload_kind?: OutboxPayloadKind;
+	reaction_emoji?: string | null;
+	reaction_target_msg_id?: string | null;
 };
 
 export function enqueueOutbox(db: AppDatabase, row: OutboxInput): number {
+	const payloadKind = row.payload_kind ?? 'text';
 	const result = db
 		.prepare(
 			`INSERT INTO outbox (
 			   chat_jid, text, queued_at, send_after, sent_at, status,
-			   source, message_id, draft_text, basis_msg_id, reply_to_msg_id
+			   source, message_id, draft_text, basis_msg_id, reply_to_msg_id,
+			   payload_kind, reaction_emoji, reaction_target_msg_id
 			 ) VALUES (
 			   @chat_jid, @text, @queued_at, @send_after, @sent_at, @status,
-			   @source, @message_id, @draft_text, @basis_msg_id, @reply_to_msg_id
+			   @source, @message_id, @draft_text, @basis_msg_id, @reply_to_msg_id,
+			   @payload_kind, @reaction_emoji, @reaction_target_msg_id
 			 )`
 		)
 		.run({
@@ -51,10 +69,16 @@ export function enqueueOutbox(db: AppDatabase, row: OutboxInput): number {
 			sent_at: row.sent_at ?? null,
 			status: row.status ?? 'pending',
 			source: row.source ?? 'manual',
-			message_id: row.message_id ?? newMessageId(),
+			message_id:
+				row.payload_kind === 'reaction'
+					? (row.message_id ?? null)
+					: (row.message_id ?? newMessageId()),
 			draft_text: row.draft_text ?? null,
 			basis_msg_id: row.basis_msg_id ?? null,
-			reply_to_msg_id: row.reply_to_msg_id ?? null
+			reply_to_msg_id: row.reply_to_msg_id ?? null,
+			payload_kind: payloadKind,
+			reaction_emoji: row.reaction_emoji ?? null,
+			reaction_target_msg_id: row.reaction_target_msg_id ?? null
 		});
 	return Number(result.lastInsertRowid);
 }
@@ -104,6 +128,38 @@ export function enqueueDraftOutbox(
 		});
 	});
 	return insert();
+}
+
+/**
+ * D2 (Wave 3 U2): enqueue an owner-authored reaction (or removal) as an outbox
+ * row. A reaction is a Baileys `sendMessage(jid, { react: { text, key } })`
+ * call — a send under R9 — so it rides the pacer like every other send. An
+ * empty `emoji` string removes a prior reaction.
+ *
+ * `message_id` is null: a reaction is not a new message, so there is no stable
+ * outgoing id to invent. The pacer reconstructs the target key from
+ * `reaction_target_msg_id` after claiming the row.
+ */
+export function enqueueReactionOutbox(
+	db: AppDatabase,
+	input: {
+		chatJid: string;
+		targetMsgId: string;
+		emoji: string;
+		now: number;
+	}
+): number {
+	return enqueueOutbox(db, {
+		chat_jid: input.chatJid,
+		text: '',
+		queued_at: input.now,
+		send_after: input.now,
+		source: 'manual',
+		message_id: null,
+		payload_kind: 'reaction',
+		reaction_emoji: input.emoji,
+		reaction_target_msg_id: input.targetMsgId
+	});
 }
 
 export function listPendingOutbox(db: AppDatabase): OutboxRow[] {
