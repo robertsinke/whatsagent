@@ -278,7 +278,8 @@ export class AppState {
 	/**
 	 * Preview-only draft refinement. Returns the updated draft on success so the
 	 * editor can replace its textarea contents with the transformed text; returns
-	 * `null` on failure or 409 so the caller preserves the visible preview.
+	 * `null` on failure, 409, or when the chat is no longer selected so the
+	 * caller preserves the visible preview.
 	 *
 	 * On a 409 (draft or inbound history changed while the provider was running)
 	 * the late result is never applied — the active draft is reloaded from the
@@ -296,10 +297,10 @@ export class AppState {
 		this.refineError = null;
 		try {
 			const draft = await api.refineDraft(jid, intent, text);
-			// A chat switch or stale prompt during refinement means the visible
-			// draft is no longer what the owner is looking at; keep the server
-			// state in sync but do not force a stale editor open.
-			if (this.selectedJid === jid) this.draft = draft;
+			// A chat switch during refinement means the late Draft must not reach
+			// DraftStatus (which would overwrite component-owned editedText).
+			if (this.selectedJid !== jid) return null;
+			this.draft = draft;
 			return draft;
 		} catch (err) {
 			if (err instanceof ApiError && err.status === 409) {

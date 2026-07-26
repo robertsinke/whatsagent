@@ -433,9 +433,9 @@ describe('AppState draft refinement', () => {
 
 		const updated = await state.refineDraft('shorter', 'Preview');
 
-		// The result is returned to the caller, but the active draft for the
-		// now-deselected chat is not forced onto the new selection.
-		expect(updated?.text).toBe('Late result.');
+		// Late results for a deselected chat are ignored end to end: null to the
+		// caller (so DraftStatus cannot overwrite editedText) and no draft swap.
+		expect(updated).toBeNull();
 		expect(state.draft?.text).toBe('Yes, seven works for me.');
 	});
 
