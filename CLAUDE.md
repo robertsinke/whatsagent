@@ -70,10 +70,10 @@ The toolbox is the `slay` CLI. `$SLAYZONE_TASK_ID` holds your task's ID, and mos
 
 ## Role-specific briefings (SlayZone-hosted, provider-agnostic)
 
-Role context is delivered by SlayZone, not provider config, and lives in provider-neutral `.slayzone/`. **Both role files are delivered to you automatically — you do not fetch them:**
+Role context is delivered by SlayZone, not provider config, and lives in provider-neutral `.slayzone/`:
 
-* **Worker** (session has a task ID): the `worker-briefing-on-create` automation stamps `.slayzone/worker.md` (read live from the main tree) into every new task's description, so workers of any provider receive it via their task brief.
-* **Orchestrator** (global agent session — no task ID; `$SLAYZONE_TASK_ID` is `__global-agent-panel`, which is the proxy for that): `.slayzone/orchestrator.md` is appended to this file. It's binding, and it's already in your context.
+* **Worker** (session has a task ID): the `worker-briefing-on-create` automation stamps `.slayzone/worker.md` (read live from the main tree) into every new task's description, so workers of any provider receive it via their task brief. Delivered automatically — do not fetch it.
+* **Orchestrator** (global agent session — no task ID; `$SLAYZONE_TASK_ID` is `__global-agent-panel`, which is the proxy for that): **read `/Users/robert/dev/whatsagent/.slayzone/orchestrator.md` at session start.** It's binding. Some providers append it to this file automatically and some don't, so never assume it's already in context — if you haven't seen its contents in this session, read it before acting as orchestrator.
 
 Because each role's brief arrives on its own, **nothing else should restate it** — kickoffs, ping messages, and automations point at the brief rather than copying it, or they drift out of sync with it. **Only the orchestrator may edit the role files** (`.slayzone/worker.md`, `.slayzone/orchestrator.md`) — it has standing permission to fold loop learnings into them. **Workers must never edit either file**; surface a learning in the execution report instead and the orchestrator harvests it. This file stays role-neutral.
 
