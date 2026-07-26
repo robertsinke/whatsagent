@@ -20,7 +20,6 @@ export type ChatView = Chat & {
 	preview_from_me: boolean;
 	draft_status: string | null;
 };
-
 const MEDIA_PREVIEW: Record<string, string> = {
 	image: 'Photo',
 	video: 'Video',

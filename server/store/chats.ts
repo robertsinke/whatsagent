@@ -1,4 +1,5 @@
 import type { AppDatabase } from './db.js';
+import { getLastMessage } from './messages.js';
 
 export type ChatKind = '1:1' | 'group';
 
@@ -12,6 +13,15 @@ export type Chat = {
 	muted: boolean;
 	archived: boolean;
 	agent_state: string | null;
+	/**
+	 * U4 — persistent local read cursor. Id of the last message the owner has
+	 * read in this chat; `null` until the chat is first opened after migration
+	 * 010 (or when the chat has no messages). The unread boundary is derived
+	 * from this cursor, not the in-memory latch from W2-U1. This is a LOCAL
+	 * cursor only — it never drives WhatsApp read receipts. See the
+	 * `emitReadReceiptOnView` seam in `server/api/routes.ts`.
+	 */
+	last_read_msg_id: string | null;
 };
 
 export type ChatInput = {
@@ -36,6 +46,7 @@ type ChatRow = {
 	muted: number;
 	archived: number;
 	agent_state: string | null;
+	last_read_msg_id: string | null;
 };
 
 function mapChat(row: ChatRow): Chat {
@@ -48,7 +59,8 @@ function mapChat(row: ChatRow): Chat {
 		unread: row.unread,
 		muted: row.muted !== 0,
 		archived: row.archived !== 0,
-		agent_state: row.agent_state
+		agent_state: row.agent_state,
+		last_read_msg_id: row.last_read_msg_id
 	};
 }
 
@@ -94,9 +106,29 @@ export function listChats(db: AppDatabase): Chat[] {
 	return rows.map(mapChat);
 }
 
-export function markChatRead(db: AppDatabase, jid: string): boolean {
-	const result = db.prepare('UPDATE chats SET unread = 0 WHERE jid = ?').run(jid);
+/**
+ * U4 — advance the persistent local read cursor for a chat to the given
+ * message id and zero the unread count, atomically. Pass the latest message
+ * id the owner has just seen; the unread boundary is derived from this
+ * cursor. Returns true if any row changed.
+ *
+ * This is a LOCAL cursor only — it never drives WhatsApp read receipts. See
+ * the `emitReadReceiptOnView` seam in `server/api/routes.ts`.
+ */
+export function markChatRead(db: AppDatabase, jid: string, lastReadMsgId?: string): boolean {
+	const cursor = lastReadMsgId ?? getLastMessage(db, jid)?.id ?? null;
+	const result = db
+		.prepare('UPDATE chats SET unread = 0, last_read_msg_id = ? WHERE jid = ?')
+		.run(cursor, jid);
 	return result.changes > 0;
+}
+
+/** U4 — read the persistent local cursor; `null` until the chat is first opened. */
+export function getLastReadMsgId(db: AppDatabase, jid: string): string | null {
+	const row = db
+		.prepare('SELECT last_read_msg_id AS id FROM chats WHERE jid = ?')
+		.get(jid) as { id: string | null } | undefined;
+	return row?.id ?? null;
 }
 
 export function setChatAgentState(

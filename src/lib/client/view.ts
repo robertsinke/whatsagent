@@ -154,6 +154,46 @@ export function deriveUnreadBoundary(
 	return { firstUnreadId: first.id, count: unreadCount, exact };
 }
 
+/**
+ * U4 — derive the unread boundary from the persisted read cursor instead of
+ * the in-memory unread latch. The cursor is the id of the last message the
+ * owner has read; the boundary marker renders before the first inbound message
+ * strictly newer than it. A `null` cursor means "the chat has never been
+ * opened locally since migration 010", so the caller must fall back to the
+ * count-based {@link deriveUnreadBoundary} for those chats — the boundary
+ * never regresses.
+ *
+ * `count` is the server's unread count at open (the count and the cursor are
+ * written together by `markChatRead`, so they agree). It is only used for the
+ * marker's label, never to place the marker — the cursor places the marker.
+ */
+export function deriveUnreadBoundaryFromCursor(
+	messages: Message[],
+	lastReadMsgId: string | null,
+	unreadCount: number
+): UnreadBoundary | null {
+	if (lastReadMsgId === null) return null;
+	if (unreadCount <= 0) return null;
+	const inbound = messages.filter((m) => !m.from_me);
+	if (inbound.length === 0) return null;
+	const idx = inbound.findIndex((m) => m.id === lastReadMsgId);
+	let firstUnreadIdx: number;
+	if (idx === -1) {
+		// The cursor is outside the loaded window — every loaded inbound is
+		// unread. The marker sits at the oldest loaded inbound; older pages
+		// may reveal it. This is the "approximate" case.
+		firstUnreadIdx = 0;
+	} else {
+		firstUnreadIdx = idx + 1;
+	}
+	if (firstUnreadIdx >= inbound.length) return null;
+	const first = inbound[firstUnreadIdx]!;
+	// `exact` while the cursor is on screen — the boundary is provably here.
+	// When the cursor is off-page (idx === -1) the marker is honestly approximate.
+	const exact = idx !== -1;
+	return { firstUnreadId: first.id, count: unreadCount, exact };
+}
+
 export function unreadBoundaryLabel(boundary: UnreadBoundary): string {
 	const plural = boundary.count === 1 ? 'message' : 'messages';
 	return boundary.exact

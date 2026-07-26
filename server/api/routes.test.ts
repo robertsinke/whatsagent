@@ -14,6 +14,7 @@ import { getOutbox } from '../store/outbox.js';
 import { EventBus } from './events.js';
 import type { Memory } from '../agent/memory/memory.js';
 import type { DraftProvider } from '../providers/provider.js';
+import type { WhatsAppSendTransport } from '../channels/whatsapp/send.js';
 import { handleHistorySet, type HistorySetPayload } from '../channels/whatsapp/ingest.js';
 
 let dataDir: string | undefined;
@@ -23,7 +24,8 @@ let db: AppDatabase | undefined;
 async function startTestApp(
 	events = new EventBus(),
 	memory?: Memory,
-	draftProvider?: DraftProvider
+	draftProvider?: DraftProvider,
+	options: { outboxTransport?: WhatsAppSendTransport } = {}
 ): Promise<App> {
 	dataDir = mkdtempSync(join(tmpdir(), 'whatsagent-api-'));
 	db = openDatabase({ dataDir });
@@ -35,7 +37,8 @@ async function startTestApp(
 		staticDir: null,
 		memory,
 		draftProvider,
-		providerName: draftProvider ? 'fake' : undefined
+		providerName: draftProvider ? 'fake' : undefined,
+		outboxTransport: options.outboxTransport
 	});
 	await app.start();
 	return app;
@@ -1009,5 +1012,72 @@ describe('drafts', () => {
 			final: null,
 			skipped: true
 		});
+	});
+});
+
+describe('read cursor (U4) — viewing produces no outbound WhatsApp traffic', () => {
+	it('POST /chats/:jid/read advances the local cursor without calling the transport', async () => {
+		const transport: WhatsAppSendTransport = {
+			setPresence: vi.fn(async () => undefined),
+			sendText: vi.fn(async () => undefined),
+			markRead: vi.fn(async () => undefined)
+		};
+		await startTestApp(new EventBus(), undefined, undefined, { outboxTransport: transport });
+		upsertChat(db!, { jid: 'alice@s.whatsapp.net', kind: '1:1', last_msg_at: 300, unread: 2 });
+		upsertMessage(db!, {
+			id: 'a1',
+			chat_jid: 'alice@s.whatsapp.net',
+			from_me: false,
+			ts: 100,
+			text: 'hi'
+		});
+		upsertMessage(db!, {
+			id: 'a2',
+			chat_jid: 'alice@s.whatsapp.net',
+			from_me: false,
+			ts: 300,
+			text: 'ping'
+		});
+
+		const res = await api('/api/chats/alice%40s.whatsapp.net/read', {
+			method: 'POST',
+			origin: originForApp(),
+			headers: { 'Content-Type': 'application/json' },
+			body: '{}'
+		});
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { last_read_msg_id: string | null; unread: number };
+		expect(body.last_read_msg_id).toBe('a2');
+		expect(body.unread).toBe(0);
+
+		// HARD BOUNDARY: viewing/markRead must NOT emit a WhatsApp read receipt.
+		expect(transport.markRead).not.toHaveBeenCalled();
+		expect(transport.sendText).not.toHaveBeenCalled();
+		expect(transport.setPresence).not.toHaveBeenCalled();
+	});
+
+	it('GET /chats/:jid/messages is read-only and never touches the transport', async () => {
+		const transport: WhatsAppSendTransport = {
+			setPresence: vi.fn(async () => undefined),
+			sendText: vi.fn(async () => undefined),
+			markRead: vi.fn(async () => undefined)
+		};
+		await startTestApp(new EventBus(), undefined, undefined, { outboxTransport: transport });
+		upsertChat(db!, { jid: 'alice@s.whatsapp.net', kind: '1:1', last_msg_at: 100, unread: 3 });
+		upsertMessage(db!, {
+			id: 'm1',
+			chat_jid: 'alice@s.whatsapp.net',
+			from_me: false,
+			ts: 100,
+			text: 'hi'
+		});
+
+		const res = await api('/api/chats/alice%40s.whatsapp.net/messages?limit=10');
+		expect(res.status).toBe(200);
+
+		// No outbound traffic from a plain view.
+		expect(transport.markRead).not.toHaveBeenCalled();
+		expect(transport.sendText).not.toHaveBeenCalled();
+		expect(transport.setPresence).not.toHaveBeenCalled();
 	});
 });

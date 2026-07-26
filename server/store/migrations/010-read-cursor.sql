@@ -1,0 +1,13 @@
+-- U4: persistent local read cursor. Stores the id of the last message the
+-- owner has read in each chat, so the unread boundary survives a restart
+-- without the in-memory latch from W2-U1. This is a LOCAL cursor only; it
+-- never drives WhatsApp read receipts (see the `emitReadReceiptOnView` seam
+-- in server/api/routes.ts).
+--
+-- The column starts NULL for every existing chat. The first open after this
+-- migration advances the cursor (markRead sets it to the latest message id),
+-- and from that point on the boundary is derived from the persisted cursor
+-- rather than the in-memory unread latch. Pre-migration chats that are
+-- never re-opened keep deriving from the unread *count* exactly as before,
+-- so the boundary never regresses.
+ALTER TABLE chats ADD COLUMN last_read_msg_id TEXT;

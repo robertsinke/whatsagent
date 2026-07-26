@@ -564,6 +564,16 @@ async function handleApi(
 		markChatRead(db, jid);
 		const updated = toChatView(db, getChat(db, jid)!, (c) => chatNeedsReply(db, c));
 		events.emit({ type: 'chat-updated', chat: updated });
+		// U4 seam — intentionally unused. The local read cursor advanced above
+		// is a LOCAL marker only. Emitting WhatsApp read receipts on view marks
+		// the chat read on the owner's real phone and is a separate owner
+		// decision that has been explicitly deferred (see plan D3). When that
+		// decision is taken, hook the send transport here — and only here — with
+		// a call like:
+		//   emitReadReceiptOnView(deps, jid, updated.last_read_msg_id);
+		// Do NOT broaden the existing post-send `transport.markRead` trigger in
+		// `server/outbox/pacer.ts` (that one fires only as a follow-up to a reply
+		// the owner actually sent).
 		json(res, 200, updated);
 		return;
 	}
