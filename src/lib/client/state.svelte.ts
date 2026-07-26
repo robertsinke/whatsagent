@@ -155,14 +155,15 @@ export class AppState {
 	 * basis message — we surface a re-confirm prompt instead of sending, and we
 	 * never decide staleness ourselves.
 	 */
-	async approveDraft(text?: string): Promise<void> {
+	async approveDraft(text?: string): Promise<boolean> {
 		const jid = this.selectedJid;
-		if (!jid) return;
+		if (!jid) return false;
 		try {
 			const { outbox, draft } = await api.approveDraft(jid, text);
 			this.#mergeOutbox(outbox);
 			this.draft = draft;
 			this.stalePrompt = null;
+			return true;
 		} catch (err) {
 			if (err instanceof ApiError && err.status === 409) {
 				const stalePrompt = {
@@ -172,16 +173,17 @@ export class AppState {
 				};
 				await this.openChat(jid, { markRead: false });
 				if (this.selectedJid === jid) this.stalePrompt = stalePrompt;
-				return;
+				return false;
 			}
 			this.error = describeError(err);
+			return false;
 		}
 	}
 
 	/** Explicit second owner action after the server reports a stale basis. */
-	async confirmStaleDraft(text?: string): Promise<void> {
+	async confirmStaleDraft(text?: string): Promise<boolean> {
 		const prompt = this.stalePrompt;
-		if (!prompt || this.selectedJid !== prompt.chatJid || !prompt.latestInboundId) return;
+		if (!prompt || this.selectedJid !== prompt.chatJid || !prompt.latestInboundId) return false;
 		try {
 			const { outbox, draft } = await api.approveDraft(
 				prompt.chatJid,
@@ -191,12 +193,13 @@ export class AppState {
 			this.#mergeOutbox(outbox);
 			this.draft = draft;
 			this.stalePrompt = null;
+			return true;
 		} catch (err) {
 			if (err instanceof ApiError && err.status === 409) {
-				await this.approveDraft(text);
-				return;
+				return this.approveDraft(text);
 			}
 			this.error = describeError(err);
+			return false;
 		}
 	}
 

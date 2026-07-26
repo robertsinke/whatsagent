@@ -28,9 +28,9 @@ function epochMilliseconds(ts: number): number {
 	return ts > 0 && ts < 1_000_000_000_000 ? ts * 1000 : ts;
 }
 
-export function displayName(chat: Pick<Chat, 'jid' | 'name'>): string {
+export function displayName(chat: Pick<Chat, 'jid' | 'display_jid' | 'name'>): string {
 	if (chat.name && chat.name.trim()) return chat.name.trim();
-	const local = chat.jid.split('@')[0] ?? chat.jid;
+	const local = chat.display_jid.split('@')[0] ?? chat.display_jid;
 	return local.startsWith('+') ? local : `+${local}`;
 }
 
@@ -235,6 +235,11 @@ export function draftBadge(status: DraftStatus): DraftBadge {
 /** A draft may only be sent from a state the server still considers current. */
 export function canApprove(status: DraftStatus): boolean {
 	return status === 'ready';
+}
+
+/** Once approval hands a reply to the outbox, the draft card has finished its job. */
+export function isVisibleDraftStatus(status: DraftStatus): boolean {
+	return status === 'drafting' || status === 'ready' || status === 'stale' || status === 'failed';
 }
 
 export type MediaKind = 'image' | 'video' | 'audio' | 'document' | 'sticker' | 'other';

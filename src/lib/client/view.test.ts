@@ -8,6 +8,7 @@ import {
 	filterChats,
 	formatBytes,
 	formatMessageTime,
+	isVisibleDraftStatus,
 	mediaAffordance,
 	mergeMessages,
 	reconnectDelayMs,
@@ -20,6 +21,7 @@ import {
 function chat(overrides: Partial<Chat> = {}): Chat {
 	return {
 		jid: 'alice@s.whatsapp.net',
+		display_jid: 'alice@s.whatsapp.net',
 		channel: 'whatsapp',
 		name: 'Alice Ramos',
 		kind: '1:1',
@@ -76,6 +78,17 @@ describe('chat row', () => {
 		const row = toChatRow(chat({ name: null, preview_from_me: true, preview: 'ok' }));
 		expect(row.preview).toBe('You: ok');
 		expect(row.name).toBe('+alice');
+	});
+
+	it('uses the phone alias instead of rendering an opaque LID as a number', () => {
+		const row = toChatRow(
+			chat({
+				jid: '203663104602149@lid',
+				display_jid: '31683799485@s.whatsapp.net',
+				name: null
+			})
+		);
+		expect(row.name).toBe('+31683799485');
 	});
 
 	it('renders relative times: today, yesterday, this week, older', () => {
@@ -175,6 +188,16 @@ describe('draft status', () => {
 		expect(canApprove('stale')).toBe(false);
 		expect(canApprove('drafting')).toBe(false);
 		expect(canApprove('failed')).toBe(false);
+	});
+
+	it('removes the draft card after approval hands responsibility to the outbox', () => {
+		expect(isVisibleDraftStatus('drafting')).toBe(true);
+		expect(isVisibleDraftStatus('ready')).toBe(true);
+		expect(isVisibleDraftStatus('stale')).toBe(true);
+		expect(isVisibleDraftStatus('failed')).toBe(true);
+		expect(isVisibleDraftStatus('approved')).toBe(false);
+		expect(isVisibleDraftStatus('sent')).toBe(false);
+		expect(isVisibleDraftStatus('skipped')).toBe(false);
 	});
 });
 
