@@ -372,6 +372,125 @@ describe('quote previews', () => {
 		expect(preview.body).toBe('Original message unavailable');
 		expect(preview.sender).toBe('Unknown participant');
 	});
+
+	// U3: one rendering-variant test per stored subtype, so the preview surface
+	// is exercised against every WhatsApp message subtype the ingest layer
+	// stores. These are the only evidence the surface works — the live DB holds
+	// zero stored quotes.
+	it('labels a resolved video quote with its caption', () => {
+		const preview = quotePreview({
+			target_id: 'v1',
+			resolved: true,
+			sender: maya,
+			type: 'video',
+			text: 'clip from the gig'
+		});
+		expect(preview).toMatchObject({ kind: 'video', body: 'clip from the gig' });
+	});
+
+	it('falls back to "Voice message" for a resolved audio quote with no text', () => {
+		const preview = quotePreview({
+			target_id: 'a1',
+			resolved: true,
+			sender: maya,
+			type: 'audio',
+			text: null
+		});
+		expect(preview).toMatchObject({ kind: 'audio', body: 'Voice message' });
+		expect(preview.label).toContain('Voice message');
+	});
+
+	it('falls back to the document title for a resolved document quote', () => {
+		const preview = quotePreview({
+			target_id: 'd1',
+			resolved: true,
+			sender: maya,
+			type: 'document',
+			text: 'Contract'
+		});
+		expect(preview).toMatchObject({ kind: 'document', body: 'Contract' });
+	});
+
+	it('falls back to "Sticker" for a resolved sticker quote with no text', () => {
+		const preview = quotePreview({
+			target_id: 's1',
+			resolved: true,
+			sender: maya,
+			type: 'sticker',
+			text: null
+		});
+		expect(preview).toMatchObject({ kind: 'sticker', body: 'Sticker' });
+	});
+
+	it('uses the location name as the body for a resolved location quote', () => {
+		const preview = quotePreview({
+			target_id: 'l1',
+			resolved: true,
+			sender: maya,
+			type: 'location',
+			text: 'Amsterdam Office'
+		});
+		expect(preview).toMatchObject({ kind: 'location', body: 'Amsterdam Office' });
+	});
+
+	it('falls back to "Location" for a resolved location quote with no name', () => {
+		const preview = quotePreview({
+			target_id: 'l2',
+			resolved: true,
+			sender: maya,
+			type: 'location',
+			text: null
+		});
+		expect(preview.body).toBe('Location');
+	});
+
+	it('uses the contact display name as the body for a resolved contact quote', () => {
+		const preview = quotePreview({
+			target_id: 'c1',
+			resolved: true,
+			sender: maya,
+			type: 'contact',
+			text: 'Sara Patel'
+		});
+		expect(preview).toMatchObject({ kind: 'contact', body: 'Sara Patel' });
+	});
+
+	it('falls back to "Contact" for a resolved contact quote with no display name', () => {
+		const preview = quotePreview({
+			target_id: 'c2',
+			resolved: true,
+			sender: maya,
+			type: 'contact',
+			text: null
+		});
+		expect(preview.body).toBe('Contact');
+	});
+
+	it('never crashes on an unrecognized subtype and renders a typed noun', () => {
+		const preview = quotePreview({
+			target_id: 'p1',
+			resolved: true,
+			sender: maya,
+			type: 'pollCreation',
+			text: null
+		});
+		expect(preview.kind).toBe('other');
+		// Resolved unrecognized subtype renders the raw type so the owner sees
+		// *something* rather than a blank inset.
+		expect(preview.body).toBe('pollCreation');
+		expect(preview.label).toContain('pollCreation');
+	});
+
+	it('renders "Original message unavailable" for an unrecognized unresolved quote', () => {
+		const preview = quotePreview({
+			target_id: 'p2',
+			resolved: false,
+			sender: maya,
+			type: 'pollCreation',
+			text: null
+		});
+		expect(preview.body).toBe('Original message unavailable');
+	});
 });
 
 describe('reaction chips', () => {
