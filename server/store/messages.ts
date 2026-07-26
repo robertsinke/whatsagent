@@ -234,9 +234,15 @@ export type ListMessagesPageOptions = {
  * When `beforeTs` is omitted, returns the latest `limit` messages.
  *
  * U5: when `focusMsgId` is set, returns up to `limit` rows centered on the
- * target — roughly half older, half newer — ordered oldest-first. The target
- * is always included when it exists in this chat. This is the same paging
- * mechanism (same table, same ts/id ordering), not a second one.
+ * target — roughly half older, half newer. The target is always included when
+ * it exists in this chat. Same paging mechanism (same table, same ts/id
+ * ordering), not a second one.
+ *
+ * ⚠️ **The two modes return opposite orderings.** The cursor modes above are
+ * newest-first; the focused mode is oldest-first. Every current consumer feeds
+ * the result through `mergeMessages`, which sorts by `ts` then `id`, so no
+ * caller depends on either order today — but do not assume a single ordering
+ * if you add a consumer that skips that sort.
  */
 export function listMessagesPage(
 	db: AppDatabase,
@@ -281,7 +287,8 @@ export function listMessagesPage(
 				 LIMIT ?`
 			)
 			.all(chatJid, target.ts, target.ts, target.id, half) as MessageRow[];
-		// Oldest-first to match the rest of this module's caller contract.
+		// Oldest-first — deliberately the opposite of the cursor modes below.
+		// Callers normalize via `mergeMessages`; see the ordering warning above.
 		return [...older.reverse().map(mapMessage), mapMessage(target), ...newer.map(mapMessage)];
 	}
 
