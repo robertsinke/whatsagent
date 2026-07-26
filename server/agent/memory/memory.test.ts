@@ -765,3 +765,128 @@ describe('change-driven voice mirror (W4-U6)', () => {
 		expect(readFileSync(join(dataDir, 'voice', 'contact-24.md'), 'utf8')).toContain('NEW habit on the last page');
 	});
 });
+
+describe('poison observation escape (W4-U7)', () => {
+	/**
+	 * The defect: a permanently failing retain sat at the head of the queue forever
+	 * (shift only after success), and every tick's shared try/catch aborted before the
+	 * mirror — so voice/global.md froze after the first boot write. The fakes that
+	 * already existed either succeed or fail transiently then recover; this is the
+	 * case that matters: a send that fails FOREVER.
+	 */
+	it('still mirrors when the flush is failing forever', async () => {
+		const dataDir = tempDataDir();
+		const models: ModelRow[] = [
+			{ id: 'voice-global', content: '- Old voice.', last_refreshed_at: '2026-07-26T10:00:00Z' }
+		];
+		const log = { warn: vi.fn() };
+		const retain = vi.fn(async () => {
+			throw new Error('Fact extraction failed: JSONDecodeError');
+		});
+		const memory = new HindsightMemory({
+			dataDir,
+			client: fakeClient({ retain }),
+			retryDelayMs: 0,
+			maxRetainAttempts: 5,
+			fetchImpl: mirrorFetch(models),
+			log
+		});
+
+		await memory.reflect();
+		expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toContain('Old voice');
+
+		// Poison the queue — this observation will never succeed.
+		await memory.retainVoiceObservation({
+			chatJid: chat.jid,
+			language: 'en',
+			text: 'ja prima'
+		});
+		expect(memory.queuedRetains).toBe(1);
+
+		// Server-side refresh lands new content. The mirror must copy it even though
+		// flush is still throwing on the poison head.
+		models[0] = {
+			id: 'voice-global',
+			content: '- New voice: signs off with "doei".',
+			last_refreshed_at: '2026-07-26T20:21:08Z'
+		};
+		await memory.drain!();
+
+		expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toContain('doei');
+		expect(memory.queuedRetains).toBe(1);
+		expect(log.warn).toHaveBeenCalled();
+	});
+
+	it('drops a forever-failing observation past the attempt threshold', async () => {
+		const log = { warn: vi.fn() };
+		let failForever = true;
+		const retain = vi.fn(async () => {
+			if (failForever) throw new Error('Fact extraction failed: JSONDecodeError');
+			return {};
+		});
+		const memory = new HindsightMemory({
+			dataDir: tempDataDir(),
+			client: fakeClient({ retain }),
+			retryDelayMs: 0,
+			maxRetainAttempts: 3,
+			fetchImpl: mirrorFetch([]),
+			log
+		});
+
+		await memory.retainVoiceObservation({
+			chatJid: chat.jid,
+			language: 'en',
+			text: 'poison'
+		});
+		expect(memory.queuedRetains).toBe(1);
+
+		// Three flush attempts (retryDelayMs: 0 so the offline window never blocks).
+		await memory.drain!();
+		expect(memory.queuedRetains).toBe(1);
+		await memory.drain!();
+		expect(memory.queuedRetains).toBe(1);
+		await memory.drain!();
+		expect(memory.queuedRetains).toBe(0);
+
+		expect(log.warn.mock.calls.some((call) =>
+			String(call[0]).includes('dropping poison observation')
+		)).toBe(true);
+
+		// A later observation is not stuck behind the dropped one.
+		failForever = false;
+		await memory.retainEditDelta({
+			chatJid: chat.jid, draft: 'Hello!', final: 'Hi', skipped: false
+		});
+		expect(memory.queuedRetains).toBe(0);
+		expect(retain).toHaveBeenCalled();
+	});
+
+	it('reflect mirrors even when the retain queue is poisoned', async () => {
+		const dataDir = tempDataDir();
+		const models: ModelRow[] = [
+			{ id: 'voice-global', content: '- Boot voice.', last_refreshed_at: '2026-07-26T10:00:00Z' }
+		];
+		const retain = vi.fn(async () => {
+			throw new Error('permanent retain failure');
+		});
+		const memory = new HindsightMemory({
+			dataDir,
+			client: fakeClient({ retain }),
+			retryDelayMs: 0,
+			maxRetainAttempts: 5,
+			fetchImpl: mirrorFetch(models),
+			log: { warn: vi.fn() }
+		});
+
+		await memory.retainVoiceObservation({
+			chatJid: chat.jid, language: 'nl', text: 'hoi'
+		});
+		models[0] = {
+			id: 'voice-global',
+			content: '- Reflect still works.',
+			last_refreshed_at: '2026-07-26T11:00:00Z'
+		};
+		await memory.reflect();
+		expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toContain('Reflect still works');
+	});
+});

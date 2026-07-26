@@ -158,6 +158,8 @@ type PendingRetain = {
 	tags: string[];
 	documentId?: string;
 	updateMode?: 'replace';
+	/** How many times `#flushQueued` has tried and failed to send this item. */
+	attempts?: number;
 };
 
 export type HindsightMemoryOptions = {
@@ -172,6 +174,13 @@ export type HindsightMemoryOptions = {
 	/** Timeout for the retain send path (default 30 s). The first retain after a cold start pays the LLM warm-up, not the network. */
 	retainTimeoutMs?: number;
 	maxQueuedRetains?: number;
+	/**
+	 * Drop a queued retain after this many failed send attempts (default 3). Without an
+	 * escape, a permanently failing observation sits at the head forever and every tick's
+	 * flush aborts on it — which, before flush/mirror were decoupled, also starved the
+	 * voice mirror. Restarting does not help: bootstrap re-derives the same observation.
+	 */
+	maxRetainAttempts?: number;
 	retryDelayMs?: number;
 	refreshCron?: string;
 	maxVoiceChars?: number;
@@ -213,6 +222,7 @@ export class HindsightMemory implements Memory {
 	readonly #timeoutMs: number;
 	readonly #retainTimeoutMs: number;
 	readonly #maxQueuedRetains: number;
+	readonly #maxRetainAttempts: number;
 	readonly #retryDelayMs: number;
 	readonly #refreshCron: string;
 	readonly #maxVoiceChars: number;
@@ -241,6 +251,7 @@ export class HindsightMemory implements Memory {
 		this.#timeoutMs = options.timeoutMs ?? 2_000;
 		this.#retainTimeoutMs = options.retainTimeoutMs ?? DEFAULT_RETAIN_TIMEOUT_MS;
 		this.#maxQueuedRetains = options.maxQueuedRetains ?? 1_000;
+		this.#maxRetainAttempts = options.maxRetainAttempts ?? 3;
 		this.#retryDelayMs = options.retryDelayMs ?? 30_000;
 		this.#refreshCron = options.refreshCron ?? DEFAULT_REFRESH_CRON;
 		this.#maxVoiceChars = options.maxVoiceChars ?? 6_000;
@@ -314,12 +325,19 @@ export class HindsightMemory implements Memory {
 	 * mirrors its current content.
 	 */
 	async reflect(): Promise<void> {
-		if (Date.now() < this.#offlineUntil) return;
+		// Flush and mirror are independent: a broken retain must not disable the read path
+		// drafting depends on. Offline only gates the write (flush); the mirror still runs.
+		if (Date.now() >= this.#offlineUntil) {
+			try {
+				await this.#flushQueued();
+			} catch (error) {
+				this.#offlineUntil = Date.now() + this.#retryDelayMs;
+				this.#log.warn('[memory] Hindsight flush unavailable; will retry', error);
+			}
+		}
 		try {
-			await this.#flushQueued();
 			await this.#mirrorAll();
 		} catch (error) {
-			this.#offlineUntil = Date.now() + this.#retryDelayMs;
 			this.#log.warn('[memory] Hindsight voice sync unavailable; keeping the mirrored files', error);
 		}
 	}
@@ -336,19 +354,27 @@ export class HindsightMemory implements Memory {
 	 *    tick a freshly consolidated voice document can sit in the service for hours
 	 *    before `reflect()` copies it to disk — and drafting reads the disk (W4-U6).
 	 *
-	 * No-op while still offline (the gate matches `#retain`). The change-driven mirror
-	 * uses the paginated list response's `last_refreshed_at` to fetch and write only the
-	 * models that changed, so this scales to the per-contact model set without an N+1
-	 * `getMentalModel` per model every minute.
+	 * Flush and mirror each have their own try/catch (W4-U7): a broken write must not
+	 * disable the read path. `#offlineUntil` only gates the flush; the mirror still runs.
+	 * A permanently failing observation is dropped after `#maxRetainAttempts` so it cannot
+	 * deadlock the queue for the life of the process.
 	 */
 	async drain(): Promise<void> {
-		if (Date.now() < this.#offlineUntil) return;
+		// Same decoupling as `reflect`: flush failure must not abort the change-driven
+		// mirror. Offline only skips the write attempt; the mirror still copies any
+		// document whose `last_refreshed_at` advanced.
+		if (Date.now() >= this.#offlineUntil) {
+			try {
+				await this.#flushQueued();
+			} catch (error) {
+				this.#offlineUntil = Date.now() + this.#retryDelayMs;
+				this.#log.warn('[memory] memory tick flush failed; will retry', error);
+			}
+		}
 		try {
-			await this.#flushQueued();
 			await this.#mirrorChanged();
 		} catch (error) {
-			this.#offlineUntil = Date.now() + this.#retryDelayMs;
-			this.#log.warn('[memory] memory tick (drain/mirror) failed; will retry', error);
+			this.#log.warn('[memory] memory tick mirror failed; will retry', error);
 		}
 	}
 
@@ -570,15 +596,35 @@ export class HindsightMemory implements Memory {
 	}
 
 	#queue(retain: PendingRetain): void {
-		this.#queued.push(retain);
+		// Fresh queue entries start at 0 attempts; callers pass plain retain payloads.
+		this.#queued.push({ ...retain, attempts: retain.attempts ?? 0 });
 		if (this.#queued.length > this.#maxQueuedRetains) this.#queued.shift();
 	}
 
+	/**
+	 * Drain the retain queue head-first. A permanent failure used to sit at index 0
+	 * forever (shift only ran after a successful send); past `#maxRetainAttempts` the
+	 * item is dropped with a warning so later observations — and the mirror on the same
+	 * tick — can proceed.
+	 */
 	async #flushQueued(): Promise<void> {
 		while (this.#queued.length > 0) {
 			const pending = this.#queued[0]!;
-			await this.#send(pending);
-			this.#queued.shift();
+			try {
+				await this.#send(pending);
+				this.#queued.shift();
+			} catch (error) {
+				pending.attempts = (pending.attempts ?? 0) + 1;
+				if (pending.attempts >= this.#maxRetainAttempts) {
+					this.#queued.shift();
+					this.#log.warn(
+						`[memory] dropping poison observation after ${pending.attempts} failed retains`,
+						error
+					);
+					continue;
+				}
+				throw error;
+			}
 		}
 	}
 
