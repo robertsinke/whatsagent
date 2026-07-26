@@ -1,4 +1,4 @@
-import type { WAMessageKey } from 'baileys';
+import type { WAMessage, WAMessageKey } from 'baileys';
 
 export class WhatsAppDisconnectedError extends Error {
 	constructor() {
@@ -12,14 +12,14 @@ export type WhatsAppSendSocket = {
 	sendMessage(
 		jid: string,
 		content: { text: string },
-		options: { messageId: string }
+		options: { messageId: string; quoted?: WAMessage }
 	): Promise<unknown>;
 	readMessages(keys: WAMessageKey[]): Promise<unknown>;
 };
 
 export type WhatsAppSendTransport = {
 	setPresence(jid: string, type: 'composing' | 'unavailable'): Promise<void>;
-	sendText(jid: string, text: string, messageId: string): Promise<void>;
+	sendText(jid: string, text: string, messageId: string, quoted?: WAMessage): Promise<void>;
 	markRead(jid: string, messageId: string): Promise<void>;
 };
 
@@ -40,8 +40,8 @@ export function createWhatsAppSendTransport(
 		async setPresence(jid, type) {
 			await socket().sendPresenceUpdate(type, jid);
 		},
-		async sendText(jid, text, messageId) {
-			await socket().sendMessage(jid, { text }, { messageId });
+		async sendText(jid, text, messageId, quoted) {
+			await socket().sendMessage(jid, { text }, { messageId, ...(quoted ? { quoted } : {}) });
 		},
 		async markRead(jid, messageId) {
 			await socket().readMessages([{ remoteJid: jid, id: messageId, fromMe: false }]);

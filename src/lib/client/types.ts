@@ -122,6 +122,8 @@ export type OutboxRow = {
 	message_id: string | null;
 	draft_text: string | null;
 	basis_msg_id: string | null;
+	/** Stored message id only; raw WhatsApp envelopes never cross this boundary. */
+	reply_to_msg_id: string | null;
 };
 
 /** D5 — derived session view. */

@@ -473,16 +473,36 @@ async function handleApi(
 			error(res, 404, 'Chat not found', { jid });
 			return;
 		}
-		const body = (await readJsonBody(req)) as { text?: string } | undefined;
+		const body = (await readJsonBody(req)) as
+			| { text?: string; reply_to_msg_id?: unknown }
+			| undefined;
 		const text = body?.text?.trim();
 		if (!text) {
 			error(res, 400, 'Expected { text }');
 			return;
 		}
+		let replyToMsgId: string | undefined;
+		if (body?.reply_to_msg_id !== undefined) {
+			if (typeof body.reply_to_msg_id !== 'string' || !body.reply_to_msg_id.trim()) {
+				error(res, 400, 'Expected reply_to_msg_id to be a message id');
+				return;
+			}
+			replyToMsgId = body.reply_to_msg_id.trim();
+			const target = getMessage(db, replyToMsgId);
+			if (!target) {
+				error(res, 400, 'Reply target not found');
+				return;
+			}
+			if (target.chat_jid !== jid) {
+				error(res, 400, 'Reply target does not belong to this chat');
+				return;
+			}
+		}
 		const now = Date.now();
 		const id = enqueueManualOutbox(db, {
 			chatJid: jid,
 			text,
+			replyToMsgId,
 			now
 		});
 		const row = getOutbox(db, id)!;

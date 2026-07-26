@@ -37,6 +37,7 @@ export class AppState {
 	selectedJid = $state<string | null>(null);
 	messages = $state<Message[]>([]);
 	draft = $state<Draft | null>(null);
+	replyTarget = $state<Message | null>(null);
 	outbox = $state<OutboxRow[]>([]);
 	loadingMessages = $state(false);
 	/** False once a page comes back short — otherwise "load earlier" never ends. */
@@ -115,6 +116,7 @@ export class AppState {
 		const resnapshotUnread = chatChanged || options.markRead !== false;
 		const unreadBeforeOpen = this.chats.find((c) => c.jid === jid)?.unread ?? 0;
 		this.selectedJid = jid;
+		if (chatChanged) this.replyTarget = null;
 		this.loadingMessages = true;
 		this.stalePrompt = null;
 		if (!options.preserveDeepenStatus) {
@@ -168,14 +170,25 @@ export class AppState {
 	async send(text: string): Promise<boolean> {
 		const jid = this.selectedJid;
 		if (!jid || !text.trim()) return false;
+		const replyTarget = this.replyTarget;
 		try {
-			const row = await api.send(jid, text.trim());
+			const row = await api.send(jid, text.trim(), replyTarget?.id);
 			this.#mergeOutbox(row);
+			// A newer selection made while enqueue was in flight must survive.
+			if (replyTarget && this.replyTarget?.id === replyTarget.id) this.replyTarget = null;
 			return true;
 		} catch (err) {
 			this.error = describeError(err);
 			return false;
 		}
+	}
+
+	selectReply(message: Message): void {
+		if (message.chat_jid === this.selectedJid) this.replyTarget = message;
+	}
+
+	dismissReply(): void {
+		this.replyTarget = null;
 	}
 
 	/**

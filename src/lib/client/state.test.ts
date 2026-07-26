@@ -213,6 +213,59 @@ describe('AppState targeted message updates', () => {
 	});
 });
 
+describe('AppState quoted composer replies', () => {
+	afterEach(() => vi.restoreAllMocks());
+
+	it('posts the selected target and clears it only after enqueue succeeds', async () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		const target = inbound('target-1', 1);
+		state.selectReply(target);
+		const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+			jsonResponse(
+				{
+					id: 7,
+					chat_jid: JID,
+					text: 'Quoted answer',
+					queued_at: 100,
+					send_after: 100,
+					sent_at: null,
+					status: 'pending',
+					source: 'manual',
+					message_id: 'MESSAGE-7',
+					draft_text: null,
+					basis_msg_id: null,
+					reply_to_msg_id: 'target-1'
+				},
+				202
+			)
+		);
+
+		await expect(state.send('Quoted answer')).resolves.toBe(true);
+
+		expect(JSON.parse(String(fetchMock.mock.calls[0]![1]?.body))).toEqual({
+			text: 'Quoted answer',
+			reply_to_msg_id: 'target-1'
+		});
+		expect(state.replyTarget).toBeNull();
+		expect(state.outbox[0]?.reply_to_msg_id).toBe('target-1');
+	});
+
+	it('preserves reply context when enqueue fails and clears it on explicit dismissal', async () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		const target = inbound('target-1', 1);
+		state.selectReply(target);
+		vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ error: 'Unavailable' }, 503));
+
+		await expect(state.send('Try later')).resolves.toBe(false);
+		expect(state.replyTarget).toBe(target);
+
+		state.dismissReply();
+		expect(state.replyTarget).toBeNull();
+	});
+});
+
 describe('AppState draft approval', () => {
 	afterEach(() => vi.restoreAllMocks());
 

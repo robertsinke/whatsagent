@@ -67,10 +67,13 @@ export const api = {
 	},
 
 	/** Composer send → outbox row. Never a direct socket send (R9). */
-	send: (jid: string, text: string) =>
+	send: (jid: string, text: string, replyToMsgId?: string) =>
 		request<OutboxRow>(`/chats/${encodeURIComponent(jid)}/messages`, {
 			method: 'POST',
-			body: JSON.stringify({ text })
+			body: JSON.stringify({
+				text,
+				...(replyToMsgId ? { reply_to_msg_id: replyToMsgId } : {})
+			})
 		}),
 
 	markRead: (jid: string) =>

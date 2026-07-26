@@ -15,6 +15,7 @@ export type OutboxRow = {
 	message_id: string | null;
 	draft_text: string | null;
 	basis_msg_id: string | null;
+	reply_to_msg_id: string | null;
 };
 
 export type OutboxInput = {
@@ -28,6 +29,7 @@ export type OutboxInput = {
 	message_id?: string;
 	draft_text?: string | null;
 	basis_msg_id?: string | null;
+	reply_to_msg_id?: string | null;
 };
 
 export function enqueueOutbox(db: AppDatabase, row: OutboxInput): number {
@@ -35,10 +37,10 @@ export function enqueueOutbox(db: AppDatabase, row: OutboxInput): number {
 		.prepare(
 			`INSERT INTO outbox (
 			   chat_jid, text, queued_at, send_after, sent_at, status,
-			   source, message_id, draft_text, basis_msg_id
+			   source, message_id, draft_text, basis_msg_id, reply_to_msg_id
 			 ) VALUES (
 			   @chat_jid, @text, @queued_at, @send_after, @sent_at, @status,
-			   @source, @message_id, @draft_text, @basis_msg_id
+			   @source, @message_id, @draft_text, @basis_msg_id, @reply_to_msg_id
 			 )`
 		)
 		.run({
@@ -51,7 +53,8 @@ export function enqueueOutbox(db: AppDatabase, row: OutboxInput): number {
 			source: row.source ?? 'manual',
 			message_id: row.message_id ?? newMessageId(),
 			draft_text: row.draft_text ?? null,
-			basis_msg_id: row.basis_msg_id ?? null
+			basis_msg_id: row.basis_msg_id ?? null,
+			reply_to_msg_id: row.reply_to_msg_id ?? null
 		});
 	return Number(result.lastInsertRowid);
 }
@@ -62,7 +65,7 @@ function newMessageId(): string {
 
 export function enqueueManualOutbox(
 	db: AppDatabase,
-	input: { chatJid: string; text: string; now: number }
+	input: { chatJid: string; text: string; replyToMsgId?: string | null; now: number }
 ): number {
 	return enqueueOutbox(db, {
 		chat_jid: input.chatJid,
@@ -70,7 +73,8 @@ export function enqueueManualOutbox(
 		queued_at: input.now,
 		send_after: input.now,
 		source: 'manual',
-		message_id: newMessageId()
+		message_id: newMessageId(),
+		reply_to_msg_id: input.replyToMsgId ?? null
 	});
 }
 

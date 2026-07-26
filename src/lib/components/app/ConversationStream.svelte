@@ -19,7 +19,8 @@
 		unreadBoundary = null,
 		onloadolder,
 		onloadmedia,
-		onopenmedia
+		onopenmedia,
+		onreply
 	}: {
 		chatJid: string;
 		/** From the server's chat row — never sniffed from the JID suffix here. */
@@ -30,6 +31,7 @@
 		onloadolder?: () => void | Promise<void>;
 		onloadmedia?: (messageId: string) => void;
 		onopenmedia?: (message: Message) => void;
+		onreply?: (message: Message) => void;
 	} = $props();
 
 	const rows = $derived(
@@ -121,7 +123,13 @@
 				<span>{unreadBoundaryLabel(unreadBoundary)}</span>
 			</div>
 		{/if}
-		<MessageBubble message={row.message} senderLabel={row.senderLabel} {onloadmedia} {onopenmedia} />
+		<MessageBubble
+			message={row.message}
+			senderLabel={row.senderLabel}
+			{onloadmedia}
+			{onopenmedia}
+			{onreply}
+		/>
 	{/each}
 </div>
 

@@ -20,7 +20,8 @@
 		hasMore = true,
 		unreadBoundary = null,
 		onloadolder,
-		onloadmedia
+		onloadmedia,
+		onreply
 	}: {
 		chatJid: string;
 		/** Drives group sender attribution; 1:1 bubbles stay unlabelled. */
@@ -31,6 +32,7 @@
 		unreadBoundary?: UnreadBoundary | null;
 		onloadolder?: () => void | Promise<void>;
 		onloadmedia?: (messageId: string) => void;
+		onreply?: (message: Message) => void;
 	} = $props();
 
 	let lightboxMessage = $state<Message | null>(null);
@@ -57,6 +59,7 @@
 				{unreadBoundary}
 				{onloadolder}
 				{onloadmedia}
+				{onreply}
 				onopenmedia={(m) => (lightboxMessage = m)}
 			/>
 		{/if}

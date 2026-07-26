@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { BufferJSON, type WAMessage } from 'baileys';
 import type { WhatsAppSendTransport } from '../channels/whatsapp/send.js';
 import { upsertChat } from '../store/chats.js';
 import { openDatabase, type AppDatabase } from '../store/db.js';
@@ -219,6 +220,95 @@ describe('OutboxPacer', () => {
 			NOW + 1_000,
 			NOW + 2_000
 		]);
+	});
+
+	it('recovers a claimed quoted reply and sends it once with its persisted target', async () => {
+		vi.useFakeTimers({ now: NOW });
+		const beforeRestart = setup();
+		const quoted = {
+			key: {
+				id: 'quoted-target',
+				remoteJid: 'alice@s.whatsapp.net',
+				fromMe: false
+			},
+			message: { conversation: 'Are we still meeting?' },
+			messageTimestamp: Math.floor(NOW / 1_000)
+		} satisfies WAMessage;
+		upsertMessage(beforeRestart, {
+			id: 'quoted-target',
+			chat_jid: 'alice@s.whatsapp.net',
+			from_me: false,
+			ts: NOW,
+			text: 'Are we still meeting?',
+			raw: JSON.stringify(quoted, BufferJSON.replacer)
+		});
+		const id = enqueueManualOutbox(beforeRestart, {
+			chatJid: 'alice@s.whatsapp.net',
+			text: 'Yes, see you there.',
+			replyToMsgId: 'quoted-target',
+			now: NOW
+		});
+		const messageId = getOutbox(beforeRestart, id)!.message_id!;
+		expect(markOutboxSending(beforeRestart, id)).toBe(true);
+		beforeRestart.close();
+		db = openDatabase({ dataDir: dataDir! });
+		const database = db;
+		expect(getOutbox(database, id)?.reply_to_msg_id).toBe('quoted-target');
+
+		const sendTransport = transport();
+		pacer(database, sendTransport).start();
+		await vi.runAllTimersAsync();
+
+		expect(sendTransport.sendText).toHaveBeenCalledOnce();
+		expect(sendTransport.sendText).toHaveBeenCalledWith(
+			'alice@s.whatsapp.net',
+			'Yes, see you there.',
+			messageId,
+			quoted
+		);
+		expect(getOutbox(database, id)?.status).toBe('sent');
+	});
+
+	it('cancels a quoted reply with corrupt target data and safely releases the next row', async () => {
+		vi.useFakeTimers({ now: NOW });
+		const database = setup();
+		upsertMessage(database, {
+			id: 'broken-target',
+			chat_jid: 'alice@s.whatsapp.net',
+			from_me: false,
+			ts: NOW,
+			text: 'Cannot reconstruct me',
+			raw: '{not-json'
+		});
+		const brokenId = enqueueManualOutbox(database, {
+			chatJid: 'alice@s.whatsapp.net',
+			text: 'Must remain quoted',
+			replyToMsgId: 'broken-target',
+			now: NOW
+		});
+		const nextId = enqueueManualOutbox(database, {
+			chatJid: 'bob@s.whatsapp.net',
+			text: 'Independent send',
+			now: NOW
+		});
+		const onError = vi.fn();
+		const sendTransport = transport();
+		pacer(database, sendTransport, { onError }).start();
+		await vi.runAllTimersAsync();
+
+		expect(getOutbox(database, brokenId)?.status).toBe('cancelled');
+		expect(onError).toHaveBeenCalledWith(
+			expect.objectContaining({ name: 'QuotedReplyTargetError' }),
+			expect.objectContaining({ id: brokenId, reply_to_msg_id: 'broken-target' })
+		);
+		expect(sendTransport.sendText).toHaveBeenCalledOnce();
+		expect(sendTransport.sendText).toHaveBeenCalledWith(
+			'bob@s.whatsapp.net',
+			'Independent send',
+			getOutbox(database, nextId)!.message_id,
+			undefined
+		);
+		expect(getOutbox(database, nextId)?.status).toBe('sent');
 	});
 
 	it('keeps a disconnected send queued, then retries without releasing later rows', async () => {

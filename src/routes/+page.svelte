@@ -106,13 +106,14 @@
 							unreadBoundary={app.unreadBoundary}
 							onloadolder={() => app.loadOlder()}
 							onloadmedia={(id) => app.loadMedia(id)}
+							onreply={(message) => app.selectReply(message)}
 						/>
 
 						<div class="conv-foot">
-						<DraftStatus
-							draft={app.draft}
-							stalePrompt={app.stalePrompt}
-							agentEligible={app.selectedChat.kind === '1:1'}
+							<DraftStatus
+								draft={app.draft}
+								stalePrompt={app.stalePrompt}
+								agentEligible={app.selectedChat.kind === '1:1'}
 								onapprove={(text) => app.approveDraft(text)}
 								onconfirmstale={(text) => app.confirmStaleDraft(text)}
 								onskip={() => app.skipDraft()}
@@ -120,6 +121,8 @@
 							/>
 							<Composer
 								bind:value={composerValue}
+								replyTo={app.replyTarget}
+								ondismissreply={() => app.dismissReply()}
 								onsend={(text) => app.send(text)}
 								placeholder={`Message ${chatTitle}`}
 							/>

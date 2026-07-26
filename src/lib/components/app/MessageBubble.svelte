@@ -9,13 +9,15 @@
 		message,
 		senderLabel = null,
 		onloadmedia,
-		onopenmedia
+		onopenmedia,
+		onreply
 	}: {
 		message: ChatMessage;
 		/** Group attribution; null for 1:1, own messages, and mid-run messages. */
 		senderLabel?: string | null;
 		onloadmedia?: (messageId: string) => void;
 		onopenmedia?: (message: ChatMessage) => void;
+		onreply?: (message: ChatMessage) => void;
 	} = $props();
 
 	const quote = $derived(message.quote ? quotePreview(message.quote) : null);
@@ -50,7 +52,12 @@
 		{:else if !message.media}
 			<span class="untyped">{message.type}</span>
 		{/if}
-		<span class="stamp">{formatMessageTime(message.ts)}</span>
+		<div class="meta">
+			<button class="reply-action" type="button" onclick={() => onreply?.(message)}>
+				Reply
+			</button>
+			<span class="stamp">{formatMessageTime(message.ts)}</span>
+		</div>
 		{#if chips.length > 0}
 			<!-- Display-only: reactions are rendered, never created, in this wave —
 			     so these are not buttons and expose actors through their label. -->
@@ -140,10 +147,33 @@
 		font-size: 0.78rem;
 	}
 	.stamp {
-		align-self: flex-end;
 		font-size: 0.62rem;
 		color: var(--ink-50);
 		line-height: 1;
+	}
+	.meta {
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 0.45rem;
+		min-height: 0.9rem;
+	}
+	.reply-action {
+		appearance: none;
+		border: 0;
+		background: transparent;
+		padding: 0;
+		font: inherit;
+		font-size: 0.62rem;
+		line-height: 1;
+		color: var(--ink-50);
+		cursor: pointer;
+	}
+	.reply-action:hover,
+	.reply-action:focus-visible {
+		color: var(--terracotta);
+		text-decoration: underline;
+		text-underline-offset: 0.15rem;
 	}
 	.reactions {
 		display: flex;

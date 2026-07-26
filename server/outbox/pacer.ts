@@ -12,7 +12,8 @@ import {
 	recoverSendingOutbox,
 	type OutboxRow
 } from '../store/outbox.js';
-import { getLastInboundMessage } from '../store/messages.js';
+import { BufferJSON, type WAMessage } from 'baileys';
+import { getLastInboundMessage, getMessage } from '../store/messages.js';
 import type { WhatsAppSendTransport } from '../channels/whatsapp/send.js';
 
 export type OutboxPacerOptions = {
@@ -34,6 +35,32 @@ export type OutboxPacerOptions = {
 
 const DEFAULT_MIN_DRAFT_DELAY_MS = 30_000;
 const DEFAULT_MAX_DRAFT_DELAY_MS = 90_000;
+
+export class QuotedReplyTargetError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = 'QuotedReplyTargetError';
+	}
+}
+
+function resolveQuotedTarget(db: AppDatabase, row: OutboxRow): WAMessage | undefined {
+	if (!row.reply_to_msg_id) return undefined;
+	const target = getMessage(db, row.reply_to_msg_id);
+	if (!target || target.chat_jid !== row.chat_jid || !target.raw) {
+		throw new QuotedReplyTargetError('Quoted reply target is unavailable');
+	}
+
+	try {
+		const parsed = JSON.parse(target.raw, BufferJSON.reviver) as WAMessage;
+		if (!parsed?.key || parsed.key.id !== target.id || !parsed.message) {
+			throw new Error('Invalid stored message envelope');
+		}
+		return parsed;
+	} catch (error) {
+		if (error instanceof QuotedReplyTargetError) throw error;
+		throw new QuotedReplyTargetError('Quoted reply target data is corrupt');
+	}
+}
 
 export class OutboxPacer {
 	readonly #options: OutboxPacerOptions;
@@ -130,6 +157,16 @@ export class OutboxPacer {
 					this.#emit(row.id);
 					return;
 				}
+				let quoted: WAMessage | undefined;
+				try {
+					quoted = resolveQuotedTarget(this.#options.db, row);
+				} catch (error) {
+					const normalized = error instanceof Error ? error : new Error(String(error));
+					cancelClaimedOutbox(this.#options.db, row.id);
+					this.#emit(row.id);
+					this.#options.onError?.(normalized, getOutbox(this.#options.db, row.id)!);
+					return;
+				}
 				if (this.#options.dryRun) {
 					console.info(`[outbox:dry-run] ${row.chat_jid}: ${row.text}`);
 				} else {
@@ -151,7 +188,12 @@ export class OutboxPacer {
 							.catch(() => undefined);
 						return;
 					}
-					await this.#options.transport.sendText(row.chat_jid, row.text, row.message_id!);
+					await this.#options.transport.sendText(
+						row.chat_jid,
+						row.text,
+						row.message_id!,
+						quoted
+					);
 				}
 			} catch (error) {
 				const normalized = error instanceof Error ? error : new Error(String(error));

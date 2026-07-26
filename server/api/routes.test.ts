@@ -242,6 +242,52 @@ describe('POST /api/chats/:jid/messages (send → outbox)', () => {
 		expect(body.error).toBe('Chat not found');
 		expect(body.jid).toBe('missing@s.whatsapp.net');
 	});
+
+	it('rejects a reply target from another chat without creating an outbox row', async () => {
+		await startTestApp();
+		upsertChat(db!, { jid: 'alice@s.whatsapp.net', kind: '1:1', last_msg_at: 2 });
+		upsertChat(db!, { jid: 'bob@s.whatsapp.net', kind: '1:1', last_msg_at: 1 });
+		upsertMessage(db!, {
+			id: 'bob-message',
+			chat_jid: 'bob@s.whatsapp.net',
+			from_me: false,
+			ts: 1,
+			text: 'Bob only'
+		});
+
+		const res = await api('/api/chats/alice%40s.whatsapp.net/messages', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ text: 'wrong chat', reply_to_msg_id: 'bob-message' })
+		});
+
+		expect(res.status).toBe(400);
+		expect(await res.json()).toEqual({ error: 'Reply target does not belong to this chat' });
+		expect(db!.prepare('SELECT COUNT(*) AS count FROM outbox').get()).toEqual({ count: 0 });
+	});
+
+	it('persists and returns a same-chat reply target on the outbox wire shape', async () => {
+		await startTestApp();
+		upsertChat(db!, { jid: 'alice@s.whatsapp.net', kind: '1:1', last_msg_at: 1 });
+		upsertMessage(db!, {
+			id: 'alice-message',
+			chat_jid: 'alice@s.whatsapp.net',
+			from_me: false,
+			ts: 1,
+			text: 'Question'
+		});
+
+		const res = await api('/api/chats/alice%40s.whatsapp.net/messages', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ text: 'Answer', reply_to_msg_id: 'alice-message' })
+		});
+		const row = (await res.json()) as { id: number; reply_to_msg_id: string | null };
+
+		expect(res.status).toBe(202);
+		expect(row.reply_to_msg_id).toBe('alice-message');
+		expect(getOutbox(db!, row.id)?.reply_to_msg_id).toBe('alice-message');
+	});
 });
 
 describe('GET /api/chats/:jid/messages (structured views)', () => {
