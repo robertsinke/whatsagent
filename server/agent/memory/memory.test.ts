@@ -32,11 +32,15 @@ function seedVoiceFiles(dataDir: string, files: Record<string, string>): void {
 	}
 }
 
-type ModelRow = { id: string; content?: string | null; tags?: string[]; trigger?: unknown };
+type ModelRow = { id: string; content?: string | null; tags?: string[]; trigger?: unknown; last_refreshed_at?: string | null };
 
 /**
  * In-memory stand-in for the mental-model surface. Records every create so the tests
- * can assert the tag shape rather than trusting the client's defaults.
+ * can assert the tag shape rather than trusting the client's defaults. The mirror reads
+ * the paginated mental-models list over raw REST (the typed client drops the limit/offset
+ * query params and the service caps an unparameterised list at 100), so the fake also
+ * exposes a `fetchImpl` that serves its `models` as that list — tests with mirror
+ * assertions pass `client.fetchImpl` rather than a generic `okFetch`.
  */
 function fakeClient(overrides: Partial<HindsightClientLike> = {}, models: ModelRow[] = []) {
 	const created: Array<{ id: string; tags?: string[]; trigger?: unknown }> = [];
@@ -47,7 +51,13 @@ function fakeClient(overrides: Partial<HindsightClientLike> = {}, models: ModelR
 			models.push({ id: options?.id ?? _name, tags: options?.tags, trigger: options?.trigger });
 			return {};
 		},
-		listMentalModels: async () => ({ items: models.map((model) => ({ id: model.id })) }),
+		listMentalModels: async () => ({
+			items: models.map((model) => ({
+				id: model.id,
+				content: model.content ?? null,
+				last_refreshed_at: model.last_refreshed_at ?? null
+			}))
+		}),
 		getMentalModel: async (_bank, id) => {
 			const model = models.find((row) => row.id === id);
 			if (!model) throw new Error(`404 no mental model ${id}`);
@@ -64,6 +74,27 @@ function fakeClient(overrides: Partial<HindsightClientLike> = {}, models: ModelR
 }
 
 const okFetch = vi.fn(async () => new Response('{}', { status: 200 })) as unknown as typeof fetch;
+
+/**
+ * Builds a `fetch` that serves `models` as the paginated mental-models list (the route the
+ * mirror reads). Pages are sliced by `limit`/`offset`; non-matching URLs fall through to
+ * a 200 `{}` so the refresh_cron PATCH and other REST calls keep working. This is the
+ * seam the mirror tests use instead of `okFetch` — the mirror never reads through the
+ * typed client, so `okFetch` (which returns no items) would mirror nothing.
+ */
+function mirrorFetch(models: ModelRow[], baseUrl = 'http://127.0.0.1:8888'): typeof fetch {
+	return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+		const url = new URL(typeof input === 'string' ? input : input.toString());
+		const listPath = `/v1/default/banks/whatsagent-owner-voice/mental-models`;
+		if (url.origin === baseUrl && url.pathname === listPath) {
+			const limit = Number(url.searchParams.get('limit') ?? '100');
+			const offset = Number(url.searchParams.get('offset') ?? '0');
+			const page = models.slice(offset, offset + limit);
+			return new Response(JSON.stringify({ items: page }), { status: 200 });
+		}
+		return new Response('{}', { status: 200 });
+	}) as unknown as typeof fetch;
+}
 
 afterEach(() => vi.clearAllMocks());
 
@@ -124,7 +155,7 @@ describe('voice mental models', () => {
 	 */
 	it('creates models whose tags are a subset of what the retains write', async () => {
 		const client = fakeClient();
-		const memory = new HindsightMemory({ dataDir: tempDataDir(), client, fetchImpl: okFetch });
+		const memory = new HindsightMemory({ dataDir: tempDataDir(), client, fetchImpl: mirrorFetch([]) });
 
 		await memory.retainEditDelta({ chatJid: chat.jid, draft: 'Hi there!', final: 'Hi', skipped: false });
 		await memory.reflect();
@@ -150,7 +181,7 @@ describe('voice mental models', () => {
 	 */
 	it('creates no per-chat model from voice bootstrap, however many chats it samples', async () => {
 		const client = fakeClient();
-		const memory = new HindsightMemory({ dataDir: tempDataDir(), client, fetchImpl: okFetch });
+		const memory = new HindsightMemory({ dataDir: tempDataDir(), client, fetchImpl: mirrorFetch([]) });
 
 		for (let i = 0; i < 50; i++) {
 			await memory.retainVoiceObservation({
@@ -197,10 +228,11 @@ describe('voice mental models', () => {
 	it('never mirrors the in-flight refresh placeholder over a good document', async () => {
 		const dataDir = tempDataDir();
 		seedVoiceFiles(dataDir, { global: '- Writes short, lowercase replies.' });
+		const models: ModelRow[] = [{ id: 'voice-global', content: 'Generating content...' }];
 		const memory = new HindsightMemory({
 			dataDir,
-			client: fakeClient({}, [{ id: 'voice-global', content: 'Generating content...' }]),
-			fetchImpl: okFetch
+			client: fakeClient({}, models),
+			fetchImpl: mirrorFetch(models)
 		});
 
 		await memory.reflect();
@@ -215,7 +247,7 @@ describe('voice mental models', () => {
 			{ id: 'voice-global', content: '- Writes short, lowercase replies.' },
 			{ id: `voice-${voiceFileStem(chat.jid)}`, content: '- Skips greetings with Alice.' }
 		];
-		const memory = new HindsightMemory({ dataDir, client: fakeClient({}, models), fetchImpl: okFetch });
+		const memory = new HindsightMemory({ dataDir, client: fakeClient({}, models), fetchImpl: mirrorFetch(models) });
 
 		await memory.reflect();
 
@@ -223,7 +255,9 @@ describe('voice mental models', () => {
 		expect(readFileSync(join(dataDir, 'voice', `${voiceFileStem(chat.jid)}.md`), 'utf8'))
 			.toContain('Skips greetings');
 
-		// A restart with the service gone: a fresh instance whose every call throws.
+		// A restart with the service gone: a fresh instance whose every call throws. The
+		// mirror reads over raw REST, so the fetch itself must throw (not just the client).
+		const deadFetch = vi.fn(async () => { throw new Error('ECONNREFUSED'); }) as unknown as typeof fetch;
 		const dead = new HindsightMemory({
 			dataDir,
 			client: fakeClient({
@@ -231,7 +265,7 @@ describe('voice mental models', () => {
 				listMentalModels: async () => { throw new Error('ECONNREFUSED'); },
 				getMentalModel: async () => { throw new Error('ECONNREFUSED'); }
 			}),
-			fetchImpl: okFetch,
+			fetchImpl: deadFetch,
 			log: { warn: vi.fn() }
 		});
 		const style = await dead.recallStyleFor(chat);
@@ -294,7 +328,7 @@ describe('voice bootstrap plumbing (W4-U5)', () => {
 	 */
 	it('does not create the global model until the first successful retain', async () => {
 		const client = fakeClient();
-		const memory = new HindsightMemory({ dataDir: tempDataDir(), client, fetchImpl: okFetch });
+		const memory = new HindsightMemory({ dataDir: tempDataDir(), client, fetchImpl: mirrorFetch([]) });
 
 		// A reflect on a fresh bank creates no model — there is nothing to synthesize from.
 		await memory.reflect();
@@ -311,7 +345,7 @@ describe('voice bootstrap plumbing (W4-U5)', () => {
 		// Simulate a restart: the global model already exists server-side with real content.
 		const models: ModelRow[] = [{ id: 'voice-global', content: '- Writes short, lowercase replies.' }];
 		const client = fakeClient({}, models);
-		const memory = new HindsightMemory({ dataDir, client, fetchImpl: okFetch });
+		const memory = new HindsightMemory({ dataDir, client, fetchImpl: mirrorFetch(models) });
 
 		await memory.reflect();
 
@@ -329,13 +363,13 @@ describe('voice bootstrap plumbing (W4-U5)', () => {
 	it('rejects a "no information" document in the mirror and keeps the last good file', async () => {
 		const dataDir = tempDataDir();
 		seedVoiceFiles(dataDir, { global: '- Writes short, lowercase replies.' });
+		const models: ModelRow[] = [
+			{ id: 'voice-global', content: "I don't have information about the owner's writing habits." }
+		];
 		const memory = new HindsightMemory({
 			dataDir,
-			client: fakeClient(
-				{},
-				[{ id: 'voice-global', content: "I don't have information about the owner's writing habits." }]
-			),
-			fetchImpl: okFetch
+			client: fakeClient({}, models),
+			fetchImpl: mirrorFetch(models)
 		});
 
 		await memory.reflect();
@@ -448,7 +482,7 @@ describe('voice bootstrap plumbing (W4-U5)', () => {
 			dataDir: tempDataDir(),
 			client: fakeClient({ retain }),
 			retryDelayMs: 0,
-			fetchImpl: okFetch,
+			fetchImpl: mirrorFetch([]),
 			log: { warn: vi.fn() }
 		});
 
@@ -470,7 +504,7 @@ describe('voice bootstrap plumbing (W4-U5)', () => {
 			dataDir: tempDataDir(),
 			client: fakeClient({ retain }),
 			retryDelayMs: 60_000,
-			fetchImpl: okFetch,
+			fetchImpl: mirrorFetch([]),
 			log: { warn: vi.fn() }
 		});
 
@@ -487,7 +521,7 @@ describe('voice bootstrap plumbing (W4-U5)', () => {
 		const memory = new HindsightMemory({
 			dataDir: tempDataDir(),
 			client: fakeClient({ retain }),
-			fetchImpl: okFetch,
+			fetchImpl: mirrorFetch([]),
 			log: { warn: vi.fn() }
 		});
 
@@ -512,7 +546,7 @@ describe('voice bootstrap plumbing (W4-U5)', () => {
 			dataDir: tempDataDir(),
 			client: fakeClient({ retain }),
 			retryDelayMs: 0,
-			fetchImpl: okFetch,
+			fetchImpl: mirrorFetch([]),
 			log: { warn: vi.fn() }
 		});
 
@@ -528,5 +562,206 @@ describe('voice bootstrap plumbing (W4-U5)', () => {
 		await memory.drain!();
 		expect(memory.queuedRetains).toBe(0);
 		expect(retain).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe('change-driven voice mirror (W4-U6)', () => {
+	/**
+	 * The defect: a freshly consolidated voice document sat in Hindsight for hours
+	 * before `reflect()` (6-hourly) copied it to disk, and drafting reads the disk. The
+	 * fix is the change-driven mirror on the 60s `drain` tick: it lists models, compares
+	 * `last_refreshed_at` against what was last mirrored, and writes only the ones that
+	 * advanced. This test reproduces the stall and the recovery in one flow.
+	 */
+	it('mirrors a refreshed document on drain() within minutes, not the 6-hourly reflect', async () => {
+		const dataDir = tempDataDir();
+		// Start: a model exists server-side with stale content already on disk.
+		const models: ModelRow[] = [
+			{ id: 'voice-global', content: '- Old voice.', last_refreshed_at: '2026-07-26T10:00:00Z' }
+		];
+		const memory = new HindsightMemory({
+			dataDir,
+			client: fakeClient({}, models),
+			fetchImpl: mirrorFetch(models),
+			log: { warn: vi.fn() }
+		});
+		// Boot reflect mirrors the current (old) content to disk.
+		await memory.reflect();
+		expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toContain('Old voice');
+
+		// The nightly cron refreshes the model server-side: new content, new timestamp.
+		models[0] = {
+			id: 'voice-global',
+			content: '- New voice: signs off with "doei".',
+			last_refreshed_at: '2026-07-26T19:04:00Z'
+		};
+
+		// No reflect() — only the 60s drain tick. The new document reaches disk.
+		await memory.drain!();
+		expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toContain('doei');
+		expect(await memory.recallStyleFor(chat)).toContain('doei');
+	});
+
+	it('does not re-fetch an unchanged model on drain()', async () => {
+		const dataDir = tempDataDir();
+		const models: ModelRow[] = [
+			{ id: 'voice-global', content: '- Writes short replies.', last_refreshed_at: '2026-07-26T10:00:00Z' }
+		];
+		let listCalls = 0;
+		const countingFetch = vi.fn(async (input: string | URL | Request) => {
+			const url = new URL(typeof input === 'string' ? input : input.toString());
+			if (url.pathname === '/v1/default/banks/whatsagent-owner-voice/mental-models') {
+				listCalls += 1;
+				const limit = Number(url.searchParams.get('limit') ?? '100');
+				const offset = Number(url.searchParams.get('offset') ?? '0');
+				return new Response(JSON.stringify({ items: models.slice(offset, offset + limit) }), { status: 200 });
+			}
+			return new Response('{}', { status: 200 });
+		}) as unknown as typeof fetch;
+		const memory = new HindsightMemory({
+			dataDir,
+			client: fakeClient({}, models),
+			fetchImpl: countingFetch,
+			log: { warn: vi.fn() }
+		});
+
+		// Boot reflect mirrors the document and records its refresh timestamp.
+		await memory.reflect();
+		expect(listCalls).toBeGreaterThanOrEqual(1);
+		const callsAfterReflect = listCalls;
+
+		// drain() lists again (to compare timestamps) but writes nothing — the file
+		// content is identical and the write is gated by the unchanged last_refreshed_at.
+		await memory.drain!();
+		expect(listCalls).toBe(callsAfterReflect + 1);
+		expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toContain('short replies');
+	});
+
+	it('mirrors a freshly created model with null last_refreshed_at on drain()', async () => {
+		const dataDir = tempDataDir();
+		// A model that exists but has never refreshed: last_refreshed_at is null. The
+		// change-driven mirror treats null as "never mirrored" so the first content
+		// reaches disk promptly rather than waiting for the 6-hourly reflect.
+		const models: ModelRow[] = [
+			{ id: 'voice-global', content: '- First voice document.', last_refreshed_at: null }
+		];
+		const memory = new HindsightMemory({
+			dataDir,
+			client: fakeClient({}, models),
+			fetchImpl: mirrorFetch(models),
+			log: { warn: vi.fn() }
+		});
+
+		await memory.drain!();
+		expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toContain('First voice document');
+	});
+
+	it('remembers a rejected document refresh timestamp so it does not re-fetch every tick', async () => {
+		const dataDir = tempDataDir();
+		seedVoiceFiles(dataDir, { global: '- Last good voice.' });
+		// The nightly cron refreshed the model, but the content is the "no information"
+		// failure mode. The mirror rejects it (keeps the last good file) but must record
+		// the refresh timestamp, or it would re-fetch this same rejected document every
+		// 60s until the cron refreshes it again.
+		const models: ModelRow[] = [
+			{
+				id: 'voice-global',
+				content: "I don't have information about the owner's writing habits.",
+				last_refreshed_at: '2026-07-26T03:00:00Z'
+			}
+		];
+		let listCalls = 0;
+		const countingFetch = vi.fn(async (input: string | URL | Request) => {
+			const url = new URL(typeof input === 'string' ? input : input.toString());
+			if (url.pathname === '/v1/default/banks/whatsagent-owner-voice/mental-models') {
+				listCalls += 1;
+				const limit = Number(url.searchParams.get('limit') ?? '100');
+				const offset = Number(url.searchParams.get('offset') ?? '0');
+				return new Response(JSON.stringify({ items: models.slice(offset, offset + limit) }), { status: 200 });
+			}
+			return new Response('{}', { status: 200 });
+		}) as unknown as typeof fetch;
+		const memory = new HindsightMemory({
+			dataDir,
+			client: fakeClient({}, models),
+			fetchImpl: countingFetch,
+			log: { warn: vi.fn() }
+		});
+
+		await memory.drain!();
+		expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toContain('Last good voice');
+		const callsAfterFirstDrain = listCalls;
+
+		// Second drain: the refresh timestamp is unchanged, so the rejected document is
+		// not re-fetched (it would just be rejected again). The list is still polled.
+		await memory.drain!();
+		expect(listCalls).toBe(callsAfterFirstDrain + 1);
+		expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toContain('Last good voice');
+	});
+
+	/**
+	 * The list endpoint caps an unparameterised response at 100 items and the typed
+	 * client drops the limit/offset query params, so the mirror walks pages over raw
+	 * REST. Done is a page strictly shorter than the page size — the response carries
+	 * no total/cursor. This test seeds a model set larger than one page and asserts the
+	 * whole set is mirrored, proving the walk does not stop at the first full page.
+	 */
+	it('paginates the mental-model list and mirrors a set larger than one page', async () => {
+		const dataDir = tempDataDir();
+		const models: ModelRow[] = [];
+		for (let i = 0; i < 25; i++) {
+			models.push({
+				id: `voice-contact-${i}`,
+				content: `- Habit for contact ${i}.`,
+				last_refreshed_at: `2026-07-26T1${i}:00:00Z`
+			});
+		}
+		const memory = new HindsightMemory({
+			dataDir,
+			client: fakeClient({}, models),
+			fetchImpl: mirrorFetch(models),
+			// Small page size forces pagination — 25 models over 10-item pages.
+			mirrorListPageSize: 10,
+			log: { warn: vi.fn() }
+		});
+
+		await memory.reflect();
+
+		// Every model reached disk. A non-paginating mirror would stop at the first 10.
+		for (let i = 0; i < 25; i++) {
+			expect(readFileSync(join(dataDir, 'voice', `contact-${i}.md`), 'utf8'))
+				.toContain(`Habit for contact ${i}`);
+		}
+	});
+
+	it('drain() mirrors changed documents across pages, not just the first page', async () => {
+		const dataDir = tempDataDir();
+		const models: ModelRow[] = [];
+		for (let i = 0; i < 25; i++) {
+			models.push({
+				id: `voice-contact-${i}`,
+				content: `- Old habit ${i}.`,
+				last_refreshed_at: `2026-07-26T10:00:0${i}Z`
+			});
+		}
+		const memory = new HindsightMemory({
+			dataDir,
+			client: fakeClient({}, models),
+			fetchImpl: mirrorFetch(models),
+			mirrorListPageSize: 10,
+			log: { warn: vi.fn() }
+		});
+		// Boot reflect mirrors all 25 (across 3 pages).
+		await memory.reflect();
+
+		// A model on the last page refreshes. drain() must walk past the first full page
+		// to see it — a single-page mirror would miss it.
+		models[24] = {
+			id: 'voice-contact-24',
+			content: '- NEW habit on the last page.',
+			last_refreshed_at: '2026-07-26T20:00:00Z'
+		};
+		await memory.drain!();
+		expect(readFileSync(join(dataDir, 'voice', 'contact-24.md'), 'utf8')).toContain('NEW habit on the last page');
 	});
 });

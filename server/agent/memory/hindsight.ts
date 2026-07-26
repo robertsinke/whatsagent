@@ -87,6 +87,15 @@ const CHAT_SOURCE_QUERY =
  * `updateMentalModel` drop it when mapping options onto the request body (verified
  * against 0.8.5's `dist/index.js`), so the cron is set over raw REST instead — see
  * `#configureRefreshCron`.
+ *
+ * `listMentalModels` returns `content` and `last_refreshed_at` per item at the
+ * default detail level, so the mirror reads from the list response and does not
+ * pay a `getMentalModel` per model. The typed client wrapper drops the `limit`/
+ * `offset`/`detail` query params (verified against 0.8.5's `dist/index.js`),
+ * and the service caps an unparameterised list at 100 items — so the paginated
+ * mirror goes over raw REST via `#listVoiceModelsPaginated`, not through this
+ * method. The client method is kept for the existence-check path in
+ * `#createModelIfMissing` and for tests that stub a small model set.
  */
 export type HindsightClientLike = {
 	retain(
@@ -119,7 +128,7 @@ export type HindsightClientLike = {
 	listMentalModels(
 		bankId: string,
 		options?: { tags?: string[]; signal?: AbortSignal }
-	): Promise<{ items: Array<{ id: string }> }>;
+	): Promise<{ items: Array<{ id: string; content?: string | null; last_refreshed_at?: string | null }> }>;
 	getMentalModel(
 		bankId: string,
 		mentalModelId: string,
@@ -166,6 +175,14 @@ export type HindsightMemoryOptions = {
 	retryDelayMs?: number;
 	refreshCron?: string;
 	maxVoiceChars?: number;
+	/**
+	 * Page size for the paginated mental-model list (default 100). The service caps an
+	 * unparameterised list at 100, so this only matters once the per-contact voice model
+	 * set grows past a single page — which the demand-driven per-contact creation can
+	 * reach. The mirror walks pages until a short page signals the end (the list
+	 * response carries no total/cursor).
+	 */
+	mirrorListPageSize?: number;
 	fetchImpl?: typeof fetch;
 	log?: Pick<Console, 'warn'>;
 };
@@ -199,12 +216,21 @@ export class HindsightMemory implements Memory {
 	readonly #retryDelayMs: number;
 	readonly #refreshCron: string;
 	readonly #maxVoiceChars: number;
+	readonly #mirrorListPageSize: number;
 	readonly #fetch: typeof fetch;
 	readonly #log: Pick<Console, 'warn'>;
 	readonly #files: VoiceFiles;
 	readonly #queued: PendingRetain[] = [];
 	/** Dedupes concurrent ensures; a failed ensure is dropped so the next call retries. */
 	readonly #ensuring = new Map<string, Promise<void>>();
+	/**
+	 * Per-model `last_refreshed_at` of the content last written to disk. The change-driven
+	 * mirror (`drain`) compares this against the list response and only fetches/writes the
+	 * models that advanced, instead of re-mirroring the whole set every 6 hours. Null
+	 * `last_refreshed_at` (a freshly created model that has not yet refreshed) is treated
+	 * as "never mirrored" so the first refresh reaches disk promptly.
+	 */
+	readonly #lastMirroredAt = new Map<string, string>();
 	#offlineUntil = 0;
 
 	constructor(options: HindsightMemoryOptions) {
@@ -218,6 +244,7 @@ export class HindsightMemory implements Memory {
 		this.#retryDelayMs = options.retryDelayMs ?? 30_000;
 		this.#refreshCron = options.refreshCron ?? DEFAULT_REFRESH_CRON;
 		this.#maxVoiceChars = options.maxVoiceChars ?? 6_000;
+		this.#mirrorListPageSize = options.mirrorListPageSize ?? 100;
 		this.#fetch = options.fetchImpl ?? fetch;
 		this.#log = options.log ?? console;
 		this.#files = new VoiceFiles(options.dataDir);
@@ -298,19 +325,30 @@ export class HindsightMemory implements Memory {
 	}
 
 	/**
-	 * Short-interval queue retry, independent of the 6-hourly `reflect`. A cold-start retain
-	 * that times out sets `#offlineUntil`; without this, the queue sits until the next retain
-	 * or the next reflect — up to six hours. The runtime wires a ~1-minute timer around this.
-	 * No-op while still offline (the gate matches `#retain`).
+	 * The short-interval memory tick. Two jobs, one timer (the runtime wires a ~1-minute
+	 * interval around this — preferable to three independent schedules):
+	 *
+	 * 1. Drain the retain queue. A cold-start retain that times out sets `#offlineUntil`;
+	 *    without this, the queue sits until the next retain or the 6-hourly `reflect` —
+	 *    one 2 s timeout parked the whole voice bootstrap for six hours (W4-U5).
+	 * 2. Mirror voice documents whose `last_refreshed_at` advanced since the last mirror.
+	 *    Hindsight's nightly cron (D1b) refreshes the model server-side, but without this
+	 *    tick a freshly consolidated voice document can sit in the service for hours
+	 *    before `reflect()` copies it to disk — and drafting reads the disk (W4-U6).
+	 *
+	 * No-op while still offline (the gate matches `#retain`). The change-driven mirror
+	 * uses the paginated list response's `last_refreshed_at` to fetch and write only the
+	 * models that changed, so this scales to the per-contact model set without an N+1
+	 * `getMentalModel` per model every minute.
 	 */
 	async drain(): Promise<void> {
 		if (Date.now() < this.#offlineUntil) return;
-		if (this.#queued.length === 0) return;
 		try {
 			await this.#flushQueued();
+			await this.#mirrorChanged();
 		} catch (error) {
 			this.#offlineUntil = Date.now() + this.#retryDelayMs;
-			this.#log.warn('[memory] Hindsight queue drain failed; will retry', error);
+			this.#log.warn('[memory] memory tick (drain/mirror) failed; will retry', error);
 		}
 	}
 
@@ -340,22 +378,93 @@ export class HindsightMemory implements Memory {
 		}));
 	}
 
+	/**
+	 * Voice model ids, paginated over raw REST so a >100-model set does not silently
+	 * truncate (the typed client caps at 100). Used by `refreshVoiceModels` to trigger
+	 * server-side refreshes; the mirror itself reads `#listVoiceModelsPaginated`.
+	 */
 	async #listVoiceModelIds(): Promise<string[]> {
-		const models = await this.#withTimeout((signal) =>
-			this.#client.listMentalModels(this.#bankId, { signal })
-		);
-		return models.items.map((model) => model.id).filter((id) => id.startsWith(VOICE_MODEL_PREFIX));
+		const models = await this.#listVoiceModelsPaginated();
+		return models.map((model) => model.id);
 	}
 
-	/** The model id carries its own file stem, so the mirror needs no lookup table. */
+	/**
+	 * Paginated list of voice models with content, over raw REST. The typed client
+	 * wrapper drops the `limit`/`offset`/`detail` query params (verified against 0.8.5's
+	 * `dist/index.js`), and the service caps an unparameterised list at 100 items — so a
+	 * per-contact model set in the hundreds would silently truncate through the client
+	 * method. `detail=content` makes each item carry `content` and `last_refreshed_at`,
+	 * so the mirror reads from the list response and pays no `getMentalModel` per model.
+	 *
+	 * The response carries no total/cursor — done is a page strictly shorter than the
+	 * requested page size. A full page means "there may be more", so the walk continues.
+	 */
+	async #listVoiceModelsPaginated(): Promise<Array<{ id: string; content: string | null; lastRefreshed: string | null }>> {
+		const out: Array<{ id: string; content: string | null; lastRefreshed: string | null }> = [];
+		const size = Math.max(1, this.#mirrorListPageSize);
+		for (let offset = 0; ; offset += size) {
+			const url =
+				`${this.#baseUrl}/v1/default/banks/${encodeURIComponent(this.#bankId)}/mental-models` +
+				`?detail=content&limit=${size}&offset=${offset}`;
+			const response = await this.#withTimeout((signal) => this.#fetch(url, { signal }));
+			if (!response.ok) {
+				throw new Error(`Hindsight list mental-models failed at offset ${offset}: ${response.status}`);
+			}
+			const payload = (await response.json()) as {
+				items: Array<{ id: string; content?: string | null; last_refreshed_at?: string | null }>;
+			};
+			for (const item of payload.items) {
+				if (!item.id.startsWith(VOICE_MODEL_PREFIX)) continue;
+				out.push({
+					id: item.id,
+					content: item.content ?? null,
+					lastRefreshed: item.last_refreshed_at ?? null
+				});
+			}
+			if (payload.items.length < size) break;
+		}
+		return out;
+	}
+
+	/**
+	 * The 6-hourly heartbeat. Re-mirrors every voice model unconditionally — a model whose
+	 * `last_refreshed_at` is null (a create with no refresh yet) still gets its current
+	 * content written, so a restart-recovered model reaches disk even if the change-driven
+	 * `drain` skipped it. Uses the paginated list-with-content (no N+1 `getMentalModel`),
+	 * and updates `#lastMirroredAt` so the next `drain` does not re-fetch what this just
+	 * wrote.
+	 */
 	async #mirrorAll(): Promise<void> {
-		for (const id of await this.#listVoiceModelIds()) {
-			const model = await this.#withTimeout((signal) =>
-				this.#client.getMentalModel(this.#bankId, id, { signal })
-			);
+		for (const model of await this.#listVoiceModelsPaginated()) {
 			const content = (model.content ?? '').trim();
 			if (!looksLikeVoiceDocument(content)) continue;
-			this.#files.write(id.slice(VOICE_MODEL_PREFIX.length), content);
+			this.#files.write(model.id.slice(VOICE_MODEL_PREFIX.length), content);
+			if (model.lastRefreshed) this.#lastMirroredAt.set(model.id, model.lastRefreshed);
+		}
+	}
+
+	/**
+	 * The change-driven mirror. Compares each model's `last_refreshed_at` against the last
+	 * content written to disk and fetches/writes only the models that advanced. A null
+	 * `last_refreshed_at` (a freshly created model that has not yet refreshed) is treated
+	 * as "never mirrored" so the first refresh reaches disk promptly rather than waiting
+	 * for the 6-hourly `reflect`. The `looksLikeVoiceDocument` write filter still gates
+	 * what reaches disk — it is verified against the live document and rejects the
+	 * in-flight placeholder and the "no information" failure mode alike.
+	 */
+	async #mirrorChanged(): Promise<void> {
+		for (const model of await this.#listVoiceModelsPaginated()) {
+			const last = this.#lastMirroredAt.get(model.id) ?? null;
+			if (model.lastRefreshed === last && last !== null) continue;
+			const content = (model.content ?? '').trim();
+			if (!looksLikeVoiceDocument(content)) {
+				// Even a rejected document advances the cache: remember its refresh timestamp
+				// so we do not re-fetch it every tick until the nightly cron refreshes it.
+				if (model.lastRefreshed) this.#lastMirroredAt.set(model.id, model.lastRefreshed);
+				continue;
+			}
+			this.#files.write(model.id.slice(VOICE_MODEL_PREFIX.length), content);
+			if (model.lastRefreshed) this.#lastMirroredAt.set(model.id, model.lastRefreshed);
 		}
 	}
 
