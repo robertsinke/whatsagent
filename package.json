@@ -13,6 +13,7 @@
     "start": "tsx server/index.ts",
     "build": "npm run check && vite build",
     "preview": "vite preview",
+    "preview:ui": "tsx scripts/ui-preview.ts",
     "postinstall": "node scripts/patch-baileys.mjs",
     "prepare": "svelte-kit sync || echo ''",
     "check": "node scripts/patch-baileys.mjs --check && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json && tsc -p tsconfig.server.json --noEmit",

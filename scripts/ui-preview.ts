@@ -1,0 +1,173 @@
+/**
+ * UI preview harness — a disposable app instance for looking at the interface.
+ *
+ *   npm run preview:ui        # then open the printed URL
+ *
+ * WHY THIS EXISTS
+ *
+ * Execution reports must carry visual evidence, and workers must never start the
+ * real backend from a worktree — it opens the owner's live WhatsApp credentials
+ * and would put a second Baileys socket on their personal account. This gives
+ * them a safe thing to screenshot instead.
+ *
+ * It is safe by construction: a throwaway SQLite database under a temp dir, no
+ * `channel` passed to `createApp` (so no WhatsApp socket is ever opened), and a
+ * fake draft provider (so no LLM is called). Nothing here can reach WhatsApp.
+ *
+ * It also covers what live data cannot. The owner's real database holds four
+ * quoted messages — all of them plain text — and zero reactions, because
+ * WhatsApp does not deliver reactions in history sync. So the subtype icons and
+ * the reaction chips have no live case to inspect. The fixtures below supply
+ * one of every subtype deliberately, including the awkward ones: a quote long
+ * enough to exercise the two-line clamp, a quote whose target is not loaded, and
+ * a reaction the owner sent themselves.
+ */
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createApp } from '../server/index.js';
+import { openDatabase } from '../server/store/db.js';
+import { upsertChat } from '../server/store/chats.js';
+import { upsertMessage, upsertMessageReaction } from '../server/store/messages.js';
+import { upsertDraft } from '../server/store/drafts.js';
+import type { DraftProvider, DraftResult } from '../server/providers/provider.js';
+
+const dataDir = mkdtempSync(join(tmpdir(), 'whatsagent-ui-preview-'));
+const db = openDatabase({ dataDir });
+
+const DIRECT = 'preview-direct@s.whatsapp.net';
+const GROUP = 'preview-group@g.us';
+let clock = 1_760_000_000;
+const at = () => (clock += 60);
+
+upsertChat(db, { jid: DIRECT, name: 'Quote Gallery', kind: '1:1', last_msg_at: at(), unread: 2 });
+upsertChat(db, { jid: GROUP, name: 'Group Sandbox', kind: 'group', last_msg_at: at(), unread: 0 });
+
+/** A message that later messages can quote. */
+function target(id: string, type: string, text: string | null, fromMe = false): void {
+	upsertMessage(db, { id, chat_jid: DIRECT, from_me: fromMe, ts: at(), type, text });
+}
+
+/** A reply carrying a quote snapshot of `targetId`. */
+function reply(
+	id: string,
+	text: string,
+	targetId: string | null,
+	quoteType: string,
+	quoteText: string | null,
+	fromMe = false
+): void {
+	upsertMessage(db, {
+		id,
+		chat_jid: DIRECT,
+		from_me: fromMe,
+		ts: at(),
+		type: 'text',
+		text,
+		quote_target_id: targetId,
+		quote_sender: fromMe ? 'me' : DIRECT,
+		quote_type: quoteType,
+		quote_text: quoteText
+	});
+}
+
+// One quote per stored subtype — the icons that have no live case anywhere.
+target('t-image', 'image', 'Sunset from the balcony');
+reply('r-image', 'That view is unreal.', 't-image', 'image', 'Sunset from the balcony', true);
+
+target('t-video', 'video', null);
+reply('r-video', 'Watched it twice.', 't-video', 'video', null);
+
+target('t-audio', 'audio', null);
+reply('r-audio', 'Got it, will listen later.', 't-audio', 'audio', null, true);
+
+target('t-doc', 'document', null);
+reply('r-doc', 'Signed and sent back.', 't-doc', 'document', 'Lease-2026.pdf');
+
+target('t-sticker', 'sticker', null);
+reply('r-sticker', 'ha', 't-sticker', 'sticker', null, true);
+
+target('t-location', 'location', null);
+reply('r-location', 'On my way there now.', 't-location', 'location', 'Café Central');
+
+target('t-contact', 'contact', null);
+reply('r-contact', 'Thanks, calling them today.', 't-contact', 'contact', 'Ana Ruiz', true);
+
+// A quote long enough to hit the two-line clamp.
+target(
+	't-long',
+	'text',
+	'So the plan is we leave around six, pick up the keys on the way, drop the bags at the flat, and then meet everyone at the restaurant by eight at the latest, assuming the traffic behaves itself.'
+);
+reply(
+	'r-long',
+	'Works for me.',
+	't-long',
+	'text',
+	'So the plan is we leave around six, pick up the keys on the way, drop the bags at the flat, and then meet everyone at the restaurant by eight at the latest, assuming the traffic behaves itself.'
+);
+
+// An unresolved quote: the target is deliberately absent, so the inset must
+// render its inert dashed state rather than crash.
+reply('r-missing', 'Replying to something older.', 'not-loaded', 'text', null);
+
+// An unrecognized subtype — the resolved-but-unknown fallback path.
+target('t-poll', 'poll', null);
+reply('r-poll', 'Voted.', 't-poll', 'poll', null, true);
+
+// Reactions, including one from the owner so the "mine" treatment is visible.
+upsertMessageReaction(db, { chat_jid: DIRECT, target_msg_id: 'r-image', actor: 'me', emoji: '❤️', updated_at: at() });
+upsertMessageReaction(db, { chat_jid: DIRECT, target_msg_id: 'r-image', actor: DIRECT, emoji: '❤️', updated_at: at() });
+upsertMessageReaction(db, { chat_jid: DIRECT, target_msg_id: 'r-doc', actor: DIRECT, emoji: '👍', updated_at: at() });
+upsertMessageReaction(db, { chat_jid: DIRECT, target_msg_id: 'r-long', actor: 'me', emoji: '😂', updated_at: at() });
+
+// Two trailing inbound messages so the unread boundary has somewhere to sit.
+upsertMessage(db, { id: 'u-1', chat_jid: DIRECT, from_me: false, ts: at(), type: 'text', text: 'Still on for tomorrow?' });
+upsertMessage(db, { id: 'u-2', chat_jid: DIRECT, from_me: false, ts: at(), type: 'text', text: 'No rush, just checking.' });
+
+upsertDraft(db, {
+	chat_jid: DIRECT,
+	text: 'Yes — tomorrow works. See you at eight.',
+	status: 'ready',
+	generated_at: at(),
+	provider: 'fake',
+	basis_msg_id: 'u-2'
+});
+
+// Group messages, so sender attribution and the 1:1-only agent rule are visible.
+upsertMessage(db, { id: 'g-1', chat_jid: GROUP, from_me: false, sender: 'ana@s.whatsapp.net', ts: at(), type: 'text', text: 'Anyone else running late?' });
+upsertMessage(db, { id: 'g-2', chat_jid: GROUP, from_me: false, sender: 'ben@s.whatsapp.net', ts: at(), type: 'text', text: 'Five minutes out.' });
+upsertMessage(db, { id: 'g-3', chat_jid: GROUP, from_me: true, ts: at(), type: 'text', text: 'Grabbing a table now.' });
+
+const fakeProvider: DraftProvider = {
+	draft: async (): Promise<DraftResult> => ({ kind: 'draft', text: 'Preview draft — no provider was called.' })
+};
+
+const app = createApp({
+	db,
+	port: Number(process.env.PORT ?? 8799),
+	host: '127.0.0.1',
+	staticDir: join(process.cwd(), 'build'),
+	// No `channel`: nothing here opens a WhatsApp socket.
+	draftProvider: fakeProvider,
+	providerName: 'fake'
+});
+
+await app.start();
+console.log(`
+UI preview ready — safe to screenshot.
+
+  URL       http://127.0.0.1:${app.port}
+  database  ${dataDir}  (throwaway)
+  whatsapp  not connected — no channel was started
+  provider  fake — no LLM is called
+
+Open "Quote Gallery" for every quote subtype, the reaction chips, and the
+unread boundary. "Group Sandbox" covers group sender attribution.
+
+Capture with:
+  slay tasks browser new http://127.0.0.1:${app.port}
+  slay tasks browser screenshot -o /tmp/<name>.png
+
+Ctrl-C to stop. The temp database is discarded with it.
+`);
