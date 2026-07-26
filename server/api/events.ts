@@ -22,6 +22,14 @@ export type ServerEvent =
 	| { type: 'draft-updated'; draft: Draft }
 	| { type: 'draft-removed'; chat_jid: string }
 	| { type: 'outbox-updated'; outbox: OutboxRow }
+	/**
+	 * W4-U8: outbox send-mode flipped at runtime. `live: true` means the pacer
+	 * transmits over the WhatsApp transport; `live: false` (the safe default)
+	 * means rows are marked sent without ever reaching a recipient. Pushed to
+	 * every WS client so the topbar indicator and the settings toggle stay in
+	 * sync without a refetch.
+	 */
+	| { type: 'send-mode'; live: boolean; dry_run: boolean }
 	| { type: 'connection'; state: ConnectionState }
 	| { type: 'pairing-needed'; qr: string }
 	/** D5 — the derived view state the shell renders (supersedes `connection` for UI). */

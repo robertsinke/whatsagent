@@ -13,6 +13,7 @@
 	import DraftStatus from '$lib/components/app/DraftStatus.svelte';
 	import OutboxTray from '$lib/components/app/OutboxTray.svelte';
 	import PairingScreen from '$lib/components/app/PairingScreen.svelte';
+	import SendModeIndicator from '$lib/components/app/SendModeIndicator.svelte';
 	import SessionStatus from '$lib/components/app/SessionStatus.svelte';
 	import { AppState } from '$lib/client/state.svelte.js';
 	import { displayName, initialsFor, sessionBanner } from '$lib/client/view.js';
@@ -48,6 +49,7 @@
 			<span class="brand-name">WhatsAgent</span>
 		</div>
 		<div class="topbar-right">
+			<SendModeIndicator sendsLive={app.sendsLive} pending={app.sendingMode} />
 			<SessionStatus session={app.session} socketConnected={app.connected} />
 			<OutboxTray outbox={app.outbox} chats={app.chats} oncancel={(id) => app.cancelOutbox(id)} />
 			<Button variant="ghost" size="sm" onclick={() => goto('/settings')}>

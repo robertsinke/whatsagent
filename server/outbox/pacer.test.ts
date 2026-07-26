@@ -590,4 +590,98 @@ describe('OutboxPacer', () => {
 			expect(getOutbox(database, nextId)?.status).toBe('sent');
 		});
 	});
+
+	describe('live send-mode toggle (W4-U8)', () => {
+		it('flips from live to dry-run mid-flight and suppresses the next send', async () => {
+			vi.useFakeTimers({ now: NOW });
+			const database = setup();
+			const id1 = enqueueManualOutbox(database, {
+				chatJid: 'alice@s.whatsapp.net',
+				text: 'first, live',
+				now: NOW
+			});
+			// Second row due later, so the toggle lands before it drains.
+			const id2 = enqueueManualOutbox(database, {
+				chatJid: 'bob@s.whatsapp.net',
+				text: 'second, after toggle to dry-run',
+				now: NOW + 5_000
+			});
+			const sendTransport = transport();
+			const instance = pacer(database, sendTransport);
+			instance.start();
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(sendTransport.sendText).toHaveBeenCalledTimes(1);
+			expect(getOutbox(database, id1)?.status).toBe('sent');
+			expect(instance.isDryRun()).toBe(false);
+
+			// Safe direction: live → dry-run is one call, never confirmed.
+			instance.setDryRun(true);
+			expect(instance.isDryRun()).toBe(true);
+
+			await vi.advanceTimersByTimeAsync(10_000);
+			expect(sendTransport.sendText).toHaveBeenCalledTimes(1);
+			// The row still advances through the queue (marked sent) — only the
+			// transport call is suppressed. The pacer is still the only sender;
+			// the toggle changes whether it transmits, not whether it drains.
+			expect(getOutbox(database, id2)?.status).toBe('sent');
+		});
+
+		it('flips from dry-run to live mid-flight and transmits the next send', async () => {
+			vi.useFakeTimers({ now: NOW });
+			vi.spyOn(console, 'info').mockImplementation(() => undefined);
+			const database = setup();
+			const id1 = enqueueManualOutbox(database, {
+				chatJid: 'alice@s.whatsapp.net',
+				text: 'first, dry-run',
+				now: NOW
+			});
+			const id2 = enqueueManualOutbox(database, {
+				chatJid: 'bob@s.whatsapp.net',
+				text: 'second, after toggle to live',
+				now: NOW + 5_000
+			});
+			const sendTransport = transport();
+			const instance = pacer(database, sendTransport, { dryRun: true });
+			instance.start();
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(sendTransport.sendText).not.toHaveBeenCalled();
+			expect(getOutbox(database, id1)?.status).toBe('sent');
+			expect(instance.isDryRun()).toBe(true);
+
+			// Unsafe direction: the UI confirms before calling this; the pacer
+			// itself applies the change immediately and without a second gate.
+			instance.setDryRun(false);
+			expect(instance.isDryRun()).toBe(false);
+
+			await vi.advanceTimersByTimeAsync(10_000);
+			expect(sendTransport.sendText).toHaveBeenCalledTimes(1);
+			expect(getOutbox(database, id2)?.status).toBe('sent');
+		});
+
+		it('does not change what is sent, only whether it is transmitted', async () => {
+			vi.useFakeTimers({ now: NOW });
+			vi.spyOn(console, 'info').mockImplementation(() => undefined);
+			const database = setup();
+			const id = enqueueManualOutbox(database, {
+				chatJid: 'alice@s.whatsapp.net',
+				text: 'payload is identical in either mode',
+				now: NOW
+			});
+			const sendTransport = transport();
+			const instance = pacer(database, sendTransport, { dryRun: true });
+			instance.setDryRun(false);
+			instance.start();
+			await vi.runAllTimersAsync();
+
+			expect(sendTransport.sendText).toHaveBeenCalledWith(
+				'alice@s.whatsapp.net',
+				'payload is identical in either mode',
+				expect.any(String),
+				undefined
+			);
+			expect(getOutbox(database, id)?.status).toBe('sent');
+		});
+	});
 });

@@ -36,7 +36,13 @@ import { createDraftProvider, type DraftProviderName } from './providers/index.j
 import type { DraftProvider } from './providers/provider.js';
 import { getDraft } from './store/drafts.js';
 import { getChat } from './store/chats.js';
-import { getSetting, listSettings, setSetting } from './store/settings.js';
+import {
+	getSetting,
+	listSettings,
+	OUTBOX_DRY_RUN_SETTING,
+	resolveOutboxDryRun,
+	setSetting
+} from './store/settings.js';
 import { cancelStaleDraftOutbox } from './store/outbox.js';
 
 const DEFAULT_PORT = 8787;
@@ -86,10 +92,11 @@ export type App = {
 /**
  * Sending is opt-in: a fresh install and any malformed value remain in
  * dry-run. Only the explicit SQLite value `false` enables WhatsApp transport.
+ * Re-exported from `store/settings.js` so existing callers (and tests) keep
+ * importing it from here; the W4-U8 corrupt-setting test lives against this
+ * polarity.
  */
-export function resolveOutboxDryRun(setting: string | undefined): boolean {
-	return setting !== 'false';
-}
+export { resolveOutboxDryRun } from './store/settings.js';
 
 function defaultStaticDir(): string {
 	const here = dirname(fileURLToPath(import.meta.url));
@@ -192,6 +199,7 @@ export function createApp(options: CreateAppOptions = {}): App {
 		getAllowedOrigins,
 		nextDraftJitterMs: pacer ? () => pacer.jitterMs() : undefined,
 		wakeOutbox: pacer ? () => pacer.wake() : undefined,
+		setOutboxDryRun: pacer ? (dryRun: boolean) => pacer.setDryRun(dryRun) : undefined,
 		memory,
 		refineDraft: refiner,
 		deepenHistory: options.channel?.deepenHistory
@@ -238,6 +246,16 @@ export function createApp(options: CreateAppOptions = {}): App {
 		// Snapshot the derived session immediately — a client that connects
 		// mid-QR-rotation must not wait up to 20s for the next push.
 		ws.send(JSON.stringify({ type: 'session', session: session.get() } satisfies ServerEvent));
+		// W4-U8: snapshot the current send-mode so the topbar indicator and the
+		// settings toggle render the right state before any WS event lands.
+		const liveSendMode = getSetting(db, OUTBOX_DRY_RUN_SETTING) === 'false';
+		ws.send(
+			JSON.stringify({
+				type: 'send-mode',
+				live: liveSendMode,
+				dry_run: !liveSendMode
+			} satisfies ServerEvent)
+		);
 		const qr = connection.get().qr;
 		if (qr) {
 			ws.send(JSON.stringify({ type: 'pairing-needed', qr } satisfies ServerEvent));
@@ -422,7 +440,7 @@ async function main(): Promise<void> {
 	const channel = new WhatsAppConnection(db);
 	const providerName = (settings.provider ?? 'claude') as DraftProviderName;
 	const memory = createRuntimeMemory(settings, { dataDir: getDefaultDataDir() });
-	const dryRunSetting = getSetting(db, 'outbox_dry_run');
+	const dryRunSetting = getSetting(db, OUTBOX_DRY_RUN_SETTING);
 	const devDraftFromMeMessageId =
 		process.env.NODE_ENV === 'production'
 			? undefined

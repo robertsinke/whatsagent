@@ -175,5 +175,20 @@ export const api = {
 		request<{ key: string; value: string }>('/settings', {
 			method: 'PUT',
 			body: JSON.stringify({ key, value })
+		}),
+
+	/**
+	 * W4-U8: outbox send-mode. `live: true` enables real WhatsApp sends through
+	 * the pacer (after owner confirmation in the UI); `live: false` is the safe
+	 * default and is never confirmed. Takes effect without a restart — the
+	 * server pushes the change into the live pacer and emits a `send-mode` WS
+	 * event so every open client updates its indicator.
+	 */
+	sendMode: () => request<{ live: boolean; dry_run: boolean }>('/outbox/send-mode'),
+
+	setSendMode: (live: boolean) =>
+		request<{ live: boolean; dry_run: boolean }>('/outbox/send-mode', {
+			method: 'PUT',
+			body: JSON.stringify({ live })
 		})
 };

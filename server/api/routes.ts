@@ -27,7 +27,7 @@ import {
 	getOutbox,
 	listOutbox
 } from '../store/outbox.js';
-import { getSetting, listEffectiveSettings, setSetting } from '../store/settings.js';
+import { getSetting, listEffectiveSettings, OUTBOX_DRY_RUN_SETTING, resolveOutboxDryRun, setSetting } from '../store/settings.js';
 import type { Memory } from '../agent/memory/memory.js';
 import type { RefinementAttempt, RefineDraftRequest } from '../agent/refiner.js';
 import { retainDraftLearning } from '../agent/voice.js';
@@ -65,6 +65,12 @@ export type RoutesDeps = {
 	nextDraftJitterMs?: () => number;
 	/** Wake the single-flight pacer after queue mutations. */
 	wakeOutbox?: () => void;
+	/**
+	 * W4-U8: flip the pacer's live send-mode at runtime without a restart.
+	 * The pacer remains the only sender; this only toggles whether it
+	 * transmits. `true` = dry-run (safe default), `false` = live sends.
+	 */
+	setOutboxDryRun?: (dryRun: boolean) => void;
 	/** Optional memory side effects; never participates in the outbox transaction. */
 	memory?: Memory;
 	/** Optional channel history deepener for thin voice samples. */
@@ -408,7 +414,43 @@ async function handleApi(
 			return;
 		}
 		setSetting(db, body.key, body.value);
+		// W4-U8: when the outbox dry-run setting is touched, push the resolved
+		// polarity into the live pacer so the toggle takes effect without a
+		// restart. The generic PUT is the settings UI's only path today; a
+		// dedicated endpoint would just duplicate this. The pacer stays the
+		// sole sender — this only flips whether it transmits.
+		if (body.key === OUTBOX_DRY_RUN_SETTING && deps.setOutboxDryRun) {
+			deps.setOutboxDryRun(resolveOutboxDryRun(body.value));
+		}
 		json(res, 200, { key: body.key, value: getSetting(db, body.key) });
+		return;
+	}
+
+	/**
+	 * W4-U8: explicit send-mode endpoint. Same persistence + live push as the
+	 * generic settings PUT, but with a boolean body and a clear name so the UI
+	 * toggle does not have to know the SQLite string polarity. `live: true`
+	 * enables real WhatsApp sends (after owner confirmation in the UI);
+	 * `live: false` is the safe default and is never confirmed.
+	 */
+	if (path === '/api/outbox/send-mode' && method === 'GET') {
+		const live = getSetting(db, OUTBOX_DRY_RUN_SETTING) === 'false';
+		json(res, 200, { live, dry_run: !live });
+		return;
+	}
+	if (path === '/api/outbox/send-mode' && method === 'PUT') {
+		const body = (await readJsonBody(req)) as { live?: unknown } | undefined;
+		if (typeof body?.live !== 'boolean') {
+			error(res, 400, 'Expected { live: boolean }');
+			return;
+		}
+		const live = body.live;
+		const value = live ? 'false' : 'true';
+		setSetting(db, OUTBOX_DRY_RUN_SETTING, value);
+		if (deps.setOutboxDryRun) deps.setOutboxDryRun(!live);
+		const resolved = { live, dry_run: !live };
+		events.emit({ type: 'send-mode', ...resolved });
+		json(res, 200, resolved);
 		return;
 	}
 

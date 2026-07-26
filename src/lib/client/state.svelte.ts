@@ -85,6 +85,20 @@ export class AppState {
 	 * (it ignores stale signals for a chat that was switched away mid-fetch).
 	 */
 	jumpTarget = $state<{ id: string; nonce: number } | null>(null);
+	/**
+	 * W4-U8 — outbox send-mode. `true` when the pacer transmits over WhatsApp;
+	 * `false` (the fail-safe default) when rows are marked sent without
+	 * reaching a recipient. Surfaced always-visible in the topbar so the owner
+	 * is never unsure whether a send is live. Updated live via the
+	 * `send-mode` WS event; flipped through {@link setSendMode} which confirms
+	 * the unsafe direction (live) in the UI before calling the API.
+	 */
+	sendsLive = $state(false);
+	/**
+	 * True while a send-mode PUT is in flight, so the toggle can show a
+	 * local pending state without flickering on the WS echo.
+	 */
+	sendingMode = $state(false);
 
 	#realtime: Realtime | undefined;
 	#conversationEpoch = 0;
@@ -123,14 +137,16 @@ export class AppState {
 
 	async refresh(): Promise<void> {
 		try {
-			const [session, chats, outbox] = await Promise.all([
+			const [session, chats, outbox, sendMode] = await Promise.all([
 				api.session().catch(() => EMPTY_SESSION),
 				api.chats(),
-				api.outbox()
+				api.outbox(),
+				api.sendMode().catch(() => ({ live: false, dry_run: true }))
 			]);
 			this.session = session;
 			this.chats = chats;
 			this.outbox = outbox;
+			this.sendsLive = sendMode.live;
 			if (this.selectedJid) await this.openChat(this.selectedJid, { markRead: false });
 		} catch (err) {
 			this.error = describeError(err);
@@ -447,6 +463,29 @@ export class AppState {
 	}
 
 	/**
+	 * W4-U8: flip the outbox send-mode at runtime. The UI confirms the unsafe
+	 * direction (live) before calling this; the safe direction (dry-run) calls
+	 * this directly with no gate. The server pushes the change into the live
+	 * pacer and emits a `send-mode` WS event, which {@link applyEvent} folds
+	 * into {@link sendsLive} — so this method does not optimistically update
+	 * the state, it waits for the echo to avoid a flicker on a failed PUT.
+	 */
+	async setSendMode(live: boolean): Promise<boolean> {
+		if (this.sendingMode) return false;
+		this.sendingMode = true;
+		try {
+			const result = await api.setSendMode(live);
+			this.sendsLive = result.live;
+			return result.live === live;
+		} catch (err) {
+			this.error = describeError(err);
+			return false;
+		} finally {
+			this.sendingMode = false;
+		}
+	}
+
+	/**
 	 * Owner-triggered on-demand history deepen for the selected chat. Asks the
 	 * server to call Baileys `fetchMessageHistory` for older messages; the
 	 * server returns 202 once the request is accepted, and the new (older)
@@ -522,6 +561,9 @@ export class AppState {
 				return;
 			case 'outbox-updated':
 				this.#mergeOutbox(event.outbox);
+				return;
+			case 'send-mode':
+				this.sendsLive = event.live;
 				return;
 			default:
 				return;

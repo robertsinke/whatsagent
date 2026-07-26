@@ -4,17 +4,12 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import * as Tabs from '$lib/components/ui/tabs/index.js';
-	import { ArrowLeft, Check } from '@lucide/svelte';
+	import * as Dialog from '$lib/components/ui/dialog/index.js';
+	import { ArrowLeft, Check, Radio, ShieldAlert } from '@lucide/svelte';
 	import { api } from '$lib/client/api.js';
 
 	type Field = { key: string; label: string; help: string; placeholder: string };
 
-	const DRY_RUN_FIELD: Field = {
-		key: 'outbox_dry_run',
-		label: 'Outbox dry-run',
-		help: 'true blocks WhatsApp delivery while exercising the full queue. Only explicit false enables live sends after restart.',
-		placeholder: 'true'
-	};
 	const PACING_FIELDS: Field[] = [
 		{
 			key: 'pacing_min_seconds',
@@ -55,11 +50,26 @@
 	let saved = $state<string | null>(null);
 	let error = $state<string | null>(null);
 
-	// Fetched on mount, not in `load()` — this route prerenders.
+	/**
+	 * W4-U8: outbox send-mode, owned by the dedicated endpoint (not the generic
+	 * settings PUT). `sendsLive === true` means the pacer transmits over
+	 * WhatsApp; `false` (the fail-safe default) means approving a draft marks it
+	 * sent and nothing reaches the recipient.
+	 */
+	let sendsLive = $state(false);
+	let sendingMode = $state(false);
+	/** Confirmation dialog open state — only the unsafe direction (live) confirms. */
+	let confirmLiveOpen = $state(false);
+	let confirmLiveError = $state<string | null>(null);
+
 	onMount(() => {
 		void api
 			.settings()
 			.then((settings) => (values = settings))
+			.catch((err) => (error = err instanceof Error ? err.message : String(err)));
+		void api
+			.sendMode()
+			.then((mode) => (sendsLive = mode.live))
 			.catch((err) => (error = err instanceof Error ? err.message : String(err)));
 	});
 
@@ -70,6 +80,44 @@
 			setTimeout(() => (saved = saved === key ? null : saved), 1500);
 		} catch (err) {
 			error = err instanceof Error ? err.message : String(err);
+		}
+	}
+
+	/**
+	 * The safe direction is always one click: turning sends OFF takes effect
+	 * immediately and is never confirmed. Only enabling live sends opens the
+	 * confirmation dialog, so an accidental click never puts real messages on
+	 * the wire.
+	 */
+	async function toggleSends(nextLive: boolean) {
+		if (nextLive === sendsLive || sendingMode) return;
+		if (nextLive) {
+			confirmLiveOpen = true;
+			confirmLiveError = null;
+			return;
+		}
+		await applyToggle(false);
+	}
+
+	async function confirmEnableLive() {
+		const ok = await applyToggle(true);
+		if (ok) confirmLiveOpen = false;
+	}
+
+	async function applyToggle(live: boolean): Promise<boolean> {
+		sendingMode = true;
+		try {
+			const result = await api.setSendMode(live);
+			sendsLive = result.live;
+			confirmLiveError = null;
+			return result.live === live;
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			if (live) confirmLiveError = msg;
+			else error = msg;
+			return false;
+		} finally {
+			sendingMode = false;
 		}
 	}
 </script>
@@ -116,7 +164,65 @@
 			</Tabs.Content>
 
 			<Tabs.Content value="safety" class="panel-content">
-				{#each [DRY_RUN_FIELD, ...PACING_FIELDS] as field (field.key)}
+				<div class="send-mode-card" data-mode={sendsLive ? 'live' : 'dry-run'}>
+					<div class="send-mode-head">
+						<span class="send-mode-icon" data-mode={sendsLive ? 'live' : 'dry-run'}>
+							{#if sendsLive}
+								<Radio class="size-4" />
+							{:else}
+								<ShieldAlert class="size-4" />
+							{/if}
+						</span>
+						<div class="send-mode-titles">
+							<span class="field-label">WhatsApp sends</span>
+							<span class="send-mode-state" data-mode={sendsLive ? 'live' : 'dry-run'}>
+								{#if sendsLive}
+									LIVE — approving a draft or pressing send transmits over WhatsApp to a real recipient.
+								{:else}
+									OFF — approving a draft marks it sent and nothing reaches the recipient.
+								{/if}
+							</span>
+						</div>
+					</div>
+
+					<div class="send-mode-controls">
+						<Button
+							size="sm"
+							variant={sendsLive ? 'outline' : 'default'}
+							onclick={() => toggleSends(false)}
+							disabled={sendingMode || !sendsLive}
+						>
+							{#if !sendsLive}
+								<Check class="size-3.5" /> Sends off
+							{:else}
+								Turn sends off
+							{/if}
+						</Button>
+						<Button
+							size="sm"
+							variant={sendsLive ? 'default' : 'outline'}
+							class="enable-live"
+							onclick={() => toggleSends(true)}
+							disabled={sendingMode || sendsLive}
+							data-mode={sendsLive ? 'live' : 'dry-run'}
+						>
+							{#if sendsLive}
+								<Radio class="size-3.5" /> Sends live
+							{:else}
+								Enable live sends
+							{/if}
+						</Button>
+					</div>
+
+					<p class="send-mode-help">
+						Off is the safe default and the safe direction — turning it off is always one
+						click and never asks to confirm. Enabling live sends asks you to confirm
+						first, because approving a draft then puts a real message on a real
+						recipient's phone. Takes effect immediately without a restart.
+					</p>
+				</div>
+
+				{#each PACING_FIELDS as field (field.key)}
 					<label class="field safety-field">
 						<span class="field-label">{field.label}</span>
 						<span class="field-row">
@@ -147,6 +253,45 @@
 			</Tabs.Content>
 		</Tabs.Root>
 	</section>
+
+	<Dialog.Root bind:open={confirmLiveOpen}>
+		<Dialog.Content class="confirm-live">
+			<Dialog.Header>
+				<Dialog.Title>Enable live WhatsApp sends?</Dialog.Title>
+				<Dialog.Description>
+					With live sends ON, approving a draft or pressing send transmits over WhatsApp
+					to a real recipient. There is no second gate after this — only the outbox pacer
+					(same as today, same pacing). You can turn sends off at any time with one
+					click; that direction never asks to confirm.
+				</Dialog.Description>
+			</Dialog.Header>
+			{#if confirmLiveError}
+				<p class="error" role="alert">{confirmLiveError}</p>
+			{/if}
+			<Dialog.Footer>
+				<Button
+					variant="ghost"
+					size="sm"
+					onclick={() => (confirmLiveOpen = false)}
+					disabled={sendingMode}
+				>
+					Cancel
+				</Button>
+				<Button
+					size="sm"
+					class="enable-live"
+					onclick={confirmEnableLive}
+					disabled={sendingMode}
+				>
+					{#if sendingMode}
+						Enabling…
+					{:else}
+						<Radio class="size-3.5" /> Enable live sends
+					{/if}
+				</Button>
+			</Dialog.Footer>
+		</Dialog.Content>
+	</Dialog.Root>
 
 	{#if error}
 		<p class="error" role="alert">{error}</p>
@@ -249,5 +394,75 @@
 	.error {
 		color: var(--destructive);
 		font-size: 0.8rem;
+	}
+
+	/* W4-U8 — send-mode card */
+	.send-mode-card {
+		display: flex;
+		flex-direction: column;
+		gap: 0.6rem;
+		padding: 0.7rem 0.8rem;
+		border-radius: var(--radius-md);
+		border: 1px solid var(--hairline);
+		background: var(--surface-raised);
+	}
+	.send-mode-card[data-mode='live'] {
+		border-color: color-mix(in srgb, var(--terracotta) 45%, var(--hairline));
+		background: color-mix(in srgb, var(--terracotta) 6%, var(--surface-raised));
+	}
+	.send-mode-head {
+		display: flex;
+		gap: 0.55rem;
+		align-items: flex-start;
+	}
+	.send-mode-icon {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 1.6rem;
+		height: 1.6rem;
+		border-radius: 999px;
+		flex: none;
+		color: var(--ink-60);
+		background: color-mix(in srgb, var(--ink-10) 12%, transparent);
+	}
+	.send-mode-icon[data-mode='live'] {
+		color: var(--terracotta);
+		background: color-mix(in srgb, var(--terracotta) 14%, transparent);
+	}
+	.send-mode-titles {
+		display: flex;
+		flex-direction: column;
+		gap: 0.2rem;
+	}
+	.send-mode-state {
+		font-size: 0.78rem;
+		color: var(--ink-70);
+		line-height: 1.35;
+	}
+	.send-mode-state[data-mode='live'] {
+		color: var(--terracotta);
+		font-weight: 500;
+	}
+	.send-mode-controls {
+		display: flex;
+		gap: 0.4rem;
+		flex-wrap: wrap;
+	}
+	.send-mode-help {
+		font-size: 0.72rem;
+		color: var(--ink-50);
+		margin: 0;
+		line-height: 1.4;
+	}
+	:global(.enable-live[data-mode='dry-run']) {
+		border-color: color-mix(in srgb, var(--terracotta) 40%, var(--hairline));
+		color: var(--terracotta);
+	}
+	:global(.enable-live[data-mode='dry-run']:hover) {
+		background: color-mix(in srgb, var(--terracotta) 10%, var(--surface-raised));
+	}
+	:global(.confirm-live) {
+		max-width: 460px;
 	}
 </style>

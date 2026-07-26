@@ -100,6 +100,14 @@ export class OutboxPacer {
 	#running = false;
 	#stopped = true;
 	#draftsPaused: boolean;
+	/**
+	 * Live send-mode. Defaults to the constructor's `dryRun` option (which itself
+	 * defaults to dry-run via `resolveOutboxDryRun`). Flipped at runtime by
+	 * {@link setDryRun} from the settings UI — no restart required. The pacer
+	 * remains the only path to `sendMessage`; this only changes whether it
+	 * actually transmits, never whether the queue advances.
+	 */
+	#dryRun: boolean;
 
 	constructor(options: OutboxPacerOptions) {
 		const pacing = getOutboxPacingSettings(options.db);
@@ -112,6 +120,13 @@ export class OutboxPacer {
 		this.#manualPresenceMs = options.manualPresenceMs ?? 2_500;
 		this.#retryDelayMs = options.retryDelayMs ?? 5_000;
 		this.#draftsPaused = options.draftsPaused ?? false;
+		// Preserve the historical constructor default: an unset `dryRun` option
+		// means "not dry-run" (live), matching the original `this.#options.dryRun`
+		// truthiness read. The fail-safe polarity lives in `resolveOutboxDryRun`
+		// (settings), which `main()` always passes explicitly — so the runtime
+		// never lands here without an explicit value, and tests that omit it
+		// keep their previous "live" semantics.
+		this.#dryRun = options.dryRun ?? false;
 	}
 
 	start(): void {
@@ -138,6 +153,24 @@ export class OutboxPacer {
 	setDraftsPaused(paused: boolean): void {
 		this.#draftsPaused = paused;
 		this.wake();
+	}
+
+	/**
+	 * Flip whether the pacer transmits over the WhatsApp transport at runtime,
+	 * without a restart. Safe polarity: the safe direction (live → dry-run) is
+	 * always one call; the unsafe direction (dry-run → live) is gated by the
+	 * caller (settings UI confirms). This does NOT add a send path — the pacer
+	 * remains the only sender; it only changes whether a drained row calls the
+	 * transport or logs `[outbox:dry-run]`. A wake is unnecessary: a row
+	 * already past its `send_after` is not waiting on a timer, and a future
+	 * row's timer is unaffected by the transmit flag.
+	 */
+	setDryRun(dryRun: boolean): void {
+		this.#dryRun = dryRun;
+	}
+
+	isDryRun(): boolean {
+		return this.#dryRun;
 	}
 
 	jitterMs(): number {
@@ -200,7 +233,7 @@ export class OutboxPacer {
 			return;
 		}
 		try {
-			if (this.#options.dryRun) {
+			if (this.#dryRun) {
 				console.info(
 					`[outbox:dry-run] ${row.chat_jid}: react ${row.reaction_emoji ?? ''} on ${row.reaction_target_msg_id}`
 				);
@@ -261,7 +294,7 @@ export class OutboxPacer {
 				this.#options.onError?.(normalized, getOutbox(this.#options.db, row.id)!);
 				return;
 			}
-			if (this.#options.dryRun) {
+			if (this.#dryRun) {
 				console.info(`[outbox:dry-run] ${row.chat_jid}: ${row.text}`);
 			} else {
 				await this.#options.transport.setPresence(row.chat_jid, 'composing');
@@ -323,7 +356,7 @@ export class OutboxPacer {
 				}
 			}
 			this.#emit(row.id);
-			if (!this.#options.dryRun) {
+			if (!this.#dryRun) {
 				const followups: Promise<unknown>[] = [
 					this.#options.transport.setPresence(row.chat_jid, 'unavailable')
 				];

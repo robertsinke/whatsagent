@@ -2,6 +2,7 @@ import type { AppDatabase } from './db.js';
 
 export const PACING_MIN_SECONDS_SETTING = 'pacing_min_seconds';
 export const PACING_MAX_SECONDS_SETTING = 'pacing_max_seconds';
+export const OUTBOX_DRY_RUN_SETTING = 'outbox_dry_run';
 export const DEFAULT_MIN_SPACING_MS = 0;
 export const DEFAULT_MAX_SPACING_MS = 1_000;
 
@@ -57,6 +58,20 @@ export function getOutboxPacingSettings(db: AppDatabase): OutboxPacingSettings {
 	};
 }
 
+/**
+ * Resolve the outbox send-mode from the raw `outbox_dry_run` setting row.
+ *
+ * Fail-safe polarity: anything other than the exact string `'false'` means
+ * DRY RUN. Unset, misspelled, or corrupt → dry-run, never live sends. This
+ * is the W4-U8 invariant the corrupt-setting test guards. Live toggling
+ * persists `'false'` (live) / `'true'` (dry-run) through this same path, so
+ * a crash mid-toggle always lands on the value already on disk — and a
+ * restart re-reads it here.
+ */
+export function resolveOutboxDryRun(setting: string | undefined): boolean {
+	return setting !== 'false';
+}
+
 /** Settings API view: persisted values plus normalized runtime defaults. */
 export function listEffectiveSettings(db: AppDatabase): Record<string, string> {
 	const settings = listSettings(db);
@@ -64,6 +79,10 @@ export function listEffectiveSettings(db: AppDatabase): Record<string, string> {
 	return {
 		...settings,
 		[PACING_MIN_SECONDS_SETTING]: String(pacing.minSpacingMs / 1_000),
-		[PACING_MAX_SECONDS_SETTING]: String(pacing.maxSpacingMs / 1_000)
+		[PACING_MAX_SECONDS_SETTING]: String(pacing.maxSpacingMs / 1_000),
+		// Normalized polarity: only the explicit string 'false' means live sends.
+		// Missing, misspelled, or corrupt stays 'true' (dry-run) — see
+		// `resolveOutboxDryRun` and the W4-U8 corrupt-setting test.
+		[OUTBOX_DRY_RUN_SETTING]: settings[OUTBOX_DRY_RUN_SETTING] === 'false' ? 'false' : 'true'
 	};
 }
