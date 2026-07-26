@@ -10,6 +10,14 @@
 
 	type Field = { key: string; label: string; help: string; placeholder: string };
 
+	type VoiceView = {
+		stem: string;
+		content: string | null;
+		byteLength: number;
+		modifiedAt: string | null;
+		path: string;
+	};
+
 	const PACING_FIELDS: Field[] = [
 		{
 			key: 'pacing_min_seconds',
@@ -62,6 +70,38 @@
 	let confirmLiveOpen = $state(false);
 	let confirmLiveError = $state<string | null>(null);
 
+	/** W4-U10: read-only voice document inspector — what drafting actually reads (D2). */
+	let voice = $state<VoiceView | null>(null);
+	let voiceLoading = $state(true);
+	let voiceError = $state<string | null>(null);
+
+	async function loadVoice() {
+		voiceLoading = true;
+		voiceError = null;
+		try {
+			voice = await api.voiceGlobal();
+		} catch (err) {
+			voiceError = err instanceof Error ? err.message : String(err);
+		} finally {
+			voiceLoading = false;
+		}
+	}
+
+	function formatBytes(n: number): string {
+		if (n === 0) return '0 B';
+		if (n < 1024) return `${n} B`;
+		return `${(n / 1024).toFixed(1)} KB`;
+	}
+
+	function formatModified(iso: string | null): string {
+		if (!iso) return '—';
+		try {
+			return new Date(iso).toLocaleString();
+		} catch {
+			return iso;
+		}
+	}
+
 	onMount(() => {
 		void api
 			.settings()
@@ -71,6 +111,7 @@
 			.sendMode()
 			.then((mode) => (sendsLive = mode.live))
 			.catch((err) => (error = err instanceof Error ? err.message : String(err)));
+		void loadVoice();
 	});
 
 	async function save(key: string) {
@@ -138,6 +179,7 @@
 			<Tabs.List class="settings-tabs">
 				<Tabs.Trigger value="agent">Agent</Tabs.Trigger>
 				<Tabs.Trigger value="safety">Safety</Tabs.Trigger>
+				<Tabs.Trigger value="voice">Voice</Tabs.Trigger>
 			</Tabs.List>
 
 			<Tabs.Content value="agent" class="panel-content">
@@ -250,6 +292,49 @@
 					<li>Media is fetched only when you ask for it, never bulk-downloaded.</li>
 				</ul>
 				<p class="muted">Spacing is tunable after restart. The guarantees above are structural.</p>
+			</Tabs.Content>
+
+			<Tabs.Content value="voice" class="panel-content">
+				<div class="voice-card">
+					<div class="voice-head">
+						<span class="field-label">Learned voice document (global)</span>
+						<p class="voice-help">
+							This is the markdown file drafting actually reads (decision D2): a mirror of the
+							Hindsight mental model, rewritten whenever the model changes. Read-only — any
+							hand edit is silently overwritten at the next memory tick, so an edit box would
+							be a lie. Correcting the voice is a separate future unit that writes to the model,
+							not the file.
+						</p>
+					</div>
+
+					{#if voiceLoading}
+						<p class="muted">Loading…</p>
+					{:else if voiceError}
+						<p class="error" role="alert">{voiceError}</p>
+					{:else if voice && voice.content}
+						<dl class="voice-meta">
+							<div>
+								<dt>Size</dt>
+								<dd>{formatBytes(voice.byteLength)}</dd>
+							</div>
+							<div>
+								<dt>Last written</dt>
+								<dd>{formatModified(voice.modifiedAt)}</dd>
+							</div>
+							<div>
+								<dt>Path</dt>
+								<dd class="voice-path">{voice.path}</dd>
+							</div>
+						</dl>
+						<pre class="voice-body">{voice.content}</pre>
+					{:else}
+						<p class="voice-empty">
+							No voice has been learned yet. It appears after the agent has observed enough
+							of your sent messages to consolidate a style — usually once the memory tick has
+							run after a handful of conversations.
+						</p>
+					{/if}
+				</div>
 			</Tabs.Content>
 		</Tabs.Root>
 	</section>
@@ -464,5 +549,75 @@
 	}
 	:global(.confirm-live) {
 		max-width: 460px;
+	}
+
+	/* W4-U10 — voice inspector tab */
+	.voice-card {
+		display: flex;
+		flex-direction: column;
+		gap: 0.7rem;
+		padding: 0.7rem 0.8rem;
+		border-radius: var(--radius-md);
+		border: 1px solid var(--hairline);
+		background: var(--surface-raised);
+	}
+	.voice-head {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+	}
+	.voice-help {
+		font-size: 0.72rem;
+		color: var(--ink-50);
+		margin: 0;
+		line-height: 1.4;
+	}
+	.voice-meta {
+		display: grid;
+		grid-template-columns: max-content 1fr;
+		gap: 0.25rem 0.75rem;
+		margin: 0;
+		padding: 0.5rem 0.65rem;
+		border-radius: var(--radius-sm);
+		background: var(--surface-sunken);
+		font-size: 0.75rem;
+	}
+	.voice-meta div {
+		display: contents;
+	}
+	.voice-meta dt {
+		color: var(--ink-50);
+		font-weight: 500;
+	}
+	.voice-meta dd {
+		margin: 0;
+		color: var(--ink-90);
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	}
+	.voice-path {
+		overflow-wrap: anywhere;
+		word-break: break-all;
+	}
+	.voice-body {
+		margin: 0;
+		padding: 0.6rem 0.7rem;
+		max-height: 26rem;
+		overflow: auto;
+		white-space: pre-wrap;
+		word-break: break-word;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-size: 0.78rem;
+		line-height: 1.45;
+		color: var(--ink-90);
+		background: var(--surface-sunken);
+		border-radius: var(--radius-sm);
+		border: 1px solid var(--hairline-soft);
+	}
+	.voice-empty {
+		font-size: 0.82rem;
+		color: var(--ink-70);
+		margin: 0;
+		line-height: 1.45;
+		padding: 0.4rem 0;
 	}
 </style>

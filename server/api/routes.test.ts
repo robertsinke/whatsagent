@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -31,6 +31,7 @@ async function startTestApp(
 	db = openDatabase({ dataDir });
 	app = createApp({
 		db,
+		dataDir,
 		events,
 		port: 0,
 		host: '127.0.0.1',
@@ -1304,5 +1305,82 @@ describe('outbox send-mode toggle (W4-U8)', () => {
 			expect(res.status).toBe(200);
 			expect(await res.json()).toEqual(expected);
 		}
+	});
+});
+
+describe('GET /api/voice/global (W4-U10 inspector)', () => {
+	it('returns content null with byteLength 0 when no voice has been learned yet', async () => {
+		await startTestApp();
+		const res = await api('/api/voice/global');
+		expect(res.status).toBe(200);
+		const body = await res.json();
+		expect(body).toMatchObject({
+			stem: 'global',
+			content: null,
+			byteLength: 0,
+			modifiedAt: null
+		});
+		expect(typeof body.path).toBe('string');
+		expect(body.path).toContain('voice');
+	});
+
+	it('returns the on-disk document, byteLength, and mtime when present', async () => {
+		await startTestApp();
+		mkdirSync(join(dataDir!, 'voice'), { recursive: true });
+		const content = '- Short, lowercase replies.\n- Skips greetings.';
+		writeFileSync(join(dataDir!, 'voice', 'global.md'), content, 'utf8');
+		// File mtime is "now" — accept any non-null ISO string.
+		const res = await api('/api/voice/global');
+		expect(res.status).toBe(200);
+		const body = await res.json();
+		expect(body.stem).toBe('global');
+		expect(body.content).toBe(content);
+		expect(body.byteLength).toBe(Buffer.byteLength(content, 'utf8'));
+		expect(typeof body.modifiedAt).toBe('string');
+		expect(Number.isFinite(Date.parse(body.modifiedAt))).toBe(true);
+		expect(body.path).toBe(join(dataDir!, 'voice', 'global.md'));
+	});
+
+	it('trims a blank/whitespace-only file to content null (honest "nothing learned yet")', async () => {
+		await startTestApp();
+		mkdirSync(join(dataDir!, 'voice'), { recursive: true });
+		writeFileSync(join(dataDir!, 'voice', 'global.md'), '   \n\n  ', 'utf8');
+		const res = await api('/api/voice/global');
+		expect(res.status).toBe(200);
+		const body = await res.json();
+		expect(body.content).toBe(null);
+		expect(body.byteLength).toBe(Buffer.byteLength('   \n\n  ', 'utf8'));
+		expect(body.modifiedAt).not.toBe(null);
+	});
+
+	it('rejects a traversal stem — no caller-supplied parameter is accepted', async () => {
+		await startTestApp();
+		mkdirSync(join(dataDir!, 'auth'), { recursive: true });
+		// The Baileys auth creds sit under the data dir alongside voice/. A
+		// traversal stem passed to VoiceFiles.read() would join straight into
+		// them — so the route must not accept any caller-supplied stem.
+		writeFileSync(join(dataDir!, 'auth', 'creds.json'), '{"secret":"hijack"}', 'utf8');
+
+		const attempts = [
+			'/api/voice/..%2Fauth%2Fcreds',
+			'/api/voice/..%2fauth%2fcreds.json',
+			'/api/voice/global..%2Fauth%2Fcreds',
+			'/api/voice/contact',
+			'/api/voice/anything-else'
+		];
+		for (const path of attempts) {
+			const res = await api(path);
+			expect(res.status, `path ${path}`).toBe(404);
+		}
+		// And the auth blob is unreadable through the route.
+		const probe = await api('/api/voice/..%2Fauth%2Fcreds');
+		expect(probe.status).toBe(404);
+		expect(await probe.text()).not.toContain('hijack');
+	});
+
+	it('does not require Origin/Host validation (GET, like every read route)', async () => {
+		await startTestApp();
+		const res = await api('/api/voice/global', { origin: null });
+		expect(res.status).toBe(200);
 	});
 });

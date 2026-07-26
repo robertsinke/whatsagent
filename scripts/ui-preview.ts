@@ -22,7 +22,7 @@
  * enough to exercise the two-line clamp, a quote whose target is not loaded, and
  * a reaction the owner sent themselves.
  */
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from '../server/index.js';
@@ -33,6 +33,34 @@ import { upsertDraft } from '../server/store/drafts.js';
 import type { DraftProvider, DraftResult } from '../server/providers/provider.js';
 
 const dataDir = mkdtempSync(join(tmpdir(), 'whatsagent-ui-preview-'));
+
+// W4-U10: seed a learned voice document so the new Voice tab has real content
+// to screenshot, not the empty state. Synthetic, not derived from any real
+// conversation — the inspector is read-only and the file is a Hindsight mirror.
+mkdirSync(join(dataDir, 'voice'), { recursive: true });
+writeFileSync(
+  join(dataDir, 'voice', 'global.md'),
+  [
+    '# Owner voice (global)',
+    '',
+    '## Tone',
+    '- Casual-first, warm, unedited.',
+    '- Short and punchy by default; expands only for emotional or explanatory contexts.',
+    '- Loose, exclamatory punctuation.',
+    '',
+    '## Language',
+    '- Multilingual: English with international/professional contacts, Dutch with family, German in administrative contexts.',
+    '- Code-switches within a single conversation.',
+    '',
+    '## Emoji',
+    '- Emoji-light, typically at the end of a message.',
+    '- Standalone emoji messages are rare.',
+    '',
+    '## Sign-offs',
+    '- Minimal or emoji-based. No formal closers.'
+  ].join('\n'),
+  'utf8'
+);
 const db = openDatabase({ dataDir });
 
 const DIRECT = 'preview-direct@s.whatsapp.net';
@@ -144,13 +172,14 @@ const fakeProvider: DraftProvider = {
 };
 
 const app = createApp({
-	db,
-	port: Number(process.env.PORT ?? 8799),
-	host: '127.0.0.1',
-	staticDir: join(process.cwd(), 'build'),
-	// No `channel`: nothing here opens a WhatsApp socket.
-	draftProvider: fakeProvider,
-	providerName: 'fake'
+  db,
+  dataDir,
+  port: Number(process.env.PORT ?? 8799),
+  host: '127.0.0.1',
+  staticDir: join(process.cwd(), 'build'),
+  // No `channel`: nothing here opens a WhatsApp socket.
+  draftProvider: fakeProvider,
+  providerName: 'fake'
 });
 
 await app.start();

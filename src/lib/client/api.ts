@@ -190,5 +190,20 @@ export const api = {
 		request<{ live: boolean; dry_run: boolean }>('/outbox/send-mode', {
 			method: 'PUT',
 			body: JSON.stringify({ live })
-		})
+		}),
+
+	/**
+	 * W4-U10: read-only inspector for the global voice document on disk — what
+	 * drafting actually reads (D2). Returns content null with byteLength 0 when
+	 * nothing has been learned yet. Read-only; the file is a Hindsight mirror
+	 * and any hand edit is overwritten at the next memory tick.
+	 */
+	voiceGlobal: () =>
+		request<{
+			stem: string;
+			content: string | null;
+			byteLength: number;
+			modifiedAt: string | null;
+			path: string;
+		}>('/voice/global')
 };

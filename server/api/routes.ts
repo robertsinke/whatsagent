@@ -31,6 +31,7 @@ import { getSetting, listEffectiveSettings, OUTBOX_DRY_RUN_SETTING, resolveOutbo
 import type { Memory } from '../agent/memory/memory.js';
 import type { RefinementAttempt, RefineDraftRequest } from '../agent/refiner.js';
 import { retainDraftLearning } from '../agent/voice.js';
+import { GLOBAL_VOICE_STEM, VoiceFiles, VOICE_STEMS } from '../agent/memory/voice-files.js';
 import { isRefinementIntent } from '../providers/provider.js';
 import type { ConnectionStatus, EventBus } from './events.js';
 import type { SessionView } from './session.js';
@@ -404,6 +405,44 @@ async function handleApi(
 
 	if (path === '/api/settings' && method === 'GET') {
 		json(res, 200, listEffectiveSettings(db));
+		return;
+	}
+
+	/**
+	 * W4-U10: read-only voice document inspector. Drafting reads the file
+	 * (decision D2 — see server/agent/memory/voice-files.ts), so the inspector
+	 * must show exactly what drafting sees: the file on disk, never the
+	 * Hindsight model. Absent file is a 200 with content null — "nothing
+	 * learned yet" is a normal state, not an error.
+	 *
+	 * SECURITY: VoiceFiles.read/joins the stem into a path with NO sanitization,
+	 * and the data directory also holds the Baileys auth blobs (account-hijack
+	 * credentials). So the route accepts NO caller-supplied stem — `/global`
+	 * is the only path today, and the per-contact case (a future unit) will be
+	 * a separate `/api/voice/contact/:jid` route that runs voiceFileStem()
+	 * server-side. The regex below is shaped so that case can grow without
+	 * restructuring, but today only the literal `global` segment resolves.
+	 */
+	const voiceGlobalMatch = /^\/api\/voice\/([^/]+)$/.exec(path);
+	if (voiceGlobalMatch && method === 'GET') {
+		const stem = decodeURIComponent(voiceGlobalMatch[1]!);
+		if (!VOICE_STEMS.has(stem)) {
+			error(res, 404, 'Not found');
+			return;
+		}
+		const dataDir = deps.dataDir;
+		if (!dataDir) {
+			error(res, 503, 'Voice storage unavailable');
+			return;
+		}
+		const view = new VoiceFiles(dataDir).inspect(stem);
+		json(res, 200, {
+			stem: view.stem,
+			content: view.content,
+			byteLength: view.byteLength,
+			modifiedAt: view.modifiedAt === null ? null : new Date(view.modifiedAt).toISOString(),
+			path: view.path
+		});
 		return;
 	}
 

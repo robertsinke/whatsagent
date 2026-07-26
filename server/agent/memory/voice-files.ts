@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -23,6 +23,19 @@ export function voiceFileStem(chatJid: string): string {
 
 export const GLOBAL_VOICE_STEM = 'global';
 
+/** Whitelisted stems the inspector will resolve. Caller-supplied stems are rejected. */
+export const VOICE_STEMS = new Set<string>([GLOBAL_VOICE_STEM]);
+
+/** View of a voice document for the inspector — what drafting sees, never the model. */
+export type VoiceDocumentView = {
+	stem: string;
+	content: string | null;
+	byteLength: number;
+	/** File mtime in ms since epoch, or null when the file is absent. */
+	modifiedAt: number | null;
+	path: string;
+};
+
 /** Reads and mirrors the voice markdown documents. Never throws on a missing file. */
 export class VoiceFiles {
 	readonly #dir: string;
@@ -46,6 +59,31 @@ export class VoiceFiles {
 			return content.length > 0 ? content : null;
 		} catch {
 			return null;
+		}
+	}
+
+	/**
+	 * W4-U10: returns the document on disk plus the metadata that lets an owner
+	 * diagnose staleness/truncation at a glance. Only pre-validated stems reach
+	 * this method — the inspector route accepts no caller-supplied stem, so the
+	 * path-traversal hole in `read()` (which joins `stem` into a path with no
+	 * sanitization) is closed at the caller, not here. Never throws.
+	 */
+	inspect(stem: string): VoiceDocumentView {
+		const path = this.pathFor(stem);
+		try {
+			const stat = statSync(path);
+			const raw = readFileSync(path, 'utf8');
+			const content = raw.trim().length > 0 ? raw : null;
+			return {
+				stem,
+				content,
+				byteLength: Buffer.byteLength(raw, 'utf8'),
+				modifiedAt: stat.mtimeMs,
+				path
+			};
+		} catch {
+			return { stem, content: null, byteLength: 0, modifiedAt: null, path };
 		}
 	}
 
