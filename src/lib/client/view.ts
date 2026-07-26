@@ -37,6 +37,16 @@ export function displayName(chat: Pick<Chat, 'jid' | 'display_jid' | 'name'>): s
 	return local.startsWith('+') ? local : `+${local}`;
 }
 
+/**
+ * Every digit that identifies a chat, for phone-number search. Includes both
+ * sides of a LID/phone identity pair, because the chat's own jid may be the lid
+ * while the number the owner remembers lives on `display_jid` (or the reverse).
+ */
+export function jidDigits(chat: Pick<Chat, 'jid' | 'display_jid'>): string {
+	const jids = chat.display_jid === chat.jid ? [chat.jid] : [chat.display_jid, chat.jid];
+	return jids.map((jid) => (jid.split('@')[0] ?? '').replace(/\D/g, '')).join(' ');
+}
+
 export function initialsFor(name: string): string {
 	const words = name.replace(/[^\p{L}\p{N} ]/gu, ' ').trim().split(/\s+/).filter(Boolean);
 	if (words.length === 0) return '?';

@@ -1,6 +1,5 @@
 import {
 	buildPrompt,
-	draftResultSchema,
 	parseDraftResult,
 	ProviderError,
 	withSingleRetry,
@@ -40,7 +39,14 @@ export class OllamaProvider implements DraftProvider {
 					body: JSON.stringify({
 						model: this.options.model,
 						stream: false,
-						format: draftResultSchema,
+						// Generic JSON mode, not a JSON-Schema object. Ollama's cloud
+						// passthrough (`*:cloud` models) silently ignores a schema object
+						// and returns bare prose, which `parseDraftResult` then rejects;
+						// it does honor `'json'`. Local models honor both. The required
+						// shape is carried by `buildPrompt`, and `parseDraftResult` retries
+						// once on a miss. See
+						// docs/solutions/2026-07-26-draft-latency-and-provider-isolation.md
+						format: 'json',
 						messages: [
 							{ role: 'system', content: input.system },
 							{ role: 'user', content: buildPrompt(input) }

@@ -120,20 +120,41 @@ export function buildPrompt(input: DraftInput): string {
 	return `${conversation}\n\nReturn JSON only, matching exactly one of these shapes:\n{"kind":"draft","text":"...","reason":null}\n{"kind":"no_reply_needed","text":null,"reason":"..."}`;
 }
 
+/**
+ * Strip a markdown code fence a model wrapped its JSON in. Some providers honor
+ * a JSON-schema object and can only emit conforming tokens; others (notably the
+ * Ollama Cloud passthrough) support generic JSON mode only, where the shape
+ * comes from the prompt and a stray ```json fence is a normal thing to see.
+ */
+function unfence(text: string): string {
+	const trimmed = text.trim();
+	if (!trimmed.startsWith('```')) return trimmed;
+	return trimmed
+		.replace(/^```[a-zA-Z]*\s*\n?/, '')
+		.replace(/\n?```$/, '')
+		.trim();
+}
+
+/**
+ * `invalid_response` is **retryable**: when the response shape is enforced by the
+ * prompt rather than by constrained decoding, a one-off miss is exactly what a
+ * re-roll fixes. Parsing stays otherwise strict — a wrong shape must fail loudly
+ * rather than be coerced into a draft the owner might send.
+ */
 export function parseDraftResult(value: unknown): DraftResult {
 	let parsed = value;
 	if (typeof value === 'string') {
 		try {
-			parsed = JSON.parse(value);
+			parsed = JSON.parse(unfence(value));
 		} catch (cause) {
-			throw new ProviderError('invalid_response', 'Provider returned invalid JSON', false, undefined, {
+			throw new ProviderError('invalid_response', 'Provider returned invalid JSON', true, undefined, {
 				cause
 			});
 		}
 	}
 
 	if (!parsed || typeof parsed !== 'object') {
-		throw new ProviderError('invalid_response', 'Provider returned an invalid draft verdict');
+		throw new ProviderError('invalid_response', 'Provider returned an invalid draft verdict', true);
 	}
 
 	const result = parsed as Record<string, unknown>;
@@ -148,7 +169,7 @@ export function parseDraftResult(value: unknown): DraftResult {
 		return { kind: 'no_reply_needed', reason: result.reason };
 	}
 
-	throw new ProviderError('invalid_response', 'Provider returned an invalid draft verdict');
+	throw new ProviderError('invalid_response', 'Provider returned an invalid draft verdict', true);
 }
 
 export async function withSingleRetry<T>(

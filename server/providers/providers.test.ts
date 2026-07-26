@@ -165,14 +165,12 @@ describe('CodexProvider', () => {
 });
 
 describe('OllamaProvider', () => {
-	it('sends the DraftResult JSON schema and returns no_reply_needed', async () => {
+	it('requests generic JSON mode and returns no_reply_needed', async () => {
 		const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
 			const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-			expect(body.format).toMatchObject({
-				type: 'object',
-				required: ['kind', 'text', 'reason'],
-				additionalProperties: false
-			});
+			// Not a schema object: the cloud passthrough ignores those and returns
+			// prose. buildPrompt carries the shape instead.
+			expect(body.format).toBe('json');
 			return new Response(
 				JSON.stringify({
 					message: {
@@ -188,6 +186,68 @@ describe('OllamaProvider', () => {
 			kind: 'no_reply_needed',
 			reason: 'Only an acknowledgement'
 		});
+	});
+
+	it('accepts a response wrapped in a markdown code fence', async () => {
+		const fenced = '```json\n{"kind":"draft","text":"Ja, tot vrijdag!","reason":null}\n```';
+		const fetch = vi.fn(
+			async () =>
+				new Response(JSON.stringify({ message: { content: fenced } }), {
+					status: 200,
+					headers: { 'content-type': 'application/json' }
+				})
+		);
+		const provider = new OllamaProvider({ model: 'deepseek-v4-flash:cloud', fetch });
+
+		await expect(provider.draft(input)).resolves.toEqual({
+			kind: 'draft',
+			text: 'Ja, tot vrijdag!'
+		});
+	});
+
+	it('retries once when the model ignores the shape, then succeeds', async () => {
+		// JSON mode guarantees syntax, not our keys — the shape comes from the
+		// prompt, so a one-off miss must be re-rolled rather than failing the draft.
+		const responses = [
+			'Hoi! Ja, tot vrijdag.',
+			JSON.stringify({ kind: 'draft', text: 'Hoi! Ja, tot vrijdag.', reason: null })
+		];
+		const fetch = vi.fn(
+			async () =>
+				new Response(JSON.stringify({ message: { content: responses.shift() } }), {
+					status: 200,
+					headers: { 'content-type': 'application/json' }
+				})
+		);
+		const provider = new OllamaProvider({
+			model: 'deepseek-v4-flash:cloud',
+			fetch,
+			sleep: async () => undefined
+		});
+
+		await expect(provider.draft(input)).resolves.toEqual({
+			kind: 'draft',
+			text: 'Hoi! Ja, tot vrijdag.'
+		});
+		expect(fetch).toHaveBeenCalledTimes(2);
+	});
+
+	it('fails loudly when both attempts miss the shape', async () => {
+		const fetch = vi.fn(
+			async () =>
+				new Response(JSON.stringify({ message: { content: 'just prose, no json' } }), {
+					status: 200,
+					headers: { 'content-type': 'application/json' }
+				})
+		);
+		const provider = new OllamaProvider({
+			model: 'deepseek-v4-flash:cloud',
+			fetch,
+			sleep: async () => undefined
+		});
+
+		await expect(provider.draft(input)).rejects.toMatchObject({ code: 'invalid_response' });
+		expect(fetch).toHaveBeenCalledTimes(2);
 	});
 });
 

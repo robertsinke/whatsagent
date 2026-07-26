@@ -1,6 +1,6 @@
 import type { AppDatabase } from '../store/db.js';
 import type { Chat } from '../store/chats.js';
-import { getContact } from '../store/contacts.js';
+import { resolveContact } from '../store/contacts.js';
 import { getDraft } from '../store/drafts.js';
 import { getLastMessage } from '../store/messages.js';
 import { isMediaType } from './message-view.js';
@@ -35,7 +35,11 @@ export function toChatView(
 ): ChatView {
 	const last = getLastMessage(db, chat.jid);
 	const draft = getDraft(db, chat.jid);
-	const contact = getContact(db, chat.jid);
+	// Identity-aware, matching `message-view.ts`. An exact-jid lookup here meant
+	// the same person could render as a name in a message bubble and as a bare
+	// number in the chat list, whenever the chat's jid was one side of a
+	// LID/phone pair and the contact row was keyed by the other.
+	const contact = resolveContact(db, chat.jid);
 	const contactName = contact?.name?.trim() || contact?.push_name?.trim() || null;
 
 	let preview: string | null = null;

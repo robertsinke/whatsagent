@@ -4,7 +4,7 @@
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Inbox, Search } from '@lucide/svelte';
 	import type { Chat } from '$lib/client/types.js';
-	import { displayName, filterChats, type ChatTab } from '$lib/client/view.js';
+	import { displayName, filterChats, jidDigits, type ChatTab } from '$lib/client/view.js';
 	import ChatRow from './ChatRow.svelte';
 	import NeedsReplyTabs from './NeedsReplyTabs.svelte';
 
@@ -28,11 +28,17 @@
 		const filtered = filterChats(chats, tab);
 		const needle = query.trim().toLowerCase();
 		if (!needle) return filtered;
-		return filtered.filter(
-			(c) =>
-				displayName(c).toLowerCase().includes(needle) ||
-				(c.preview ?? '').toLowerCase().includes(needle)
-		);
+		// A digits-only query is a phone-number search: match against the jid with
+		// separators stripped, so "+31 6 2013 5489", "31620135489" and "0620135489"
+		// all find the same chat. Name search stays the common path and is
+		// unaffected — this only adds a second way in for the contacts WhatsApp
+		// never gave us a name for.
+		const digits = needle.replace(/\D/g, '');
+		return filtered.filter((c) => {
+			if (displayName(c).toLowerCase().includes(needle)) return true;
+			if ((c.preview ?? '').toLowerCase().includes(needle)) return true;
+			return digits.length >= 3 && jidDigits(c).includes(digits);
+		});
 	});
 
 	const emptyCopy = $derived(

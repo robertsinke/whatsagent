@@ -6,6 +6,7 @@ import {
 	canRefine,
 	deepenStatusView,
 	deriveUnreadBoundary,
+	jidDigits,
 	deriveUnreadBoundaryFromCursor,
 	draftBadge,
 	filterChats,
@@ -707,5 +708,24 @@ describe('no-autonomous-send invariant (R9)', () => {
 		}
 		// Deepen is NOT in that set — it produces no outbox row and cannot send.
 		expect(outboxProducing).not.toContain('deepenHistory');
+	});
+});
+
+describe('jidDigits — phone-number search (W4 follow-up)', () => {
+	it('collects digits from the jid', () => {
+		expect(jidDigits({ jid: '31620135489@s.whatsapp.net', display_jid: '31620135489@s.whatsapp.net' }))
+			.toBe('31620135489');
+	});
+
+	it('includes both sides of a LID/phone pair so either number matches', () => {
+		const digits = jidDigits({ jid: '107777976484081@lid', display_jid: '31620135489@s.whatsapp.net' });
+		expect(digits).toContain('31620135489');
+		expect(digits).toContain('107777976484081');
+	});
+
+	it('does not run the two jids together into a false match', () => {
+		// '4890107' would be a substring if the two jids were concatenated bare.
+		const digits = jidDigits({ jid: '107777976484081@lid', display_jid: '31620135489@s.whatsapp.net' });
+		expect(digits.includes('4890107')).toBe(false);
 	});
 });
