@@ -3,6 +3,7 @@ import type { Chat, MediaView, Message, SessionView } from './types.js';
 import { api } from './api.js';
 import {
 	canApprove,
+	canRefine,
 	deepenStatusView,
 	deriveUnreadBoundary,
 	draftBadge,
@@ -204,6 +205,19 @@ describe('draft status', () => {
 		expect(isVisibleDraftStatus('approved')).toBe(false);
 		expect(isVisibleDraftStatus('sent')).toBe(false);
 		expect(isVisibleDraftStatus('skipped')).toBe(false);
+	});
+
+	it('allows preview refinement only from a state with a valid preview', () => {
+		// `ready` and `stale` have a usable preview the server will refine.
+		expect(canRefine('ready')).toBe(true);
+		expect(canRefine('stale')).toBe(true);
+		// `drafting` has no text yet; `failed` has no valid preview to transform.
+		expect(canRefine('drafting')).toBe(false);
+		expect(canRefine('failed')).toBe(false);
+		// Post-approval and skipped states are not visible drafts at all.
+		expect(canRefine('approved')).toBe(false);
+		expect(canRefine('skipped')).toBe(false);
+		expect(canRefine('sent')).toBe(false);
 	});
 });
 

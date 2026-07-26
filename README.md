@@ -117,6 +117,17 @@ These are read when the Node process boots and require a **backend restart** aft
 
 Saving them in the UI updates the DB immediately but does not hot-reload the running provider, memory backend, or outbox pacer.
 
+## Draft refinement (preview only)
+
+The draft surface exposes compact refinement controls — **Regenerate**, **Shorter**, **Longer**, **More formal**, and **Less formal** — that update the visible draft preview without approving, queuing, or sending anything.
+
+- Refinement applies to the **unsaved editor text** when the draft editor is open; otherwise it transforms the saved preview. On success the transformed text replaces the preview and the editor stays open so you can keep editing.
+- **Regenerate** writes a fresh reply from the current conversation context and advances the draft's basis to the latest inbound message. The four transforms (**shorter / longer / more / less formal**) rework the displayed draft while keeping its original basis.
+- Refinement **never** calls the composer send endpoint, writes an outbox row, writes memory feedback, or wakes the pacer. The existing approve/edit/skip flows remain the only durable learning signals and the only path to a send.
+- While a refinement request is in flight, every refinement control disables and a local progress label appears. On a provider failure or a 409 (the draft or inbound history changed while the provider was running), the **prior preview is preserved**, a recoverable error is surfaced, and the editor stays open — you can retry or edit manually.
+- Approval after a refinement still exercises the server-side stale-basis guard: if newer inbound arrived since the (possibly advanced) basis, the UI asks you to re-confirm rather than sending a stale draft.
+- Controls only render for drafts in a refinable state (`ready` or `stale`). A `failed` draft has no valid preview to transform; `drafting` has no text yet.
+
 ## Dry-run vs deliberate live sends
 
 The outbox pacer is the **only** path that can call WhatsApp `sendMessage`.
@@ -172,3 +183,5 @@ As of this closeout, `npm audit` reports **6 low** severity findings in the Svel
 | `npm run build` | Check + static build |
 | `npm test` | Vitest |
 | `npm run check` | svelte-check + strict server typecheck |
+
+`npx tsx scripts/u6-refinement-smoke.ts` runs a disposable end-to-end smoke of the refinement contract (no live Baileys): it seeds a DB, starts `createApp` without a channel serving `build/`, and verifies refinement is preview-only and the SPA loads.

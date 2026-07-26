@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppState } from './state.svelte.js';
-import type { Chat, Message } from './types.js';
+import type { Chat, Draft, Message } from './types.js';
 
 function jsonResponse(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), {
@@ -312,5 +312,148 @@ describe('AppState draft approval', () => {
 		expect(JSON.parse(String(init?.body))).toEqual({ text: 'Yeah, we are still on' });
 		expect(state.draft?.status).toBe('approved');
 		expect(state.outbox[0]?.source).toBe('draft');
+	});
+});
+
+function draftRow(overrides: Partial<Draft> = {}): Draft {
+	return {
+		chat_jid: JID,
+		text: 'Yes, seven works for me.',
+		status: 'ready',
+		generated_at: 201,
+		provider: 'fake',
+		basis_msg_id: 'a1',
+		original_text: 'Yes, seven works for me.',
+		...overrides
+	};
+}
+
+describe('AppState draft refinement', () => {
+	afterEach(() => vi.restoreAllMocks());
+
+	it('posts the intent and preview, updates the active draft, and never touches the outbox', async () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		state.draft = draftRow();
+		const fetchMock = vi
+			.spyOn(globalThis, 'fetch')
+			.mockResolvedValue(jsonResponse(draftRow({ text: 'Seven works.' })));
+
+		const updated = await state.refineDraft('shorter', 'Yes, seven works for me.');
+
+		expect(updated).not.toBeNull();
+		expect(updated?.text).toBe('Seven works.');
+		expect(state.draft?.text).toBe('Seven works.');
+		expect(state.refining).toBe(false);
+		expect(state.refineError).toBeNull();
+		expect(state.outbox).toEqual([]);
+
+		const [input, init] = fetchMock.mock.calls[0]!;
+		expect(String(input)).toContain('/chats/maya%40s.whatsapp.net/draft/refine');
+		expect(init?.method).toBe('POST');
+		expect(JSON.parse(String(init?.body))).toEqual({
+			intent: 'shorter',
+			text: 'Yes, seven works for me.'
+		});
+	});
+
+	it('refines the saved draft preview when no editor text is passed', async () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		state.draft = draftRow();
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.endsWith('/draft/refine')) {
+				return jsonResponse(draftRow({ text: 'Shorter saved preview.' }));
+			}
+			throw new Error(`Unexpected request: ${url}`);
+		});
+
+		const updated = await state.refineDraft('shorter');
+
+		expect(updated?.text).toBe('Shorter saved preview.');
+		// The request body omits text when undefined — server uses saved preview.
+		expect(state.draft?.text).toBe('Shorter saved preview.');
+	});
+
+	it('preserves the visible preview and surfaces a recoverable error on a 409', async () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		const original = draftRow();
+		state.draft = original;
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.endsWith('/draft/refine')) {
+				return jsonResponse({ error: 'Draft changed during refinement' }, 409);
+			}
+			if (url.includes('/messages')) return jsonResponse({ items: [] });
+			if (url.endsWith('/draft')) return jsonResponse(original);
+			throw new Error(`Unexpected request: ${url}`);
+		});
+
+		const updated = await state.refineDraft('shorter', 'Edited preview text');
+
+		expect(updated).toBeNull();
+		// The late result is never applied — the prior preview stays.
+		expect(state.draft).toEqual(original);
+		expect(state.refineError).toMatch(/preserved/i);
+		expect(state.refining).toBe(false);
+	});
+
+	it('preserves the prior preview on provider failure and surfaces a recoverable error', async () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		const original = draftRow();
+		state.draft = original;
+		vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+			jsonResponse({ error: 'Draft refinement failed', code: 'unavailable' }, 502)
+		);
+
+		const updated = await state.refineDraft('longer', 'Edited preview');
+
+		expect(updated).toBeNull();
+		expect(state.draft).toEqual(original);
+		expect(state.refineError).toBeTruthy();
+		expect(state.refining).toBe(false);
+	});
+
+	it('ignores a late refinement result for a chat that is no longer selected', async () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		state.draft = draftRow();
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.endsWith('/draft/refine')) {
+				// Simulate the owner switching chats while the provider was running.
+				state.selectedJid = 'sam@s.whatsapp.net';
+				return jsonResponse(draftRow({ text: 'Late result.' }));
+			}
+			throw new Error(`Unexpected request: ${url}`);
+		});
+
+		const updated = await state.refineDraft('shorter', 'Preview');
+
+		// The result is returned to the caller, but the active draft for the
+		// now-deselected chat is not forced onto the new selection.
+		expect(updated?.text).toBe('Late result.');
+		expect(state.draft?.text).toBe('Yes, seven works for me.');
+	});
+
+	it('clears the refine error on chat switch', async () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		state.refineError = 'Previous failure';
+		state.chats = [chatRow({ jid: 'sam@s.whatsapp.net', unread: 0 })];
+
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.includes('/messages')) return jsonResponse({ items: [] });
+			if (url.endsWith('/draft')) return jsonResponse({ error: 'Not found' }, 404);
+			if (url.endsWith('/read')) return jsonResponse(chatRow({ unread: 0, jid: 'sam@s.whatsapp.net' }));
+			throw new Error(`Unexpected request: ${url}`);
+		});
+
+		await state.openChat('sam@s.whatsapp.net');
+		expect(state.refineError).toBeNull();
 	});
 });

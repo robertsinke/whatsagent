@@ -100,6 +100,20 @@ export type DraftStatus =
 	| 'approved'
 	| 'sent';
 
+/**
+ * Closed set of preview-only draft refinement intents. These mirror the
+ * server's canonical wire values exactly (`server/providers/provider.ts`):
+ * `regenerate`, `shorter`, `longer`, `more_formal`, `less_formal`. The client
+ * must not invent additional intents — the server rejects anything outside
+ * this set before invoking the provider.
+ */
+export type RefinementIntent =
+	| 'regenerate'
+	| 'shorter'
+	| 'longer'
+	| 'more_formal'
+	| 'less_formal';
+
 export type Draft = {
 	chat_jid: string;
 	text: string;

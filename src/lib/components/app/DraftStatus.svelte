@@ -4,27 +4,36 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { animate, spring } from 'motion';
 	import { AlertTriangle, Check, Pencil, RotateCw, X } from '@lucide/svelte';
-	import type { Draft } from '$lib/client/types.js';
+	import type { Draft, RefinementIntent } from '$lib/client/types.js';
 	import type { StalePrompt } from '$lib/client/state.svelte.js';
-	import { canApprove, draftBadge, isVisibleDraftStatus } from '$lib/client/view.js';
+	import { canApprove, canRefine, draftBadge, isVisibleDraftStatus } from '$lib/client/view.js';
+	import { refineControlsState } from './refine-controls.js';
 
 	let {
 		draft,
 		stalePrompt = null,
 		/** True for 1:1 chats with no draft — the empty-draft hint is only meaningful where the agent is allowed to act. */
 		agentEligible = false,
+		/** True while a preview-only refinement request is in flight. */
+		refining = false,
+		/** Recoverable refinement error; preserved preview stays visible when set. */
+		refineError = null,
 		onapprove,
 		onskip,
 		onconfirmstale,
-		ondismissstale
+		ondismissstale,
+		onrefine
 	}: {
 		draft: Draft | null;
 		stalePrompt?: StalePrompt | null;
 		agentEligible?: boolean;
+		refining?: boolean;
+		refineError?: string | null;
 		onapprove?: (text?: string) => boolean | void | Promise<boolean | void>;
 		onskip?: () => void;
 		onconfirmstale?: (text?: string) => boolean | void | Promise<boolean | void>;
 		ondismissstale?: () => void;
+		onrefine?: (intent: RefinementIntent, text?: string) => Promise<Draft | null>;
 	} = $props();
 
 	const badge = $derived(draft ? draftBadge(draft.status) : null);
@@ -118,6 +127,35 @@
 		ondismissstale?.();
 		if (editing) await closeEditor();
 	}
+
+	/**
+	 * Preview-only refinement. Applies the transform to the unsaved editor text
+	 * when edit mode is open (so the owner sees the change where they are
+	 * typing), otherwise to the saved draft preview. The editor stays open on
+	 * success, failure, and 409 — refinement never closes it or approves. On
+	 * success the textarea is replaced with the transformed text; on failure the
+	 * prior text is preserved.
+	 */
+	async function refine(intent: RefinementIntent) {
+		if (refining || !onrefine) return;
+		const { previewText } = refineControlsState({
+			draft,
+			editing,
+			editedText,
+			refining,
+			approving
+		});
+		if (!previewText) return;
+		const updated = await onrefine(intent, previewText);
+		if (updated && editing) {
+			// Replace the textarea contents with the transformed text and keep
+			// the editor open. The owner can keep editing or approve afterward.
+			editedText = updated.text;
+			await tick();
+			editorEl?.focus();
+			editorEl?.setSelectionRange(updated.text.length, updated.text.length);
+		}
+	}
 </script>
 
 <svelte:window onkeydown={(event) => event.key === 'Escape' && editing && void closeEditor()} />
@@ -168,6 +206,68 @@
 				<p class="draft-text">{visibleDraft.text}</p>
 			{/if}
 
+			{#if canRefine(visibleDraft.status)}
+				<!--
+				  Refinement is preview-only and structurally separate from approval:
+				  this row lives above the approval actions, uses a quieter visual
+				  treatment, and never reaches the outbox, composer send, or memory.
+				  Regenerate is the primary secondary action; shorter/longer and
+				  formality live in a compact group so they do not compete with
+				  Approve & queue for the owner's attention.
+				-->
+				<div class="refine-row" role="group" aria-label="Refine draft preview">
+					<Button
+						size="sm"
+						variant="ghost"
+						class="refine-btn"
+						onclick={() => refine('regenerate')}
+						disabled={refining}
+						title="Generate a fresh reply from current context"
+					>
+						<RotateCw class="size-3.5" />
+						{refining ? 'Refining…' : 'Regenerate'}
+					</Button>
+					<div class="refine-group" role="group" aria-label="Transform draft">
+						<Button
+							size="sm"
+							variant="ghost"
+							class="refine-btn"
+							onclick={() => refine('shorter')}
+							disabled={refining}
+							title="Make the draft shorter"
+						>Shorter</Button>
+						<Button
+							size="sm"
+							variant="ghost"
+							class="refine-btn"
+							onclick={() => refine('longer')}
+							disabled={refining}
+							title="Make the draft longer"
+						>Longer</Button>
+						<Button
+							size="sm"
+							variant="ghost"
+							class="refine-btn"
+							onclick={() => refine('more_formal')}
+							disabled={refining}
+							title="Make the draft more formal"
+						>More formal</Button>
+						<Button
+							size="sm"
+							variant="ghost"
+							class="refine-btn"
+							onclick={() => refine('less_formal')}
+							disabled={refining}
+							title="Make the draft less formal"
+						>Less formal</Button>
+					</div>
+				</div>
+			{/if}
+
+			{#if refineError}
+				<p class="refine-error" role="alert">{refineError}</p>
+			{/if}
+
 			<div class="draft-actions">
 				<Button
 					size="sm"
@@ -211,6 +311,64 @@
 						}
 					}}
 				></textarea>
+				{#if draft && canRefine(draft.status)}
+					<!--
+					  Inside the editor, refinement applies to the unsaved textarea text
+					  and keeps the editor open with the transformed result. The control
+					  row sits above the approval foot so cancel/approve stay reachable
+					  and refinement remains visually subordinate to approval.
+					-->
+					<div class="refine-row editor-refine" role="group" aria-label="Refine draft preview">
+						<Button
+							size="sm"
+							variant="ghost"
+							class="refine-btn"
+							onclick={() => refine('regenerate')}
+							disabled={refining || approving}
+							title="Generate a fresh reply from current context"
+						>
+							<RotateCw class="size-3.5" />
+							{refining ? 'Refining…' : 'Regenerate'}
+						</Button>
+						<div class="refine-group" role="group" aria-label="Transform draft">
+							<Button
+								size="sm"
+								variant="ghost"
+								class="refine-btn"
+								onclick={() => refine('shorter')}
+								disabled={refining || approving}
+								title="Make the draft shorter"
+							>Shorter</Button>
+							<Button
+								size="sm"
+								variant="ghost"
+								class="refine-btn"
+								onclick={() => refine('longer')}
+								disabled={refining || approving}
+								title="Make the draft longer"
+							>Longer</Button>
+							<Button
+								size="sm"
+								variant="ghost"
+								class="refine-btn"
+								onclick={() => refine('more_formal')}
+								disabled={refining || approving}
+								title="Make the draft more formal"
+							>More formal</Button>
+							<Button
+								size="sm"
+								variant="ghost"
+								class="refine-btn"
+								onclick={() => refine('less_formal')}
+								disabled={refining || approving}
+								title="Make the draft less formal"
+							>Less formal</Button>
+						</div>
+					</div>
+				{/if}
+				{#if refineError}
+					<p class="refine-error" role="alert">{refineError}</p>
+				{/if}
 				<div class="editor-foot">
 					<span class="draft-note">Approval queues exactly the text above.</span>
 					<div class="editor-actions">
@@ -300,6 +458,42 @@
 		align-items: center;
 		gap: 0.35rem;
 		flex-wrap: wrap;
+	}
+	/* Refinement is visually subordinate to approval: smaller, ghosted, and
+	   separated by a hairline so it never competes with Approve & queue. It
+	   updates the preview only and never reaches the outbox or memory. */
+	.refine-row {
+		display: flex;
+		align-items: center;
+		gap: 0.3rem;
+		flex-wrap: wrap;
+		padding-top: 0.3rem;
+		border-top: 1px solid var(--hairline-soft);
+	}
+	.refine-group {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.2rem;
+		flex-wrap: wrap;
+	}
+	:global(.refine-btn) {
+		font-size: 0.72rem;
+		color: var(--ink-60);
+		padding: 0.2rem 0.45rem;
+		height: auto;
+		min-height: 1.6rem;
+	}
+	:global(.refine-btn:hover:not(:disabled)) {
+		color: var(--ink-90);
+	}
+	.refine-error {
+		margin: 0;
+		font-size: 0.74rem;
+		color: var(--terracotta);
+	}
+	.editor-refine {
+		border-top: none;
+		padding-top: 0;
 	}
 	/* Opens upward, over the conversation: the draft card sits directly above the
 	   composer at the bottom of the pane, so a downward panel would render off

@@ -6,6 +6,7 @@ import {
 	type Draft,
 	type Message,
 	type OutboxRow,
+	type RefinementIntent,
 	type SessionView
 } from './types.js';
 import {
@@ -43,6 +44,19 @@ export class AppState {
 	/** False once a page comes back short — otherwise "load earlier" never ends. */
 	hasMoreMessages = $state(false);
 	stalePrompt = $state<StalePrompt | null>(null);
+	/**
+	 * True while a preview-only draft refinement request is in flight. The
+	 * editor stays open across success, failure, and 409; this flag only
+	 * disables conflicting refinement actions and surfaces local progress.
+	 */
+	refining = $state(false);
+	/**
+	 * Recoverable refinement error message. Set on provider failure or a 409
+	 * (draft changed during refinement); cleared on the next successful
+	 * refinement or when the owner switches chats. The prior preview is always
+	 * preserved — refinement never destroys a good draft.
+	 */
+	refineError = $state<string | null>(null);
 	/**
 	 * One "New" marker for the open chat, derived from the unread count captured
 	 * *before* `markRead` zeroed it. Marking read must not erase the boundary the
@@ -119,6 +133,10 @@ export class AppState {
 		if (chatChanged) this.replyTarget = null;
 		this.loadingMessages = true;
 		this.stalePrompt = null;
+		// Refinement error is chat-scoped: a new selection (or same-chat reload)
+		// clears it. `refining` is left untouched — an in-flight request is not
+		// canceled by a UI reload, and its finally-block clears the flag.
+		if (chatChanged) this.refineError = null;
 		if (!options.preserveDeepenStatus) {
 			this.deepenStatus = { kind: 'idle', at: null };
 		}
@@ -254,6 +272,51 @@ export class AppState {
 			this.#mergeChat(chat);
 		} catch (err) {
 			this.error = describeError(err);
+		}
+	}
+
+	/**
+	 * Preview-only draft refinement. Returns the updated draft on success so the
+	 * editor can replace its textarea contents with the transformed text; returns
+	 * `null` on failure or 409 so the caller preserves the visible preview.
+	 *
+	 * On a 409 (draft or inbound history changed while the provider was running)
+	 * the late result is never applied — the active draft is reloaded from the
+	 * server and a recoverable error is surfaced. On any other failure the prior
+	 * draft is left untouched and a recoverable error is surfaced. Either way the
+	 * editor stays open and the owner can retry or edit manually.
+	 *
+	 * This never approves, enqueues an outbox row, writes memory feedback, or
+	 * wakes the pacer (R5/R6).
+	 */
+	async refineDraft(intent: RefinementIntent, text?: string): Promise<Draft | null> {
+		const jid = this.selectedJid;
+		if (!jid || this.refining) return null;
+		this.refining = true;
+		this.refineError = null;
+		try {
+			const draft = await api.refineDraft(jid, intent, text);
+			// A chat switch or stale prompt during refinement means the visible
+			// draft is no longer what the owner is looking at; keep the server
+			// state in sync but do not force a stale editor open.
+			if (this.selectedJid === jid) this.draft = draft;
+			return draft;
+		} catch (err) {
+			if (err instanceof ApiError && err.status === 409) {
+				// The draft or inbound history changed while the provider was
+				// running. Preserve the visible preview and reload current state
+				// rather than applying the late result.
+				this.refineError = 'Draft changed while refining — your text is preserved. Try again.';
+				await this.openChat(jid, { markRead: false });
+			} else if (err instanceof ApiError && err.status === 404) {
+				this.refineError = 'Draft is no longer available.';
+				await this.openChat(jid, { markRead: false });
+			} else {
+				this.refineError = describeError(err);
+			}
+			return null;
+		} finally {
+			this.refining = false;
 		}
 	}
 

@@ -4,6 +4,7 @@ import {
 	type Draft,
 	type Message,
 	type OutboxRow,
+	type RefinementIntent,
 	type SessionView
 } from './types.js';
 
@@ -123,6 +124,23 @@ export const api = {
 	skipDraft: (jid: string) =>
 		request<{ ok: true; chat: Chat }>(`/chats/${encodeURIComponent(jid)}/draft/skip`, {
 			method: 'POST'
+		}),
+
+	/**
+	 * Preview-only draft refinement. Returns the updated draft; never enqueues
+	 * an outbox row, writes memory feedback, or wakes the pacer. A 409 means the
+	 * draft or inbound history changed while the provider was running — the
+	 * caller must preserve the visible preview and reload current state rather
+	 * than applying the late result. `text` is the displayed editor text when
+	 * edit mode is open; omit it to refine the saved draft preview.
+	 */
+	refineDraft: (jid: string, intent: RefinementIntent, text?: string) =>
+		request<Draft>(`/chats/${encodeURIComponent(jid)}/draft/refine`, {
+			method: 'POST',
+			body: JSON.stringify({
+				intent,
+				...(text === undefined ? {} : { text })
+			})
 		}),
 
 	outbox: () => request<{ items: OutboxRow[] }>('/outbox').then((r) => r.items),

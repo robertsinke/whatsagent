@@ -295,6 +295,18 @@ export function canApprove(status: DraftStatus): boolean {
 	return status === 'ready';
 }
 
+/**
+ * A draft may only be preview-refined from a state the server still considers
+ * current. Mirrors the server's `REFINABLE_STATUSES` (`server/agent/refiner.ts`)
+ * intersected with the statuses the shell actually renders as a visible draft.
+ * `failed` is excluded — a failed draft has no valid preview to transform, and
+ * `drafting` is excluded because there is no text yet. The server is the final
+ * authority; this helper only controls whether the controls render.
+ */
+export function canRefine(status: DraftStatus): boolean {
+	return status === 'ready' || status === 'stale';
+}
+
 /** Once approval hands a reply to the outbox, the draft card has finished its job. */
 export function isVisibleDraftStatus(status: DraftStatus): boolean {
 	return status === 'drafting' || status === 'ready' || status === 'stale' || status === 'failed';

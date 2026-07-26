@@ -114,10 +114,13 @@
 								draft={app.draft}
 								stalePrompt={app.stalePrompt}
 								agentEligible={app.selectedChat.kind === '1:1'}
+								refining={app.refining}
+								refineError={app.refineError}
 								onapprove={(text) => app.approveDraft(text)}
 								onconfirmstale={(text) => app.confirmStaleDraft(text)}
 								onskip={() => app.skipDraft()}
 								ondismissstale={() => (app.stalePrompt = null)}
+								onrefine={(intent, text) => app.refineDraft(intent, text)}
 							/>
 							<Composer
 								bind:value={composerValue}
