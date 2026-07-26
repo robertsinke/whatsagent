@@ -375,6 +375,43 @@ describe('GET /api/chats/:jid/messages (structured views)', () => {
 	});
 });
 
+describe('GET /api/chats/:jid/messages (quote subtypes)', () => {
+	// The live DB holds zero stored quotes — these assertions are the only
+	// evidence the API surfaces a typed QuoteView per stored subtype.
+	it('projects quote type and text for each stored subtype', async () => {
+		await startTestApp();
+		seedMessageFidelityFixture(db!);
+
+		const response = await api('/api/chats/quotes%40g.us/messages?limit=50');
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as {
+			items: Array<{ id: string; quote: { type: string; text: string | null } | null }>;
+		};
+		const byId = new Map(body.items.map((m) => [m.id, m.quote]));
+
+		expect(byId.get('quote-image')).toMatchObject({ type: 'image', text: 'Sunset at the pier' });
+		expect(byId.get('quote-video')).toMatchObject({ type: 'video', text: 'Clip from the gig' });
+		expect(byId.get('quote-audio')).toMatchObject({ type: 'audio', text: null });
+		expect(byId.get('quote-document')).toMatchObject({ type: 'document', text: 'Contract' });
+		expect(byId.get('quote-sticker')).toMatchObject({ type: 'sticker', text: null });
+		expect(byId.get('quote-location')).toMatchObject({ type: 'location', text: 'Amsterdam Office' });
+		expect(byId.get('quote-contact')).toMatchObject({ type: 'contact', text: 'Sara Patel' });
+		expect(byId.get('quote-live-location')).toMatchObject({
+			type: 'location',
+			text: 'On my way'
+		});
+		expect(byId.get('quote-contacts-array')).toMatchObject({
+			type: 'contact',
+			text: 'Two contacts'
+		});
+		// Unrecognized subtype still gets a typed quote — never dropped.
+		expect(byId.get('quote-unrecognized')).toMatchObject({
+			type: 'pollCreation',
+			text: null
+		});
+	});
+});
+
 describe('Origin/Host CSRF defense', () => {
 	it('rejects mutating REST with a foreign Origin', async () => {
 		await startTestApp();

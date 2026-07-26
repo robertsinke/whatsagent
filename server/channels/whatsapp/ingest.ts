@@ -162,6 +162,61 @@ type QuoteSnapshot = {
 	text: string | null;
 };
 
+/**
+ * Quote-preview text. Richer than {@link extractMessageText}: a quote preview
+ * must describe subtypes that have no caption (location, contact, sticker,
+ * audio) so the inset reads as something more useful than "Message". This is
+ * quote-only — the main message `text` column keeps the caption-only contract
+ * so media bubbles don't suddenly render a location name as body text.
+ */
+function extractQuoteText(quoted: WAMessage): string | null {
+	const content = extractMessageContent(quoted.message);
+	if (!content) return null;
+
+	// Captions / conversation first — these already read well as-is.
+	const caption =
+		(typeof content.conversation === 'string' && content.conversation.length > 0
+			? content.conversation
+			: null) ??
+		content.extendedTextMessage?.text ??
+		content.imageMessage?.caption ??
+		content.videoMessage?.caption ??
+		content.documentMessage?.caption ??
+		content.reactionMessage?.text ??
+		null;
+	if (caption) return caption;
+
+	// Subtypes with no caption: surface a descriptive label.
+	if (content.locationMessage) {
+		const name = content.locationMessage.name?.trim();
+		if (name) return name;
+		const address = content.locationMessage.address?.trim();
+		if (address) return address;
+		return null;
+	}
+	if (content.liveLocationMessage) {
+		const caption2 = content.liveLocationMessage.caption?.trim();
+		return caption2 ? caption2 : null;
+	}
+	if (content.contactMessage) {
+		const name = content.contactMessage.displayName?.trim();
+		return name ? name : null;
+	}
+	if (content.contactsArrayMessage) {
+		const name = content.contactsArrayMessage.displayName?.trim();
+		return name ? name : null;
+	}
+	if (content.documentMessage) {
+		// A document with no caption still has a title/filename worth previewing.
+		const title = content.documentMessage.title?.trim();
+		if (title) return title;
+		const fileName = content.documentMessage.fileName?.trim();
+		if (fileName) return fileName;
+		return null;
+	}
+	return null;
+}
+
 function messageContextInfo(message: proto.IMessage | null | undefined): proto.IContextInfo | undefined {
 	const content = extractMessageContent(message);
 	const type = getContentType(content);
@@ -179,7 +234,7 @@ function quoteSnapshot(msg: WAMessage): QuoteSnapshot | null {
 		targetId: context.stanzaId,
 		sender: context.participant ?? null,
 		type: classifyMessageType(quoted),
-		text: extractMessageText(quoted)
+		text: extractQuoteText(quoted)
 	};
 }
 

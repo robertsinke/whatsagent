@@ -437,6 +437,8 @@ export type QuotePreview = {
 	resolved: boolean;
 	/** Full sentence for assistive technology. */
 	label: string;
+	/** Subtype label for icon rendering; `other` covers unrecognized subtypes. */
+	kind: QuoteKind;
 };
 
 /**
@@ -447,18 +449,78 @@ export type QuotePreview = {
  */
 export function quotePreview(quote: QuoteView): QuotePreview {
 	const sender = senderLabel(quote.sender);
+	const kind = quoteKind(quote.type);
 	const text = quote.text?.trim();
-	const body = text
-		? text
-		: mediaKind(quote.type) !== 'other'
-			? mediaNoun(quote.type)
-			: quote.resolved
-				? 'Message'
-				: 'Original message unavailable';
+	const body = text ?? quoteFallbackBody(quote, kind);
 	const label = quote.resolved
 		? `Replying to ${sender}: ${body}`
 		: `Replying to ${sender}: ${body} (original message not loaded)`;
-	return { sender, body, resolved: quote.resolved, label };
+	return { sender, body, resolved: quote.resolved, label, kind };
+}
+
+/**
+ * The subtype label used to pick an icon and a noun fallback. Wider than
+ * {@link mediaKind} because a quote can target location/contact/poll subtypes
+ * that the media attachment surface never renders.
+ */
+export type QuoteKind =
+	| 'image'
+	| 'video'
+	| 'audio'
+	| 'document'
+	| 'sticker'
+	| 'location'
+	| 'contact'
+	| 'text'
+	| 'other';
+
+export function quoteKind(type: string): QuoteKind {
+	switch (type) {
+		case 'image':
+		case 'video':
+		case 'audio':
+		case 'document':
+		case 'sticker':
+		case 'location':
+		case 'contact':
+		case 'text':
+			return type;
+		default:
+			return 'other';
+	}
+}
+
+/** Noun for a quote subtype when no preview text is available. */
+export function quoteNoun(kind: QuoteKind): string {
+	switch (kind) {
+		case 'image':
+			return 'Photo';
+		case 'video':
+			return 'Video';
+		case 'audio':
+			return 'Voice message';
+		case 'document':
+			return 'Document';
+		case 'sticker':
+			return 'Sticker';
+		case 'location':
+			return 'Location';
+		case 'contact':
+			return 'Contact';
+		case 'text':
+			return 'Message';
+		default:
+			return 'Message';
+	}
+}
+
+function quoteFallbackBody(quote: QuoteView, kind: QuoteKind): string {
+	// An unresolved target with no snapshot text is the only case that admits
+	// "unavailable" — every resolved subtype gets a meaningful noun.
+	if (kind === 'other') {
+		return quote.resolved ? quote.type : 'Original message unavailable';
+	}
+	return quoteNoun(kind);
 }
 
 export type ReactionChip = {

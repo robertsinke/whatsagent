@@ -130,7 +130,7 @@ describe('messaging-history.set', () => {
 
 		// Full replay remains duplicate-free for messages and reaction actors.
 		handleHistorySet(database, fixture);
-		expect(countMessages(database)).toBe(4);
+		expect(listMessages(database, 'team@g.us')).toHaveLength(4);
 		expect(listMessageReactions(database, 'team@g.us', 'group-target')).toHaveLength(2);
 	});
 
@@ -319,6 +319,133 @@ describe('messaging-history.set', () => {
 		expect(listMessageReactions(database, 'alice@s.whatsapp.net', 'sticker-1')).toMatchObject([
 			{ actor: 'me', emoji: '👍' }
 		]);
+	});
+});
+
+describe('quoted-message subtypes', () => {
+	// The live DB currently holds zero stored quotes — these fixtures are the
+	// only evidence that ingest captures a meaningful preview per subtype.
+	function loadFixture(): HistorySetPayload {
+		return JSON.parse(
+			readFileSync(new URL('./fixtures/message-fidelity.json', import.meta.url), 'utf8')
+		) as HistorySetPayload;
+	}
+
+	it('stores a text caption as the image quote preview', () => {
+		const database = openTempDb();
+		handleHistorySet(database, loadFixture());
+		expect(getMessage(database, 'quote-image')).toMatchObject({
+			quote_target_id: 'target-image',
+			quote_type: 'image',
+			quote_text: 'Sunset at the pier',
+			quote_sender: 'alice@s.whatsapp.net'
+		});
+	});
+
+	it('falls back to no text for an image quote without a caption', () => {
+		const database = openTempDb();
+		handleHistorySet(database, loadFixture());
+		const quote = getMessage(database, 'quote-image-no-caption')!;
+		expect(quote.quote_type).toBe('image');
+		// No caption on the quoted image — the preview body is the UI's noun
+		// fallback ("Photo"), not a fabricated string.
+		expect(quote.quote_text).toBeNull();
+	});
+
+	it('stores a caption as the video quote preview', () => {
+		const database = openTempDb();
+		handleHistorySet(database, loadFixture());
+		expect(getMessage(database, 'quote-video')).toMatchObject({
+			quote_type: 'video',
+			quote_text: 'Clip from the gig'
+		});
+	});
+
+	it('classifies a voice note quote as audio with no fabricated text', () => {
+		const database = openTempDb();
+		handleHistorySet(database, loadFixture());
+		// Audio has no caption field — the UI renders the "Voice message" noun.
+		expect(getMessage(database, 'quote-audio')).toMatchObject({
+			quote_type: 'audio',
+			quote_text: null
+		});
+	});
+
+	it('falls back to the document title for a document quote without a caption', () => {
+		const database = openTempDb();
+		handleHistorySet(database, loadFixture());
+		expect(getMessage(database, 'quote-document')).toMatchObject({
+			quote_type: 'document',
+			quote_text: 'Contract'
+		});
+	});
+
+	it('classifies a sticker quote with no fabricated text', () => {
+		const database = openTempDb();
+		handleHistorySet(database, loadFixture());
+		expect(getMessage(database, 'quote-sticker')).toMatchObject({
+			quote_type: 'sticker',
+			quote_text: null
+		});
+	});
+
+	it('uses the location name as the location quote preview', () => {
+		const database = openTempDb();
+		handleHistorySet(database, loadFixture());
+		expect(getMessage(database, 'quote-location')).toMatchObject({
+			quote_type: 'location',
+			quote_text: 'Amsterdam Office'
+		});
+	});
+
+	it('uses the contact display name as the contact quote preview', () => {
+		const database = openTempDb();
+		handleHistorySet(database, loadFixture());
+		expect(getMessage(database, 'quote-contact')).toMatchObject({
+			quote_type: 'contact',
+			quote_text: 'Sara Patel'
+		});
+	});
+
+	it('uses the caption as the live-location quote preview', () => {
+		const database = openTempDb();
+		handleHistorySet(database, loadFixture());
+		expect(getMessage(database, 'quote-live-location')).toMatchObject({
+			quote_type: 'location',
+			quote_text: 'On my way'
+		});
+	});
+
+	it('uses the array display name as the contacts-array quote preview', () => {
+		const database = openTempDb();
+		handleHistorySet(database, loadFixture());
+		expect(getMessage(database, 'quote-contacts-array')).toMatchObject({
+			quote_type: 'contact',
+			quote_text: 'Two contacts'
+		});
+	});
+
+	it('still classifies an unrecognized quote subtype without crashing', () => {
+		const database = openTempDb();
+		handleHistorySet(database, loadFixture());
+		// pollCreation is not a subtype we render specially, but ingest must
+		// still store a typed quote rather than dropping it.
+		const quote = getMessage(database, 'quote-unrecognized')!;
+		expect(quote.quote_target_id).toBe('missing-unknown');
+		expect(quote.quote_type).toBe('pollCreation');
+		expect(quote.quote_text).toBeNull();
+	});
+
+	it('resolves the quote type and text against the stored target message', () => {
+		const database = openTempDb();
+		handleHistorySet(database, loadFixture());
+		// The target image is in local history, so the server-side toQuoteView
+		// resolves the live type/text over the persisted snapshot.
+		const target = getMessage(database, 'target-image')!;
+		expect(target.type).toBe('image');
+		// quote_text from the snapshot matches the target's text (caption).
+		const quote = getMessage(database, 'quote-image')!;
+		expect(quote.quote_text).toBe(target.text);
 	});
 });
 

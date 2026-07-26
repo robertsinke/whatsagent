@@ -1,4 +1,14 @@
 <script lang="ts">
+	import {
+		Contact as ContactIcon,
+		FileText as DocumentIcon,
+		Image as ImageIcon,
+		MapPin as LocationIcon,
+		Mic as AudioIcon,
+		Sticker as StickerIcon,
+		Video as VideoIcon,
+		type LucideIcon
+	} from '@lucide/svelte';
 	import Message from '$lib/components/ai-elements/message.svelte';
 	import MessageContent from '$lib/components/ai-elements/message-content.svelte';
 	import MediaAttachment from './MediaAttachment.svelte';
@@ -20,7 +30,20 @@
 		onreply?: (message: ChatMessage) => void;
 	} = $props();
 
+	// Per-subtype preview icon. `text` and unrecognized subtypes render no icon —
+	// the body already carries the words.
+	const QUOTE_ICONS: Partial<Record<string, LucideIcon>> = {
+		image: ImageIcon,
+		video: VideoIcon,
+		audio: AudioIcon,
+		document: DocumentIcon,
+		sticker: StickerIcon,
+		location: LocationIcon,
+		contact: ContactIcon
+	};
+
 	const quote = $derived(message.quote ? quotePreview(message.quote) : null);
+	const QuoteIcon = $derived(quote ? QUOTE_ICONS[quote.kind] ?? null : null);
 	const chips = $derived(message.reactions.map(reactionChip));
 </script>
 
@@ -41,7 +64,12 @@
 				aria-label={quote.label}
 			>
 				<span class="quote-sender">{quote.sender}</span>
-				<span class="quote-body">{quote.body}</span>
+				<span class="quote-body">
+					{#if QuoteIcon}
+						<QuoteIcon class="quote-icon" aria-hidden="true" />
+					{/if}
+					<span class="quote-body-text">{quote.body}</span>
+				</span>
 			</div>
 		{/if}
 		{#if message.media}
@@ -121,6 +149,9 @@
 		color: var(--ink-70);
 	}
 	.quote-body {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.25rem;
 		font-size: 0.72rem;
 		color: var(--ink-50);
 		line-height: 1.3;
@@ -131,6 +162,16 @@
 		-webkit-box-orient: vertical;
 		overflow: hidden;
 		overflow-wrap: anywhere;
+	}
+	.quote-body-text {
+		/* Inline-flex inside a -webkit-box clamp needs a block child to clip. */
+		min-width: 0;
+	}
+	:global(.quote-icon) {
+		flex: none;
+		width: 0.85rem;
+		height: 0.85rem;
+		color: var(--ink-50);
 	}
 	.quote-missing .quote-body {
 		font-style: italic;
