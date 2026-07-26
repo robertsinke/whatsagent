@@ -18,6 +18,43 @@ export interface DraftProvider {
 	draft(input: DraftInput): Promise<DraftResult>;
 }
 
+export const refinementIntents = [
+	'regenerate',
+	'shorter',
+	'longer',
+	'more_formal',
+	'less_formal'
+] as const;
+
+export type RefinementIntent = (typeof refinementIntents)[number];
+
+export function isRefinementIntent(value: unknown): value is RefinementIntent {
+	return typeof value === 'string' && refinementIntents.includes(value as RefinementIntent);
+}
+
+const refinementInstructions: Record<RefinementIntent, string> = {
+	regenerate: 'Write a fresh reply from the conversation context. Do not merely paraphrase the current draft.',
+	shorter: 'Make the current draft shorter while preserving its meaning and language.',
+	longer: 'Make the current draft more complete while preserving its meaning and language.',
+	more_formal: 'Make the current draft more formal while preserving its meaning and language.',
+	less_formal: 'Make the current draft less formal while preserving its meaning and language.'
+};
+
+export function buildRefinementInput(
+	conversation: Turn[],
+	intent: RefinementIntent,
+	preview: string
+): DraftInput {
+	return {
+		system:
+			'Refine a reply preview as the owner. Preserve facts, names, commitments, and the conversation language. ' +
+			'Return a non-empty draft result; never return no_reply_needed. ' +
+			refinementInstructions[intent] +
+			`\n\nCurrent draft preview:\n${preview}`,
+		conversation
+	};
+}
+
 export type ProviderErrorCode =
 	| 'invalid_response'
 	| 'process_exit'

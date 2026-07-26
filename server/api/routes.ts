@@ -28,7 +28,9 @@ import {
 } from '../store/outbox.js';
 import { getSetting, listSettings, setSetting } from '../store/settings.js';
 import type { Memory } from '../agent/memory/memory.js';
+import type { RefinementAttempt, RefineDraftRequest } from '../agent/refiner.js';
 import { retainDraftLearning } from '../agent/voice.js';
+import { isRefinementIntent } from '../providers/provider.js';
 import type { ConnectionStatus, EventBus } from './events.js';
 import type { SessionView } from './session.js';
 import {
@@ -66,6 +68,8 @@ export type RoutesDeps = {
 	memory?: Memory;
 	/** Optional channel history deepener for thin voice samples. */
 	deepenHistory?: (chatJid: string, count?: number) => Promise<unknown>;
+	/** Preview-only draft refinement through the configured provider. */
+	refineDraft?: (request: RefineDraftRequest) => Promise<RefinementAttempt>;
 };
 
 const MIME: Record<string, string> = {
@@ -551,6 +555,52 @@ async function handleApi(
 		const draft = getDraft(db, jid)!;
 		events.emit({ type: 'draft-updated', draft });
 		json(res, 200, draft);
+		return;
+	}
+
+	if (rest === 'draft/refine' && method === 'POST') {
+		const body = (await readJsonBody(req)) as { intent?: unknown; text?: unknown } | undefined;
+		if (!isRefinementIntent(body?.intent)) {
+			error(res, 400, 'Invalid refinement intent');
+			return;
+		}
+		if (body.text !== undefined && typeof body.text !== 'string') {
+			error(res, 400, 'Expected text to be a string');
+			return;
+		}
+		if (!deps.refineDraft) {
+			error(res, 503, 'Draft refinement unavailable');
+			return;
+		}
+
+		const result = await deps.refineDraft({
+			chatJid: jid,
+			intent: body.intent,
+			preview: body.text
+		});
+		if (result.kind === 'ready') {
+			json(res, 200, result.draft);
+			return;
+		}
+		if (result.kind === 'not_found') {
+			error(res, 404, 'Draft not found');
+			return;
+		}
+		if (result.kind === 'not_refinable') {
+			error(res, 409, 'Draft is not refinable', { status: result.status });
+			return;
+		}
+		if (result.kind === 'invalid_preview') {
+			error(res, 400, 'Empty draft text');
+			return;
+		}
+		if (result.kind === 'superseded') {
+			error(res, 409, 'Draft changed during refinement');
+			return;
+		}
+		error(res, result.code === 'rate_limit' ? 429 : 502, 'Draft refinement failed', {
+			code: result.code
+		});
 		return;
 	}
 

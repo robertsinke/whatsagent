@@ -13,13 +13,18 @@ import { getMessage, upsertMessage, upsertMessageReaction } from '../store/messa
 import { getOutbox } from '../store/outbox.js';
 import { EventBus } from './events.js';
 import type { Memory } from '../agent/memory/memory.js';
+import type { DraftProvider } from '../providers/provider.js';
 import { handleHistorySet, type HistorySetPayload } from '../channels/whatsapp/ingest.js';
 
 let dataDir: string | undefined;
 let app: App | undefined;
 let db: AppDatabase | undefined;
 
-async function startTestApp(events = new EventBus(), memory?: Memory): Promise<App> {
+async function startTestApp(
+	events = new EventBus(),
+	memory?: Memory,
+	draftProvider?: DraftProvider
+): Promise<App> {
 	dataDir = mkdtempSync(join(tmpdir(), 'whatsagent-api-'));
 	db = openDatabase({ dataDir });
 	app = createApp({
@@ -28,7 +33,9 @@ async function startTestApp(events = new EventBus(), memory?: Memory): Promise<A
 		port: 0,
 		host: '127.0.0.1',
 		staticDir: null,
-		memory
+		memory,
+		draftProvider,
+		providerName: draftProvider ? 'fake' : undefined
 	});
 	await app.start();
 	return app;
@@ -539,6 +546,77 @@ describe('store write → WS event', () => {
 });
 
 describe('drafts', () => {
+	it('refines a preview, emits one sanitized update, and creates no side effects', async () => {
+		const draft = vi.fn(async () => ({ kind: 'draft' as const, text: 'Seven works.' }));
+		const events = new EventBus();
+		const received: unknown[] = [];
+		events.subscribe((event) => received.push(event));
+		const retainEditDelta = vi.fn(async () => undefined);
+		const memory = {
+			retainVoiceObservation: async () => undefined,
+			retainEditDelta,
+			recallStyleFor: async () => null,
+			reflect: async () => undefined
+		} satisfies Memory;
+		await startTestApp(events, memory, { draft });
+		seedNeedsReplyFixture(db!);
+		upsertDraft(db!, {
+			chat_jid: 'alice@s.whatsapp.net',
+			text: 'Yes, seven works for me.',
+			status: 'ready',
+			generated_at: 201,
+			provider: 'fake',
+			basis_msg_id: 'a1'
+		});
+
+		const response = await api('/api/chats/alice%40s.whatsapp.net/draft/refine', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ intent: 'shorter', text: 'Edited preview' })
+		});
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			text: 'Seven works.',
+			basis_msg_id: 'a1',
+			status: 'ready'
+		});
+		expect(draft).toHaveBeenCalledOnce();
+		expect(received).toEqual([
+			expect.objectContaining({
+				type: 'draft-updated',
+				draft: expect.objectContaining({ text: 'Seven works.', basis_msg_id: 'a1' })
+			})
+		]);
+		expect(JSON.stringify(received)).not.toContain('Current draft preview');
+		expect((db!.prepare('SELECT COUNT(*) AS count FROM outbox').get() as { count: number }).count)
+			.toBe(0);
+		expect(listDraftFeedback(db!, 'alice@s.whatsapp.net')).toEqual([]);
+		expect(retainEditDelta).not.toHaveBeenCalled();
+	});
+
+	it('rejects an invalid refinement intent before invoking the provider', async () => {
+		const draft = vi.fn(async () => ({ kind: 'draft' as const, text: 'Unused' }));
+		await startTestApp(new EventBus(), undefined, { draft });
+		seedNeedsReplyFixture(db!);
+		upsertDraft(db!, {
+			chat_jid: 'alice@s.whatsapp.net',
+			text: 'Current draft',
+			status: 'ready',
+			generated_at: 201,
+			basis_msg_id: 'a1'
+		});
+
+		const response = await api('/api/chats/alice%40s.whatsapp.net/draft/refine', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ intent: 'friendlier' })
+		});
+
+		expect(response.status).toBe(400);
+		expect(draft).not.toHaveBeenCalled();
+	});
+
 	it('allows only one of two concurrent approvals to enqueue', async () => {
 		await startTestApp();
 		upsertChat(db!, {
