@@ -143,6 +143,29 @@ describe('voice mental models', () => {
 		}
 	});
 
+	/**
+	 * Voice bootstrap emits one observation per 1:1 chat per language across the entire
+	 * message table. A per-chat model created from that path would mean one background
+	 * LLM synthesis per chat on first boot — so only an edit or a skip creates one.
+	 */
+	it('creates no per-chat model from voice bootstrap, however many chats it samples', async () => {
+		const client = fakeClient();
+		const memory = new HindsightMemory({ dataDir: tempDataDir(), client, fetchImpl: okFetch });
+
+		for (let i = 0; i < 50; i++) {
+			await memory.retainVoiceObservation({
+				chatJid: `3161000${i}@s.whatsapp.net`, language: 'nl', text: 'ja prima'
+			});
+		}
+		await memory.reflect();
+
+		expect(client.created.map((model) => model.id)).toEqual(['voice-global']);
+
+		// One edit is the demand signal that does create the contact's document.
+		await memory.retainEditDelta({ chatJid: chat.jid, draft: 'Hi there!', final: 'Hi', skipped: false });
+		expect(client.created.map((model) => model.id)).toContain(`voice-${voiceFileStem(chat.jid)}`);
+	});
+
 	it('sets refresh_cron over raw REST and never leaves refresh_after_consolidation on', async () => {
 		const patches: Array<{ url: string; body: Record<string, unknown> }> = [];
 		const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {

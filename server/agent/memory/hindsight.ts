@@ -182,7 +182,11 @@ export class HindsightMemory implements Memory {
 			documentId: `voice:${observation.chatJid}:${observation.language ?? 'und'}`,
 			updateMode: 'replace'
 		});
-		await this.#ensureChatModel(observation.chatJid);
+		// Deliberately no per-chat model here. `bootstrapOwnerVoice` emits one observation
+		// per 1:1 chat per language over the whole message table — hundreds of them — so
+		// ensuring a model from this path would fire hundreds of background syntheses on
+		// first boot. The memory still carries `chat:<jid>` and `voice`, so it feeds the
+		// global model at once and the per-chat model the moment an edit or skip creates one.
 	}
 
 	async retainEditDelta(delta: EditDelta): Promise<void> {
