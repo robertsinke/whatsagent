@@ -4,6 +4,7 @@ import { api } from './api.js';
 import {
 	canApprove,
 	deepenStatusView,
+	deriveUnreadBoundary,
 	draftBadge,
 	filterChats,
 	formatBytes,
@@ -15,7 +16,8 @@ import {
 	sessionBanner,
 	syncDetail,
 	tabCounts,
-	toChatRow
+	toChatRow,
+	unreadBoundaryLabel
 } from './view.js';
 
 function chat(overrides: Partial<Chat> = {}): Chat {
@@ -256,6 +258,69 @@ describe('message merge', () => {
 	it('de-duplicates by id and orders oldest-first', () => {
 		const merged = mergeMessages([message('b', 2), message('a', 1)], [message('b', 2), message('c', 3)]);
 		expect(merged.map((m) => m.id)).toEqual(['a', 'b', 'c']);
+	});
+});
+
+describe('unread boundary', () => {
+	const line = (id: string, ts: number, fromMe = false): Message => ({
+		id,
+		chat_jid: 'alice@s.whatsapp.net',
+		channel: 'whatsapp',
+		from_me: fromMe,
+		sender: null,
+		ts,
+		type: 'text',
+		text: id,
+		media: null
+	});
+
+	const thread = [
+		line('i1', 1),
+		line('o1', 2, true),
+		line('i2', 3),
+		line('i3', 4),
+		line('i4', 5)
+	];
+
+	it('has no boundary in a fully read chat', () => {
+		expect(deriveUnreadBoundary(thread, 0)).toBeNull();
+	});
+
+	it('marks the first of N unread inbound messages, ignoring own messages', () => {
+		expect(deriveUnreadBoundary(thread, 2)).toEqual({
+			firstUnreadId: 'i3',
+			count: 2,
+			exact: true
+		});
+	});
+
+	it('is exact when the unread count consumes every loaded inbound message', () => {
+		expect(deriveUnreadBoundary(thread, 4)).toEqual({
+			firstUnreadId: 'i1',
+			count: 4,
+			exact: true
+		});
+	});
+
+	it('falls back to the oldest loaded inbound message when unread exceeds the page', () => {
+		expect(deriveUnreadBoundary(thread, 9)).toEqual({
+			firstUnreadId: 'i1',
+			count: 9,
+			exact: false
+		});
+	});
+
+	it('has no boundary when nothing inbound is loaded yet', () => {
+		expect(deriveUnreadBoundary([line('o1', 1, true)], 3)).toBeNull();
+	});
+
+	it('labels an approximate boundary honestly', () => {
+		expect(unreadBoundaryLabel({ firstUnreadId: 'i3', count: 1, exact: true })).toBe(
+			'1 unread message'
+		);
+		expect(unreadBoundaryLabel({ firstUnreadId: 'i1', count: 9, exact: false })).toContain(
+			'not loaded yet'
+		);
 	});
 });
 

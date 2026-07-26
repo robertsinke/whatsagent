@@ -8,7 +8,7 @@ import {
 	type OutboxRow,
 	type SessionView
 } from './types.js';
-import { mergeMessages } from './view.js';
+import { deriveUnreadBoundary, mergeMessages, type UnreadBoundary } from './view.js';
 
 const PAGE_SIZE = 60;
 
@@ -37,6 +37,13 @@ export class AppState {
 	/** False once a page comes back short — otherwise "load earlier" never ends. */
 	hasMoreMessages = $state(false);
 	stalePrompt = $state<StalePrompt | null>(null);
+	/**
+	 * One "New" marker for the open chat, derived from the unread count captured
+	 * *before* `markRead` zeroed it. Marking read must not erase the boundary the
+	 * owner is still reading against, so this is latched, not reactive: it is
+	 * recomputed only when a chat opens and when older pages are prepended.
+	 */
+	unreadBoundary = $state<UnreadBoundary | null>(null);
 	error = $state<string | null>(null);
 	/**
 	 * Owner-triggered history-deepen status per selected chat. `idle` | `loading`
@@ -50,6 +57,8 @@ export class AppState {
 
 	#realtime: Realtime | undefined;
 	#conversationEpoch = 0;
+	/** Server unread count at the moment this chat was opened. */
+	#unreadAtOpen = 0;
 
 	get connected(): boolean {
 		return this.#realtime?.connected ?? false;
@@ -95,6 +104,11 @@ export class AppState {
 		options: { markRead?: boolean; preserveDeepenStatus?: boolean } = {}
 	): Promise<void> {
 		const epoch = ++this.#conversationEpoch;
+		// A same-chat reopen (refresh, deepen, post-409 reload) must not restate the
+		// unread snapshot — by then the chat is already read and the count is 0.
+		const chatChanged = this.selectedJid !== jid;
+		const resnapshotUnread = chatChanged || options.markRead !== false;
+		const unreadBeforeOpen = this.chats.find((c) => c.jid === jid)?.unread ?? 0;
 		this.selectedJid = jid;
 		this.loadingMessages = true;
 		this.stalePrompt = null;
@@ -106,6 +120,10 @@ export class AppState {
 			if (epoch !== this.#conversationEpoch || this.selectedJid !== jid) return;
 			this.messages = mergeMessages([], messages);
 			this.hasMoreMessages = messages.length >= PAGE_SIZE;
+			if (resnapshotUnread) {
+				this.#unreadAtOpen = unreadBeforeOpen;
+				this.unreadBoundary = deriveUnreadBoundary(this.messages, unreadBeforeOpen);
+			}
 			const draft = await api.draft(jid).catch(() => null);
 			if (epoch !== this.#conversationEpoch || this.selectedJid !== jid) return;
 			this.draft = draft;
@@ -134,6 +152,11 @@ export class AppState {
 		if (epoch !== this.#conversationEpoch || this.selectedJid !== jid) return;
 		this.hasMoreMessages = older.length >= PAGE_SIZE;
 		this.messages = mergeMessages(this.messages, older);
+		// A prepend is the only event that can sharpen an approximate boundary:
+		// once it is exact it stays put, so the marker never moves under the reader.
+		if (this.unreadBoundary && !this.unreadBoundary.exact) {
+			this.unreadBoundary = deriveUnreadBoundary(this.messages, this.#unreadAtOpen);
+		}
 	}
 
 	/** Composer send — goes to the outbox, never to WhatsApp directly (R9). */

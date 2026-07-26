@@ -98,9 +98,11 @@
 						</header>
 
 						<ConversationPane
+							chatJid={app.selectedChat.jid}
 							messages={app.messages}
 							loading={app.loadingMessages}
 							hasMore={app.hasMoreMessages}
+							unreadBoundary={app.unreadBoundary}
 							onloadolder={() => app.loadOlder()}
 							onloadmedia={(id) => app.loadMedia(id)}
 						/>
@@ -152,6 +154,8 @@
 		display: flex;
 		flex-direction: column;
 		height: 100vh;
+		/* dvh keeps the composer reachable when mobile browser chrome collapses. */
+		height: 100dvh;
 		min-height: 0;
 		padding: 0.6rem;
 		gap: 0.5rem;
@@ -206,6 +210,7 @@
 		margin-left: 0.3rem;
 	}
 	.conv-head {
+		flex: none;
 		display: flex;
 		align-items: center;
 		gap: 0.55rem;
@@ -233,7 +238,10 @@
 		display: inline-flex;
 		align-items: center;
 	}
+	/* Fixed flex child below the scroll viewport: the conversation absorbs all
+	   spare height, so the composer stays on screen at any viewport height. */
 	.conv-foot {
+		flex: none;
 		display: flex;
 		flex-direction: column;
 		gap: 0.4rem;
