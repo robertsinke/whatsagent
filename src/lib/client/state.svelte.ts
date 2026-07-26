@@ -76,6 +76,15 @@ export class AppState {
 		kind: 'idle',
 		at: null
 	});
+	/**
+	 * U5 — jump-to-quote signal. Set by `jumpToQuotedMessage` and consumed by
+	 * the conversation stream, which scrolls to the target id and briefly
+	 * highlights it. `nonce` disambiguates repeated jumps to the same id so a
+	 * second click still re-fires the effect. `pending` is true while an
+	 * off-page fetch is in flight so the stream knows the target is on its way
+	 * (it ignores stale signals for a chat that was switched away mid-fetch).
+	 */
+	jumpTarget = $state<{ id: string; nonce: number } | null>(null);
 
 	#realtime: Realtime | undefined;
 	#conversationEpoch = 0;
@@ -142,6 +151,7 @@ export class AppState {
 		const cursorBeforeOpen = chatBeforeOpen?.last_read_msg_id ?? null;
 		this.selectedJid = jid;
 		if (chatChanged) this.replyTarget = null;
+		if (chatChanged) this.jumpTarget = null;
 		this.loadingMessages = true;
 		this.stalePrompt = null;
 		// Refinement error is chat-scoped: a new selection (or same-chat reload)
@@ -201,6 +211,57 @@ export class AppState {
 				? deriveUnreadBoundaryFromCursor(this.messages, this.#cursorAtOpen, this.#unreadAtOpen)
 				: deriveUnreadBoundary(this.messages, this.#unreadAtOpen);
 		}
+  }
+
+	/**
+	 * U5 — jump to a quoted message's target. If the target is on the loaded
+	 * page, this just signals the stream to scroll to it. If it is off-page, a
+	 * focused page is fetched around the target and merged into the loaded
+	 * messages (a prepend when the target is older than the loaded window, an
+	 * append when newer — but in practice a quote target is almost always
+	 * older). The merge produces the same prepend shape `loadOlder` does, so
+	 * the W2-U1 anchor restoration is exercised by the same path: the stream
+	 * captures the anchor, the merge happens, the anchor is restored, and only
+	 * then does the explicit scroll-to-target override it — a navigation, not a
+	 * yank. A target that no longer exists degrades to a no-op: the focused
+	 * fetch returns an empty page and no signal is set, so the quote inset's
+	 * existing "original not loaded" rendering stays honest without a crash.
+	 */
+	async jumpToQuotedMessage(targetId: string): Promise<void> {
+		const jid = this.selectedJid;
+		if (!jid) return;
+		// In-page: the target is already loaded — just signal the stream.
+		if (this.messages.some((m) => m.id === targetId)) {
+			this.jumpTarget = { id: targetId, nonce: this.#nextJumpNonce() };
+			return;
+		}
+		// Off-page: fetch a page centered on the target. The epoch guards a chat
+		// switch (or reload) that happens while the fetch is in flight — a late
+		// merge for a chat the owner already left must not land.
+		const epoch = this.#conversationEpoch;
+		try {
+			const focused = await api.messages(jid, { limit: PAGE_SIZE, focusMsgId: targetId });
+			if (epoch !== this.#conversationEpoch || this.selectedJid !== jid) return;
+			// Unknown / cross-chat target → empty page. Degrade to a no-op rather
+			// than signalling a scroll to a message that will never render.
+			if (focused.length === 0) return;
+			// Merge so existing loaded context is preserved. This is the prepend
+			// that exercises anchor restoration; the stream captures the anchor
+			// via the `grew`-path effect, restores it, and then the jump signal
+			// (set below) drives the explicit scroll to the target.
+			this.messages = mergeMessages(this.messages, focused);
+			// The focused page may have revealed older history than the loaded
+			// window's previous floor — keep `hasMoreMessages` honest.
+			this.hasMoreMessages = true;
+			this.jumpTarget = { id: targetId, nonce: this.#nextJumpNonce() };
+		} catch (err) {
+			this.error = describeError(err);
+		}
+	}
+
+	#jumpNonce = 0;
+	#nextJumpNonce(): number {
+		return ++this.#jumpNonce;
 	}
 
 	/** Composer send — goes to the outbox, never to WhatsApp directly (R9). */

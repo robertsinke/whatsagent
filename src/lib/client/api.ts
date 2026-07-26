@@ -56,11 +56,15 @@ export const api = {
 
 	chat: (jid: string) => request<Chat>(`/chats/${encodeURIComponent(jid)}`),
 
-	messages: (jid: string, options: { limit?: number; beforeTs?: number; beforeId?: string } = {}) => {
+	messages: (
+		jid: string,
+		options: { limit?: number; beforeTs?: number; beforeId?: string; focusMsgId?: string } = {}
+	) => {
 		const params = new URLSearchParams();
 		if (options.limit) params.set('limit', String(options.limit));
 		if (options.beforeTs !== undefined) params.set('beforeTs', String(options.beforeTs));
 		if (options.beforeId) params.set('beforeId', options.beforeId);
+		if (options.focusMsgId) params.set('focusMsgId', options.focusMsgId);
 		const query = params.toString();
 		return request<{ items: Message[] }>(
 			`/chats/${encodeURIComponent(jid)}/messages${query ? `?${query}` : ''}`

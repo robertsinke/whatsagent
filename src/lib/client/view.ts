@@ -479,6 +479,8 @@ export type QuotePreview = {
 	label: string;
 	/** Subtype label for icon rendering; `other` covers unrecognized subtypes. */
 	kind: QuoteKind;
+	/** U5 — id of the quoted message, for jump-to-quote navigation. */
+	targetId: string;
 };
 
 /**
@@ -495,7 +497,7 @@ export function quotePreview(quote: QuoteView): QuotePreview {
 	const label = quote.resolved
 		? `Replying to ${sender}: ${body}`
 		: `Replying to ${sender}: ${body} (original message not loaded)`;
-	return { sender, body, resolved: quote.resolved, label, kind };
+	return { sender, body, resolved: quote.resolved, label, kind, targetId: quote.target_id };
 }
 
 /**

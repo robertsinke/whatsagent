@@ -17,6 +17,7 @@ import {
 	countMessages,
 	listMessageReactions,
 	listMessages,
+	listMessagesPage,
 	upsertMessage,
 	upsertMessageReaction
 } from './messages.js';
@@ -278,6 +279,88 @@ describe('chats + messages', () => {
 			updated_at: 3
 		});
 		expect(listMessageReactions(database, 'team@g.us', 'not-here-yet')).toEqual([]);
+	});
+});
+
+describe('listMessagesPage — centered on a target (U5)', () => {
+	const JID = 'focus@s.whatsapp.net';
+
+	function seedChain(database: AppDatabase, count: number): void {
+		upsertChat(database, { jid: JID, kind: '1:1', last_msg_at: count });
+		for (let i = 1; i <= count; i++) {
+			upsertMessage(database, {
+				id: `m${i}`,
+				chat_jid: JID,
+				from_me: i % 2 === 0,
+				ts: i,
+				text: `msg ${i}`
+			});
+		}
+	}
+
+	it('returns a page centered on the focus target with context on both sides', () => {
+		const database = openTempDb();
+		seedChain(database, 20);
+		// limit 10 → half=5 → 5 older (m5–m9) + target + 5 newer (m11–m15).
+		const page = listMessagesPage(database, JID, { limit: 10, focusMsgId: 'm10' });
+		expect(page.map((m) => m.id)).toEqual([
+			'm5', 'm6', 'm7', 'm8', 'm9', 'm10', 'm11', 'm12', 'm13', 'm14', 'm15'
+		]);
+	});
+
+	it('clamps at the oldest end: fewer older rows, the page just shrinks on that side', () => {
+		const database = openTempDb();
+		seedChain(database, 20);
+		// Target m2: only 1 older (m1) fits the half=5 older window, plus 5 newer.
+		const page = listMessagesPage(database, JID, { limit: 10, focusMsgId: 'm2' });
+		expect(page.map((m) => m.id)).toEqual(['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7']);
+	});
+
+	it('clamps at the newest end: fewer newer rows, the page just shrinks on that side', () => {
+		const database = openTempDb();
+		seedChain(database, 20);
+		// Target m19: 5 older + target + 1 newer (m20).
+		const page = listMessagesPage(database, JID, { limit: 10, focusMsgId: 'm19' });
+		expect(page.map((m) => m.id)).toEqual([
+			'm14', 'm15', 'm16', 'm17', 'm18', 'm19', 'm20'
+		]);
+	});
+
+	it('returns just the target and its older context when it is the newest message', () => {
+		const database = openTempDb();
+		seedChain(database, 20);
+		const page = listMessagesPage(database, JID, { limit: 10, focusMsgId: 'm20' });
+		// m20 is newest: 5 older + target + 0 newer.
+		expect(page.map((m) => m.id)).toEqual(['m15', 'm16', 'm17', 'm18', 'm19', 'm20']);
+	});
+
+	it('returns an empty page for an unknown target (graceful, not a throw)', () => {
+		const database = openTempDb();
+		seedChain(database, 5);
+		expect(listMessagesPage(database, JID, { limit: 10, focusMsgId: 'nope' })).toEqual([]);
+	});
+
+	it('returns an empty page when the target belongs to a different chat', () => {
+		const database = openTempDb();
+		seedChain(database, 5);
+		upsertChat(database, { jid: 'other@s.whatsapp.net', kind: '1:1', last_msg_at: 1 });
+		upsertMessage(database, {
+			id: 'm10',
+			chat_jid: 'other@s.whatsapp.net',
+			from_me: false,
+			ts: 1,
+			text: 'other chat'
+		});
+		// m10 exists but in another chat — must not leak across the chat boundary.
+		expect(listMessagesPage(database, JID, { limit: 10, focusMsgId: 'm10' })).toEqual([]);
+	});
+
+	it('orders oldest-first to match the caller contract the API relies on', () => {
+		const database = openTempDb();
+		seedChain(database, 20);
+		const page = listMessagesPage(database, JID, { limit: 10, focusMsgId: 'm10' });
+		const ts = page.map((m) => m.ts);
+		expect(ts).toEqual([...ts].sort((a, b) => a - b));
 	});
 });
 

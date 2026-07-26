@@ -216,11 +216,27 @@ export type ListMessagesPageOptions = {
 	beforeTs?: number;
 	/** Tie-break when multiple messages share `beforeTs`. */
 	beforeId?: string;
+	/**
+	 * U5 — load a page *centered* on this message id, so an off-page
+	 * jump-to-quote can fetch around its target. Mutually exclusive with
+	 * `beforeTs`/`beforeId`. When the target does not exist in this chat the
+	 * result is empty — the caller must degrade gracefully (the quote inset
+	 * already renders an "original not loaded" state, and a missing target is
+	 * not a crash). The target row is always included and sits near the middle
+	 * of the returned page (older rows before it, newer rows after it, ordered
+	 * oldest-first to match the rest of this module's contract).
+	 */
+	focusMsgId?: string;
 };
 
 /**
  * Newest-first page of messages for a chat (client reverses for display).
  * When `beforeTs` is omitted, returns the latest `limit` messages.
+ *
+ * U5: when `focusMsgId` is set, returns up to `limit` rows centered on the
+ * target — roughly half older, half newer — ordered oldest-first. The target
+ * is always included when it exists in this chat. This is the same paging
+ * mechanism (same table, same ts/id ordering), not a second one.
  */
 export function listMessagesPage(
 	db: AppDatabase,
@@ -230,6 +246,44 @@ export function listMessagesPage(
 	const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
 	const beforeTs = options.beforeTs;
 	const beforeId = options.beforeId;
+	const focusMsgId = options.focusMsgId;
+
+	if (focusMsgId !== undefined) {
+		// A focused page is the union of three slices: the target row, up to
+		// half the page of older rows, and up to half the page of newer rows.
+		// Older/newer split is rounded so the target lands near the middle; the
+		// exact balance is irrelevant to the client, which only needs the target
+		// on screen with context on both sides.
+		const target = db
+			.prepare('SELECT * FROM messages WHERE id = ?')
+			.get(focusMsgId) as MessageRow | undefined;
+		// Unknown target, or a target that belongs to a different chat — the
+		// caller must degrade gracefully. Returning an empty page (rather than
+		// throwing) keeps the off-page jump a no-op instead of a crash, and the
+		// quote inset already renders an "original not loaded" state.
+		if (!target || target.chat_jid !== chatJid) return [];
+		const half = Math.floor(limit / 2);
+		const older = db
+			.prepare(
+				`SELECT * FROM messages
+				 WHERE chat_jid = ?
+				   AND (ts < ? OR (ts = ? AND id < ?))
+				 ORDER BY ts DESC, id DESC
+				 LIMIT ?`
+			)
+			.all(chatJid, target.ts, target.ts, target.id, half) as MessageRow[];
+		const newer = db
+			.prepare(
+				`SELECT * FROM messages
+				 WHERE chat_jid = ?
+				   AND (ts > ? OR (ts = ? AND id > ?))
+				 ORDER BY ts ASC, id ASC
+				 LIMIT ?`
+			)
+			.all(chatJid, target.ts, target.ts, target.id, half) as MessageRow[];
+		// Oldest-first to match the rest of this module's caller contract.
+		return [...older.reverse().map(mapMessage), mapMessage(target), ...newer.map(mapMessage)];
+	}
 
 	let rows: MessageRow[];
 	if (beforeTs !== undefined && beforeId !== undefined) {

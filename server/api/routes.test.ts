@@ -501,6 +501,48 @@ describe('GET /api/chats/:jid/messages (quote subtypes)', () => {
 	});
 });
 
+describe('GET /api/chats/:jid/messages (focused page — U5 jump-to-quote)', () => {
+	it('returns a page centered on focusMsgId with context on both sides', async () => {
+		await startTestApp();
+		upsertChat(db!, { jid: 'chain@s.whatsapp.net', kind: '1:1', last_msg_at: 20 });
+		for (let i = 1; i <= 20; i++) {
+			upsertMessage(db!, {
+				id: `c${i}`,
+				chat_jid: 'chain@s.whatsapp.net',
+				from_me: i % 2 === 0,
+				ts: i,
+				text: `msg ${i}`
+			});
+		}
+
+		const res = await api('/api/chats/chain%40s.whatsapp.net/messages?limit=10&focusMsgId=c10');
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { items: Array<{ id: string }> };
+		// limit 10 → half=5 → 5 older (c5–c9) + target + 5 newer (c11–c15).
+		expect(body.items.map((m) => m.id)).toEqual([
+			'c5', 'c6', 'c7', 'c8', 'c9', 'c10', 'c11', 'c12', 'c13', 'c14', 'c15'
+		]);
+	});
+
+	it('returns an empty page for an unknown focusMsgId (graceful, not a 404)', async () => {
+		await startTestApp();
+		upsertChat(db!, { jid: 'chain@s.whatsapp.net', kind: '1:1', last_msg_at: 1 });
+		upsertMessage(db!, {
+			id: 'c1',
+			chat_jid: 'chain@s.whatsapp.net',
+			from_me: false,
+			ts: 1,
+			text: 'only'
+		});
+
+		const res = await api('/api/chats/chain%40s.whatsapp.net/messages?focusMsgId=missing');
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { items: Array<{ id: string }> };
+		// Empty page — the client degrades the jump to a no-op, never a crash.
+		expect(body.items).toEqual([]);
+	});
+});
+
 describe('Origin/Host CSRF defense', () => {
 	it('rejects mutating REST with a foreign Origin', async () => {
 		await startTestApp();

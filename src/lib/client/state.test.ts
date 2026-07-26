@@ -334,6 +334,154 @@ describe('AppState quoted composer replies', () => {
 	});
 });
 
+describe('AppState jump to quoted message (U5)', () => {
+	afterEach(() => vi.restoreAllMocks());
+
+	/**
+	 * Serves an initial page and, when a `focusMsgId=` query arrives, a focused
+	 * page centered on the requested target. The focused page is built from the
+	 * full chain so the target lands in the middle with context on both sides.
+	 */
+	function mockJumpPages(initial: Message[], focused: Message[]) {
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.includes('focusMsgId=')) return jsonResponse({ items: focused });
+			if (url.includes('/messages')) return jsonResponse({ items: initial });
+			if (url.endsWith('/draft')) return jsonResponse({ error: 'Not found' }, 404);
+			if (url.endsWith('/read')) return jsonResponse(chatRow({ unread: 0 }));
+			throw new Error(`Unexpected request: ${url}`);
+		});
+	}
+
+	it('in-page jump: signals the target without fetching', async () => {
+		const state = new AppState();
+		state.chats = [chatRow()];
+		const page = [inbound('m1', 1), inbound('m2', 2), inbound('m3', 3)];
+		mockJumpPages(page, []);
+
+		await state.openChat(JID);
+		const fetchCalls = vi.mocked(fetch).mock.calls.length;
+
+		await state.jumpToQuotedMessage('m2');
+
+		// No extra fetch — the target was already on the loaded page.
+		expect(vi.mocked(fetch).mock.calls.length).toBe(fetchCalls);
+		expect(state.jumpTarget).toEqual({ id: 'm2', nonce: expect.any(Number) });
+	});
+
+	it('off-page jump: fetches a focused page around the target, then signals', async () => {
+		const state = new AppState();
+		state.chats = [chatRow()];
+		// Initial page only has m8–m10; the quote target m3 is off-page.
+		const initial = [inbound('m8', 8), inbound('m9', 9), inbound('m10', 10)];
+		const focused = [inbound('m1', 1), inbound('m2', 2), inbound('m3', 3), inbound('m4', 4)];
+		mockJumpPages(initial, focused);
+
+		await state.openChat(JID);
+		expect(state.messages.map((m) => m.id)).toEqual(['m8', 'm9', 'm10']);
+
+		await state.jumpToQuotedMessage('m3');
+
+		// The focused page merged with the loaded window — target is now present.
+		expect(state.messages.map((m) => m.id)).toEqual([
+			'm1', 'm2', 'm3', 'm4', 'm8', 'm9', 'm10'
+		]);
+		expect(state.jumpTarget).toEqual({ id: 'm3', nonce: expect.any(Number) });
+	});
+
+	it('off-page jump produces a real prepend (the merge keeps existing context)', async () => {
+		const state = new AppState();
+		state.chats = [chatRow()];
+		const initial = [inbound('m8', 8), inbound('m9', 9), inbound('m10', 10)];
+		const focused = [inbound('m1', 1), inbound('m2', 2), inbound('m3', 3)];
+		mockJumpPages(initial, focused);
+
+		await state.openChat(JID);
+		await state.jumpToQuotedMessage('m3');
+
+		// m8–m10 are still loaded — the prepend did not discard them. This is
+		// the W2-U1 anchor-restoration property: a prepend adds, never replaces.
+		expect(state.messages.map((m) => m.id)).toContain('m8');
+		expect(state.messages.map((m) => m.id)).toContain('m10');
+	});
+
+	it('a missing target degrades to a no-op: no signal, no crash', async () => {
+		const state = new AppState();
+		state.chats = [chatRow()];
+		const initial = [inbound('m1', 1), inbound('m2', 2)];
+		// Server returns an empty focused page — the target no longer exists.
+		mockJumpPages(initial, []);
+
+		await state.openChat(JID);
+		expect(state.jumpTarget).toBeNull();
+
+		await state.jumpToQuotedMessage('gone');
+		// No signal set → the stream never tries to scroll to a missing bubble.
+		expect(state.jumpTarget).toBeNull();
+		// Existing messages are untouched — no partial merge of an empty page.
+		expect(state.messages.map((m) => m.id)).toEqual(['m1', 'm2']);
+	});
+
+	it('a second jump to the same id re-fires (nonce changes)', async () => {
+		const state = new AppState();
+		state.chats = [chatRow()];
+		mockJumpPages([inbound('m1', 1), inbound('m2', 2)], []);
+
+		await state.openChat(JID);
+		await state.jumpToQuotedMessage('m1');
+		const first = state.jumpTarget;
+		expect(first?.id).toBe('m1');
+
+		await state.jumpToQuotedMessage('m1');
+		// Same target id, new nonce — the stream effect keys on nonce so it
+		// re-runs instead of deduplicating.
+		expect(state.jumpTarget?.id).toBe('m1');
+		expect(state.jumpTarget?.nonce).not.toBe(first?.nonce);
+	});
+
+	it('clears the jump target on chat switch', async () => {
+		const state = new AppState();
+		state.chats = [
+			chatRow({ jid: JID }),
+			chatRow({ jid: 'sam@s.whatsapp.net', name: 'Sam' })
+		];
+		mockJumpPages([inbound('m1', 1), inbound('m2', 2)], []);
+
+		await state.openChat(JID);
+		await state.jumpToQuotedMessage('m1');
+		expect(state.jumpTarget).not.toBeNull();
+
+		await state.openChat('sam@s.whatsapp.net');
+		expect(state.jumpTarget).toBeNull();
+	});
+
+	it('ignores a late off-page fetch result after a chat switch', async () => {
+		const state = new AppState();
+		state.chats = [
+			chatRow({ jid: JID }),
+			chatRow({ jid: 'sam@s.whatsapp.net', name: 'Sam' })
+		];
+		const initial = [inbound('m8', 8), inbound('m9', 9), inbound('m10', 10)];
+		const focused = [inbound('m1', 1), inbound('m2', 2), inbound('m3', 3)];
+		mockJumpPages(initial, focused);
+
+		await state.openChat(JID);
+
+		// Switch chats mid-jump: the focused fetch resolves after the switch.
+		// openChat('sam…') is awaited first to advance the epoch, then the jump.
+		// We simulate the race by awaiting the jump after the switch — the
+		// epoch guard inside jumpToQuotedMessage must drop the late merge.
+		const jumpPromise = state.jumpToQuotedMessage('m3');
+		await state.openChat('sam@s.whatsapp.net');
+		await jumpPromise;
+
+		// The late focused page did not leak into the new chat's messages.
+		expect(state.messages.map((m) => m.id)).not.toContain('m3');
+		// And no jump signal was set for the new chat.
+		expect(state.jumpTarget).toBeNull();
+	});
+});
+
 describe('AppState draft approval', () => {
 	afterEach(() => vi.restoreAllMocks());
 

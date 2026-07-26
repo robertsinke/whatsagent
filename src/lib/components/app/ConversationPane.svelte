@@ -19,10 +19,12 @@
 		loading = false,
 		hasMore = true,
 		unreadBoundary = null,
+		jumpTarget = null,
 		onloadolder,
 		onloadmedia,
 		onreply,
-		onreact
+		onreact,
+		onjumpquote
 	}: {
 		chatJid: string;
 		/** Drives group sender attribution; 1:1 bubbles stay unlabelled. */
@@ -31,11 +33,15 @@
 		loading?: boolean;
 		hasMore?: boolean;
 		unreadBoundary?: UnreadBoundary | null;
+		/** U5 — jump-to-quote signal consumed by the stream. */
+		jumpTarget?: { id: string; nonce: number } | null;
 		onloadolder?: () => void | Promise<void>;
 		onloadmedia?: (messageId: string) => void;
 		onreply?: (message: Message) => void;
 		/** D2 (Wave 3 U2): add/remove a reaction. Empty emoji removes. */
 		onreact?: (messageId: string, emoji: string) => void;
+		/** U5 — jump to a quoted message's target. */
+		onjumpquote?: (targetId: string) => void;
 	} = $props();
 
 	let lightboxMessage = $state<Message | null>(null);
@@ -60,10 +66,12 @@
 				{messages}
 				{hasMore}
 				{unreadBoundary}
+				{jumpTarget}
 				{onloadolder}
 				{onloadmedia}
 				{onreply}
 				{onreact}
+				{onjumpquote}
 				onopenmedia={(m) => (lightboxMessage = m)}
 			/>
 		{/if}

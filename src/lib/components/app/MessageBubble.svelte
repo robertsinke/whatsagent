@@ -21,7 +21,8 @@
 		onloadmedia,
 		onopenmedia,
 		onreply,
-		onreact
+		onreact,
+		onjumpquote
 	}: {
 		message: ChatMessage;
 		/** Group attribution; null for 1:1, own messages, and mid-run messages. */
@@ -31,6 +32,8 @@
 		onreply?: (message: ChatMessage) => void;
 		/** D2 (Wave 3 U2): add/remove a reaction. Empty emoji removes. */
 		onreact?: (messageId: string, emoji: string) => void;
+		/** U5 — jump to the message this quote references. */
+		onjumpquote?: (targetId: string) => void;
 	} = $props();
 
 	// Per-subtype preview icon. `text` and unrecognized subtypes render no icon —
@@ -84,20 +87,40 @@
 			     reaches its final height on first paint (U1 prepend anchoring). -->
 			<!-- `note`, not a bare div: an aria-label on a generic element is not
 			     reliably announced, and this is ancillary context, not body text. -->
-			<div
-				class="quote"
-				class:quote-missing={!quote.resolved}
-				role="note"
-				aria-label={quote.label}
-			>
-				<span class="quote-sender">{quote.sender}</span>
-				<span class="quote-body">
-					{#if QuoteIcon}
-						<QuoteIcon class="quote-icon" aria-hidden="true" />
-					{/if}
-					<span class="quote-body-text">{quote.body}</span>
-				</span>
-			</div>
+			{#if onjumpquote}
+				<button
+					type="button"
+					class="quote"
+					class:quote-missing={!quote.resolved}
+					aria-label={quote.resolved ? `Jump to quoted message from ${quote.sender}: ${quote.body}` : quote.label}
+					disabled={!quote.resolved}
+					onclick={() => quote.resolved && onjumpquote(quote.targetId)}
+					title={quote.resolved ? 'Jump to quoted message' : 'Original message not loaded'}
+				>
+					<span class="quote-sender">{quote.sender}</span>
+					<span class="quote-body">
+						{#if QuoteIcon}
+							<QuoteIcon class="quote-icon" aria-hidden="true" />
+						{/if}
+						<span class="quote-body-text">{quote.body}</span>
+					</span>
+				</button>
+			{:else}
+				<div
+					class="quote"
+					class:quote-missing={!quote.resolved}
+					role="note"
+					aria-label={quote.label}
+				>
+					<span class="quote-sender">{quote.sender}</span>
+					<span class="quote-body">
+						{#if QuoteIcon}
+							<QuoteIcon class="quote-icon" aria-hidden="true" />
+						{/if}
+						<span class="quote-body-text">{quote.body}</span>
+					</span>
+				</div>
+			{/if}
 		{/if}
 		{#if message.media}
 			<MediaAttachment {message} onload={onloadmedia} onopen={onopenmedia} />
@@ -198,6 +221,21 @@
 		border-left: 2px solid var(--terracotta);
 		border-radius: var(--radius-sm);
 		background: var(--quote-tint);
+		/* U5 — when rendered as a button (jump-to-quote available), reset button
+		   chrome so the inset reads as the same quote, just clickable. */
+		text-align: left;
+		font: inherit;
+		width: 100%;
+		cursor: pointer;
+	}
+	.quote:disabled {
+		cursor: default;
+	}
+	.quote:not(:disabled):hover,
+	.quote:not(:disabled):focus-visible {
+		background: color-mix(in srgb, var(--terracotta) 10%, var(--quote-tint));
+		outline: none;
+		box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--terracotta) 40%, transparent);
 	}
 	.quote-missing {
 		border-left-style: dashed;

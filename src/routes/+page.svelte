@@ -104,10 +104,12 @@
 							loading={app.loadingMessages}
 							hasMore={app.hasMoreMessages}
 							unreadBoundary={app.unreadBoundary}
+							jumpTarget={app.jumpTarget}
 							onloadolder={() => app.loadOlder()}
 							onloadmedia={(id) => app.loadMedia(id)}
 							onreply={(message) => app.selectReply(message)}
 							onreact={(messageId, emoji) => app.react(messageId, emoji)}
+							onjumpquote={(targetId) => app.jumpToQuotedMessage(targetId)}
 						/>
 
 						<div class="conv-foot">

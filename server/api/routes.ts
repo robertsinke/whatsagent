@@ -484,15 +484,22 @@ async function handleApi(
 		const limit = parsePositiveInt(url.searchParams.get('limit'), 50);
 		const beforeTsRaw = url.searchParams.get('beforeTs');
 		const beforeId = url.searchParams.get('beforeId') ?? undefined;
+		const focusMsgId = url.searchParams.get('focusMsgId') ?? undefined;
 		const beforeTs =
 			beforeTsRaw !== null && beforeTsRaw !== ''
 				? Number.parseInt(beforeTsRaw, 10)
 				: undefined;
-		const items = listMessagesPage(db, jid, {
-			limit,
-			beforeTs: beforeTs !== undefined && Number.isFinite(beforeTs) ? beforeTs : undefined,
-			beforeId
-		});
+		// `focusMsgId` and `beforeTs` are mutually exclusive paging modes — the
+		// former centers a page on a target (U5 jump-to-quote), the latter pages
+		// backward from a cursor (W2-U1 load-older). If both arrive, `focusMsgId`
+		// wins because a jump is an explicit navigation, not a continuation.
+		const items = focusMsgId
+			? listMessagesPage(db, jid, { limit, focusMsgId })
+			: listMessagesPage(db, jid, {
+					limit,
+					beforeTs: beforeTs !== undefined && Number.isFinite(beforeTs) ? beforeTs : undefined,
+					beforeId
+				});
 		json(res, 200, { items: items.map((message) => toMessageView(db, message)) });
 		return;
 	}

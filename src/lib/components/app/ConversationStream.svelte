@@ -17,11 +17,13 @@
 		messages,
 		hasMore = true,
 		unreadBoundary = null,
+		jumpTarget = null,
 		onloadolder,
 		onloadmedia,
 		onopenmedia,
 		onreply,
-		onreact
+		onreact,
+		onjumpquote
 	}: {
 		chatJid: string;
 		/** From the server's chat row — never sniffed from the JID suffix here. */
@@ -29,12 +31,20 @@
 		messages: Message[];
 		hasMore?: boolean;
 		unreadBoundary?: UnreadBoundary | null;
+		/**
+		 * U5 — a `{ id, nonce }` signal from AppState. When it changes, the
+		 * stream scrolls the matching bubble into view and briefly highlights
+		 * it so the jump is legible. `null` (or a chat switch) does nothing.
+		 */
+		jumpTarget?: { id: string; nonce: number } | null;
 		onloadolder?: () => void | Promise<void>;
 		onloadmedia?: (messageId: string) => void;
 		onopenmedia?: (message: Message) => void;
 		onreply?: (message: Message) => void;
 		/** D2 (Wave 3 U2): add/remove a reaction. Empty emoji removes. */
 		onreact?: (messageId: string, emoji: string) => void;
+		/** U5 — jump to a quoted message's target. */
+		onjumpquote?: (targetId: string) => void;
 	} = $props();
 
 	const rows = $derived(
@@ -53,6 +63,18 @@
 	// not the jid — is what proves the capture is still current.
 	let destroyed = false;
 	onDestroy(() => (destroyed = true));
+
+	/** U5 — id of the bubble currently flashing as a jump target. */
+	let highlightedId = $state<string | null>(null);
+	let highlightTimer: ReturnType<typeof setTimeout> | null = null;
+	function clearHighlight(): void {
+		if (highlightTimer !== null) {
+			clearTimeout(highlightTimer);
+			highlightTimer = null;
+		}
+		highlightedId = null;
+	}
+	onDestroy(clearHighlight);
 
 	/**
 	 * Positioning rules, in one place:
@@ -77,6 +99,34 @@
 			return;
 		}
 		if (grew && atBottom) void tick().then(() => ctx.scrollToBottom('smooth'));
+	});
+
+	/**
+	 * U5 — jump-to-quote. When AppState sets `jumpTarget`, scroll the matching
+	 * bubble into view and flash it briefly. The effect keys on the nonce so a
+	 * second click on the same quote re-fires even though `id` is unchanged.
+	 *
+	 * The target is guaranteed to be in `messages` at this point: AppState's
+	 * `jumpToQuotedMessage` fetches a focused page around an off-page target
+	 * before setting the signal, so the row is rendered by the time this runs.
+	 * If the row is somehow still absent (a race with a chat switch), the effect
+	 * is a no-op rather than a crash.
+	 */
+	$effect(() => {
+		const target = jumpTarget;
+		if (!target) return;
+		// Touch `messages` so this re-runs when a focused-page merge lands.
+		const _ = messages.length;
+		void _;
+		void tick().then(() => {
+			if (destroyed || chatJid !== lastChatJid) return;
+			const el = streamEl?.querySelector(`[data-msg-id="${cssEscape(target.id)}"]`);
+			if (!el) return;
+			ctx.scrollToElement(el as HTMLElement, 'smooth');
+			clearHighlight();
+			highlightedId = target.id;
+			highlightTimer = setTimeout(clearHighlight, HIGHLIGHT_MS);
+		});
 	});
 
 	async function loadOlder() {
@@ -104,11 +154,27 @@
 		});
 	}
 
+	/** U5 — the stream container, for `querySelector` on a jump target. */
+	let streamEl: HTMLElement | null = null;
+
+	/** Highlight duration: long enough to read as "this is what you jumped to". */
+	const HIGHLIGHT_MS = 1800;
+
+	/**
+	 * Escape a message id for use in a CSS attribute selector. Message ids are
+	 * Baileys stanza ids (alnum + a few symbols) and rarely contain selector
+	 * metacharacters, but a stray `:` or `.` would break the selector silently —
+	 * escape defensively so a jump never no-ops because of an id shape.
+	 */
+	function cssEscape(value: string): string {
+		return value.replace(/["\\]/g, '\\$&');
+	}
+
 </script>
 
 <!-- `margin-top: auto` anchors a short thread to the bottom without the
      flex-end scroll-clipping bug. -->
-<div class="stream">
+<div class="stream" bind:this={streamEl}>
 	{#if hasMore}
 		<div class="older">
 			<Button variant="ghost" size="sm" onclick={loadOlder} disabled={loadingOlder}>
@@ -126,14 +192,17 @@
 				<span>{unreadBoundaryLabel(unreadBoundary)}</span>
 			</div>
 		{/if}
-		<MessageBubble
-			message={row.message}
-			senderLabel={row.senderLabel}
-			{onloadmedia}
-			{onopenmedia}
-			{onreply}
-			{onreact}
-		/>
+		<div class="bubble-wrap" data-msg-id={row.message.id} class:jump-highlight={highlightedId === row.message.id}>
+			<MessageBubble
+				message={row.message}
+				senderLabel={row.senderLabel}
+				{onloadmedia}
+				{onopenmedia}
+				{onreply}
+				{onreact}
+				{onjumpquote}
+			/>
+		</div>
 	{/each}
 </div>
 
@@ -185,5 +254,31 @@
 		letter-spacing: 0.05em;
 		text-transform: uppercase;
 		white-space: nowrap;
+	}
+	/* U5 — brief flash on the jump target so the reader sees what they jumped to.
+	   One animation, theme-tinted, no persistent state; fades out on its own. */
+	.bubble-wrap {
+		border-radius: var(--radius-md);
+	}
+	@keyframes jump-flash {
+		0% {
+			background: color-mix(in srgb, var(--terracotta) 22%, transparent);
+			box-shadow: 0 0 0 2px color-mix(in srgb, var(--terracotta) 55%, transparent);
+		}
+		100% {
+			background: transparent;
+			box-shadow: 0 0 0 2px transparent;
+		}
+	}
+	.jump-highlight {
+		animation: jump-flash 1.8s ease-out 1;
+	}
+	@media (prefers-reduced-motion: reduce) {
+		/* Keep the affordance without motion: a static tint that the class
+		   removal clears, so reduced-motion users still see the target. */
+		.jump-highlight {
+			animation: none;
+			background: color-mix(in srgb, var(--terracotta) 18%, transparent);
+		}
 	}
 </style>
