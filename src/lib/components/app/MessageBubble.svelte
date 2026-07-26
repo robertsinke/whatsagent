@@ -149,9 +149,6 @@
 		color: var(--ink-70);
 	}
 	.quote-body {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.25rem;
 		font-size: 0.72rem;
 		color: var(--ink-50);
 		line-height: 1.3;
@@ -163,12 +160,12 @@
 		overflow: hidden;
 		overflow-wrap: anywhere;
 	}
-	.quote-body-text {
-		/* Inline-flex inside a -webkit-box clamp needs a block child to clip. */
-		min-width: 0;
-	}
 	:global(.quote-icon) {
-		flex: none;
+		/* The clamp above needs `display: -webkit-box`, which rules out flexing
+		   this row — so space and align the icon inline instead. */
+		display: inline;
+		vertical-align: -0.15em;
+		margin-right: 0.25rem;
 		width: 0.85rem;
 		height: 0.85rem;
 		color: var(--ink-50);
