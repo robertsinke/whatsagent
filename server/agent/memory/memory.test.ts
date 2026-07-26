@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Chat } from '../../store/chats.js';
-import { createRuntimeMemory, HindsightMemory, type HindsightClientLike } from './hindsight.js';
+import { createRuntimeMemory, HindsightMemory, looksLikeVoiceDocument, type HindsightClientLike } from './hindsight.js';
 import { NullMemory } from './null-memory.js';
 import { composeVoice, voiceFileStem } from './voice-files.js';
 
@@ -181,7 +181,9 @@ describe('voice mental models', () => {
 			fetchImpl
 		});
 
-		await memory.reflect();
+		// The global model is ensured lazily on the first successful retain, not at reflect,
+		// so a retain is what triggers the refresh_cron PATCH.
+		await memory.retainVoiceObservation({ chatJid: chat.jid, language: 'en', text: 'hi' });
 
 		const patch = patches.find((entry) => entry.url.endsWith('/mental-models/voice-global'))!;
 		expect(patch.url).toBe('http://127.0.0.1:9999/v1/default/banks/test-bank/mental-models/voice-global');
@@ -280,5 +282,251 @@ describe('createRuntimeMemory', () => {
 		await off.retainVoiceObservation({ chatJid: chat.jid, language: 'en', text: 'Sure, see you then.' });
 		await off.retainEditDelta({ chatJid: chat.jid, draft: 'Hello!', final: 'Hi', skipped: false });
 		await expect(off.recallStyleFor(chat)).resolves.toBeNull();
+	});
+});
+
+describe('voice bootstrap plumbing (W4-U5)', () => {
+	/**
+	 * Fix 1: `reflect()` must not create the global model before any observation has been
+	 * retained. Creating it against an empty bank makes Hindsight synthesize a "no
+	 * information about the owner's writing habits" document, which would then be mirrored
+	 * to `voice/global.md` and handed to the drafter as the owner's voice.
+	 */
+	it('does not create the global model until the first successful retain', async () => {
+		const client = fakeClient();
+		const memory = new HindsightMemory({ dataDir: tempDataDir(), client, fetchImpl: okFetch });
+
+		// A reflect on a fresh bank creates no model — there is nothing to synthesize from.
+		await memory.reflect();
+		expect(client.created).toEqual([]);
+		expect(client.models).toEqual([]);
+
+		// The first successful retain lazily ensures the global model.
+		await memory.retainVoiceObservation({ chatJid: chat.jid, language: 'en', text: 'hi' });
+		expect(client.created.map((model) => model.id)).toEqual(['voice-global']);
+	});
+
+	it('mirrors existing model content on a restart without creating the global model', async () => {
+		const dataDir = tempDataDir();
+		// Simulate a restart: the global model already exists server-side with real content.
+		const models: ModelRow[] = [{ id: 'voice-global', content: '- Writes short, lowercase replies.' }];
+		const client = fakeClient({}, models);
+		const memory = new HindsightMemory({ dataDir, client, fetchImpl: okFetch });
+
+		await memory.reflect();
+
+		// No new model created (it already exists), but its content is mirrored to disk.
+		expect(client.created).toEqual([]);
+		expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toContain('lowercase replies');
+	});
+
+	/**
+	 * Fix 2: the mirror filter must be a positive test, not a two-string blocklist. An LLM
+	 * with nothing to say writes "I do not have information about the owner writing
+	 * habits." — which passed the old blocklist, got mirrored, and was handed to the
+	 * drafter as the owner's voice.
+	 */
+	it('rejects a "no information" document in the mirror and keeps the last good file', async () => {
+		const dataDir = tempDataDir();
+		seedVoiceFiles(dataDir, { global: '- Writes short, lowercase replies.' });
+		const memory = new HindsightMemory({
+			dataDir,
+			client: fakeClient(
+				{},
+				[{ id: 'voice-global', content: "I don't have information about the owner's writing habits." }]
+			),
+			fetchImpl: okFetch
+		});
+
+		await memory.reflect();
+
+		// The "no information" document is rejected; the last good file is preserved.
+		expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toContain('lowercase replies');
+		expect(await memory.recallStyleFor(chat)).not.toContain("don't have information");
+	});
+
+	it('looksLikeVoiceDocument accepts a real habit list and rejects the failure modes', () => {
+		expect(looksLikeVoiceDocument('')).toBe(false);
+		expect(looksLikeVoiceDocument('Generating content...')).toBe(false);
+		expect(looksLikeVoiceDocument("I don't have information about the owner's writing habits.")).toBe(false);
+		expect(looksLikeVoiceDocument('I do not have information about the owner writing habits.')).toBe(false);
+		expect(looksLikeVoiceDocument('No discernible voice was found.')).toBe(false);
+		// A "no information" restated as a single list item is still rejected.
+		expect(looksLikeVoiceDocument('- No information about the owner\'s writing habits.')).toBe(false);
+		// A real voice document with concrete habits is accepted.
+		expect(looksLikeVoiceDocument('- Writes short, lowercase replies.\n- Signs off with "grtjs".')).toBe(true);
+		// A single declarative sentence with no list is rejected (a real voice doc is a list).
+		expect(looksLikeVoiceDocument('The owner writes informally.')).toBe(false);
+	});
+
+	/**
+	 * Fix 3: retain uses a longer timeout than the 2 s steady-state mirror budget, so the
+	 * first retain after a cold start (whose floor cost is the LLM warming, not the
+	 * network) does not abort and park the whole bootstrap. Uses fake timers — the test
+	 * injects the clock, it does not sleep.
+	 */
+	it('gives retain a longer timeout than the mirror path', async () => {
+		vi.useFakeTimers();
+		try {
+			let release!: () => void;
+			const heldOpen = new Promise<void>((resolve) => { release = resolve; });
+			let aborted = false;
+			const retain = vi.fn(async (_bank: string, _content: string, options?: { signal?: AbortSignal }) => {
+				await heldOpen;
+				if (options?.signal?.aborted) { aborted = true; throw new Error('aborted'); }
+				return {};
+			});
+			const memory = new HindsightMemory({
+				dataDir: tempDataDir(),
+				client: fakeClient({ retain }),
+				timeoutMs: 2_000,
+				retainTimeoutMs: 30_000,
+				fetchImpl: okFetch,
+				log: { warn: vi.fn() }
+			});
+
+			const pending = memory.retainVoiceObservation({ chatJid: chat.jid, language: 'en', text: 'hi' });
+			// Advance past the 2 s mirror budget — retain must still be in flight (30 s budget).
+			await vi.advanceTimersByTimeAsync(2_500);
+			expect(aborted).toBe(false);
+			release();
+			await pending;
+
+			expect(retain).toHaveBeenCalledTimes(1);
+			expect(memory.queuedRetains).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('retains with the default 30 s budget when retainTimeoutMs is unset', async () => {
+		vi.useFakeTimers();
+		try {
+			let release!: () => void;
+			const heldOpen = new Promise<void>((resolve) => { release = resolve; });
+			let aborted = false;
+			const retain = vi.fn(async (_bank: string, _content: string, options?: { signal?: AbortSignal }) => {
+				await heldOpen;
+				if (options?.signal?.aborted) { aborted = true; throw new Error('aborted'); }
+				return {};
+			});
+			const memory = new HindsightMemory({
+				dataDir: tempDataDir(),
+				client: fakeClient({ retain }),
+				fetchImpl: okFetch,
+				log: { warn: vi.fn() }
+			});
+
+			const pending = memory.retainVoiceObservation({ chatJid: chat.jid, language: 'en', text: 'hi' });
+			// 5 s — past the 2 s default timeoutMs, under the 30 s retain floor.
+			await vi.advanceTimersByTimeAsync(5_000);
+			expect(aborted).toBe(false);
+			release();
+			await pending;
+
+			expect(aborted).toBe(false);
+			expect(memory.queuedRetains).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	/**
+	 * Fix 4: the queue drains on a short timer, independent of the 6-hourly reflect. A
+	 * cold-start retain that times out sets the offline window; without a drain, the
+	 * queue sits until the next retain or reflect. `drain()` retries the flush once the
+	 * offline window has elapsed. The test injects a controllable clock via
+	 * `retryDelayMs: 0` so the offline window elapses immediately (no real sleep).
+	 */
+	it('drains the queue on drain() once the offline window has elapsed', async () => {
+		let available = false;
+		const retain = vi.fn(async (_bankId: string, _content: string) => {
+			if (!available) throw new Error('offline');
+			return {};
+		});
+		const memory = new HindsightMemory({
+			dataDir: tempDataDir(),
+			client: fakeClient({ retain }),
+			retryDelayMs: 0,
+			fetchImpl: okFetch,
+			log: { warn: vi.fn() }
+		});
+
+		// First retain fails and queues; offline window is 0 ms so it elapses at once.
+		await memory.retainEditDelta({ chatJid: chat.jid, draft: 'Hi!', final: 'Hi', skipped: false });
+		expect(memory.queuedRetains).toBe(1);
+
+		// No successful retain and no reflect — only drain() retries the queue.
+		available = true;
+		await memory.drain!();
+
+		expect(memory.queuedRetains).toBe(0);
+		expect(retain).toHaveBeenCalledTimes(2);
+	});
+
+	it('drain() is a no-op while still offline', async () => {
+		const retain = vi.fn(async () => { throw new Error('offline'); });
+		const memory = new HindsightMemory({
+			dataDir: tempDataDir(),
+			client: fakeClient({ retain }),
+			retryDelayMs: 60_000,
+			fetchImpl: okFetch,
+			log: { warn: vi.fn() }
+		});
+
+		await memory.retainEditDelta({ chatJid: chat.jid, draft: 'Hi!', final: 'Hi', skipped: false });
+		expect(memory.queuedRetains).toBe(1);
+
+		// Still offline (60 s window) — drain does nothing and does not throw.
+		await expect(memory.drain!()).resolves.toBeUndefined();
+		expect(memory.queuedRetains).toBe(1);
+	});
+
+	it('drain() is a no-op when the queue is empty', async () => {
+		const retain = vi.fn(async () => ({}));
+		const memory = new HindsightMemory({
+			dataDir: tempDataDir(),
+			client: fakeClient({ retain }),
+			fetchImpl: okFetch,
+			log: { warn: vi.fn() }
+		});
+
+		await expect(memory.drain!()).resolves.toBeUndefined();
+		expect(retain).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * The full bootstrap stall, reproduced as a single flow: boot reflect on an empty bank
+	 * creates nothing; the first retain times out and queues; the short drain retries and
+	 * flushes the queue — instead of parking it for six hours.
+	 */
+	it('recovers from a cold-start retain timeout via drain (the original stall)', async () => {
+		let call = 0;
+		const retain = vi.fn(async () => {
+			call += 1;
+			// First call (the bootstrap retain) "times out"; subsequent calls succeed.
+			if (call === 1) throw new Error('timeout');
+			return {};
+		});
+		const memory = new HindsightMemory({
+			dataDir: tempDataDir(),
+			client: fakeClient({ retain }),
+			retryDelayMs: 0,
+			fetchImpl: okFetch,
+			log: { warn: vi.fn() }
+		});
+
+		// Boot reflect on an empty bank: no model created, nothing mirrored.
+		await memory.reflect();
+		expect(memory.queuedRetains).toBe(0);
+
+		// First retain fails and queues (the 2 s timeout in the diagnosis).
+		await memory.retainVoiceObservation({ chatJid: chat.jid, language: 'en', text: 'hi' });
+		expect(memory.queuedRetains).toBe(1);
+
+		// The drain timer fires — the queue flushes instead of parking for six hours.
+		await memory.drain!();
+		expect(memory.queuedRetains).toBe(0);
+		expect(retain).toHaveBeenCalledTimes(2);
 	});
 });
