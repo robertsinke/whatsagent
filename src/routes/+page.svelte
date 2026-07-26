@@ -107,6 +107,7 @@
 							onloadolder={() => app.loadOlder()}
 							onloadmedia={(id) => app.loadMedia(id)}
 							onreply={(message) => app.selectReply(message)}
+							onreact={(messageId, emoji) => app.react(messageId, emoji)}
 						/>
 
 						<div class="conv-foot">

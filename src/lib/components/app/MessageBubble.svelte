@@ -10,7 +10,8 @@
 		senderLabel = null,
 		onloadmedia,
 		onopenmedia,
-		onreply
+		onreply,
+		onreact
 	}: {
 		message: ChatMessage;
 		/** Group attribution; null for 1:1, own messages, and mid-run messages. */
@@ -18,10 +19,36 @@
 		onloadmedia?: (messageId: string) => void;
 		onopenmedia?: (message: ChatMessage) => void;
 		onreply?: (message: ChatMessage) => void;
+		/** D2 (Wave 3 U2): add/remove a reaction. Empty emoji removes. */
+		onreact?: (messageId: string, emoji: string) => void;
 	} = $props();
 
 	const quote = $derived(message.quote ? quotePreview(message.quote) : null);
 	const chips = $derived(message.reactions.map(reactionChip));
+
+	const QUICK_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+
+	let pickerOpen = $state(false);
+
+	function togglePicker() {
+		pickerOpen = !pickerOpen;
+	}
+
+	function ownerReactedWith(emoji: string): boolean {
+		const chip = message.reactions.find((r) => r.emoji === emoji);
+		return Boolean(chip?.actors.some((a) => a.jid === 'me'));
+	}
+
+	function pickEmoji(emoji: string) {
+		pickerOpen = false;
+		// Toggle: if the owner already reacted with this emoji, remove it.
+		onreact?.(message.id, ownerReactedWith(emoji) ? '' : emoji);
+	}
+
+	function removeReaction(emoji: string) {
+		onreact?.(message.id, '');
+		void emoji;
+	}
 </script>
 
 <Message from={message.from_me ? 'user' : 'assistant'} class="bubble-row">
@@ -56,19 +83,52 @@
 			<button class="reply-action" type="button" onclick={() => onreply?.(message)}>
 				Reply
 			</button>
+			{#if onreact}
+				<div class="react-popover">
+					<button
+						class="reply-action"
+						type="button"
+						aria-expanded={pickerOpen}
+						aria-label="React"
+						onclick={togglePicker}
+					>
+						React
+					</button>
+					{#if pickerOpen}
+						<div class="react-picker" role="toolbar" aria-label="Quick reactions">
+							{#each QUICK_EMOJIS as emoji (emoji)}
+								<button
+									class="react-pick"
+									type="button"
+									aria-label={ownerReactedWith(emoji) ? `Remove ${emoji}` : `React ${emoji}`}
+									aria-pressed={ownerReactedWith(emoji)}
+									onclick={() => pickEmoji(emoji)}
+								>
+									{emoji}
+								</button>
+							{/each}
+						</div>
+					{/if}
+				</div>
+			{/if}
 			<span class="stamp">{formatMessageTime(message.ts)}</span>
 		</div>
 		{#if chips.length > 0}
-			<!-- Display-only: reactions are rendered, never created, in this wave —
-			     so these are not buttons and expose actors through their label. -->
 			<div class="reactions" role="group" aria-label="Reactions">
 				{#each chips as chip (chip.emoji)}
-					<!-- `img` is the standard role for an emoji that carries meaning; it
-					     takes the label reliably and stays non-interactive. -->
-					<span class="reaction-chip" role="img" title={chip.label} aria-label={chip.label}>
+					{@const mine = ownerReactedWith(chip.emoji)}
+					<button
+						class="reaction-chip"
+						class:reaction-mine={mine}
+						type="button"
+						title={chip.label}
+						aria-label={mine ? `Remove your ${chip.emoji} reaction` : chip.label}
+						aria-pressed={mine}
+						onclick={() => (mine ? removeReaction(chip.emoji) : onreact?.(message.id, chip.emoji))}
+					>
 						<span aria-hidden="true">{chip.emoji}</span>
 						{#if chip.count > 1}<span class="reaction-chip-count" aria-hidden="true">{chip.count}</span>{/if}
-					</span>
+					</button>
 				{/each}
 			</div>
 		{/if}
@@ -175,6 +235,40 @@
 		text-decoration: underline;
 		text-underline-offset: 0.15rem;
 	}
+	.react-popover {
+		position: relative;
+	}
+	.react-picker {
+		position: absolute;
+		bottom: 100%;
+		right: 0;
+		margin-bottom: 0.3rem;
+		display: flex;
+		gap: 0.15rem;
+		padding: 0.2rem 0.25rem;
+		background: var(--surface-raised);
+		border: 1px solid var(--hairline-soft);
+		border-radius: var(--radius-md);
+		box-shadow: var(--shadow-bevel);
+		z-index: 10;
+	}
+	.react-pick {
+		appearance: none;
+		border: 0;
+		background: transparent;
+		padding: 0.1rem 0.2rem;
+		font-size: 0.9rem;
+		line-height: 1;
+		cursor: pointer;
+		border-radius: var(--radius-sm);
+	}
+	.react-pick:hover,
+	.react-pick:focus-visible {
+		background: var(--surface-sunken);
+	}
+	.react-pick[aria-pressed='true'] {
+		background: color-mix(in srgb, var(--terracotta) 15%, transparent);
+	}
 	.reactions {
 		display: flex;
 		flex-wrap: wrap;
@@ -192,8 +286,15 @@
 		box-shadow: var(--shadow-bevel);
 		font-size: 0.72rem;
 		line-height: 1.35;
-		/* No hover/press state and no cursor change: not an affordance. */
-		cursor: default;
+		cursor: pointer;
+	}
+	.reaction-chip:hover,
+	.reaction-chip:focus-visible {
+		border-color: var(--terracotta);
+	}
+	.reaction-mine {
+		border-color: var(--terracotta);
+		background: color-mix(in srgb, var(--terracotta) 8%, var(--surface-raised));
 	}
 	.reaction-chip-count {
 		font-size: 0.62rem;

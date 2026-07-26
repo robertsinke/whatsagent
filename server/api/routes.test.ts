@@ -303,6 +303,92 @@ describe('POST /api/chats/:jid/messages (send → outbox)', () => {
 	});
 });
 
+describe('POST /api/messages/:id/reactions (reaction → outbox)', () => {
+	it('enqueues a reaction outbox row that rides the pacer', async () => {
+		await startTestApp();
+		upsertChat(db!, { jid: 'alice@s.whatsapp.net', kind: '1:1', last_msg_at: 1 });
+		upsertMessage(db!, {
+			id: 'target-msg',
+			chat_jid: 'alice@s.whatsapp.net',
+			from_me: false,
+			ts: 1,
+			text: 'hello'
+		});
+
+		const res = await api('/api/messages/target-msg/reactions', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ emoji: '👍' })
+		});
+		expect(res.status).toBe(202);
+		const row = (await res.json()) as {
+			id: number;
+			chat_jid: string;
+			payload_kind: string;
+			reaction_emoji: string;
+			reaction_target_msg_id: string;
+			status: string;
+			source: string;
+		};
+		expect(row.payload_kind).toBe('reaction');
+		expect(row.reaction_emoji).toBe('👍');
+		expect(row.reaction_target_msg_id).toBe('target-msg');
+		expect(row.status).toBe('pending');
+		expect(row.source).toBe('manual');
+		expect(getOutbox(db!, row.id)?.reaction_target_msg_id).toBe('target-msg');
+	});
+
+	it('enqueues a removal with an empty emoji string', async () => {
+		await startTestApp();
+		upsertChat(db!, { jid: 'alice@s.whatsapp.net', kind: '1:1', last_msg_at: 1 });
+		upsertMessage(db!, {
+			id: 'target-msg',
+			chat_jid: 'alice@s.whatsapp.net',
+			from_me: false,
+			ts: 1,
+			text: 'hello'
+		});
+
+		const res = await api('/api/messages/target-msg/reactions', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ emoji: '' })
+		});
+		expect(res.status).toBe(202);
+		const row = (await res.json()) as { reaction_emoji: string };
+		expect(row.reaction_emoji).toBe('');
+	});
+
+	it('returns 404 for an unknown message', async () => {
+		await startTestApp();
+		const res = await api('/api/messages/unknown/reactions', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ emoji: '👍' })
+		});
+		expect(res.status).toBe(404);
+	});
+
+	it('rejects a missing emoji field', async () => {
+		await startTestApp();
+		upsertChat(db!, { jid: 'alice@s.whatsapp.net', kind: '1:1', last_msg_at: 1 });
+		upsertMessage(db!, {
+			id: 'target-msg',
+			chat_jid: 'alice@s.whatsapp.net',
+			from_me: false,
+			ts: 1,
+			text: 'hello'
+		});
+
+		const res = await api('/api/messages/target-msg/reactions', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({})
+		});
+		expect(res.status).toBe(400);
+	});
+});
+
 describe('GET /api/chats/:jid/messages (structured views)', () => {
 	it('returns late-bound senders, quote fallbacks, and reaction aggregates without raw envelopes', async () => {
 		await startTestApp();

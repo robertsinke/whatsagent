@@ -23,6 +23,7 @@ import {
 	cancelPendingDraftOutbox,
 	enqueueDraftOutbox,
 	enqueueManualOutbox,
+	enqueueReactionOutbox,
 	getOutbox,
 	listOutbox
 } from '../store/outbox.js';
@@ -363,6 +364,35 @@ async function handleApi(
 	const mediaMatch = /^\/api\/messages\/([^/]+)\/media$/.exec(path);
 	if (mediaMatch) {
 		await handleMedia(deps, res, method, decodeURIComponent(mediaMatch[1]!));
+		return;
+	}
+
+	const reactionMatch = /^\/api\/messages\/([^/]+)\/reactions$/.exec(path);
+	if (reactionMatch && method === 'POST') {
+		const messageId = decodeURIComponent(reactionMatch[1]!);
+		const message = getMessage(db, messageId);
+		if (!message) {
+			error(res, 404, 'Message not found', { id: messageId });
+			return;
+		}
+		const body = (await readJsonBody(req)) as { emoji?: unknown } | undefined;
+		const emoji = typeof body?.emoji === 'string' ? body.emoji.trim() : '';
+		// An empty emoji string removes a reaction; a missing/non-string emoji is a 400.
+		if (typeof body?.emoji !== 'string') {
+			error(res, 400, 'Expected { emoji }');
+			return;
+		}
+		const now = Date.now();
+		const id = enqueueReactionOutbox(db, {
+			chatJid: message.chat_jid,
+			targetMsgId: messageId,
+			emoji,
+			now
+		});
+		const row = getOutbox(db, id)!;
+		deps.wakeOutbox?.();
+		events.emit({ type: 'outbox-updated', outbox: row });
+		json(res, 202, row);
 		return;
 	}
 

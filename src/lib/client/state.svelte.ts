@@ -329,6 +329,22 @@ export class AppState {
 		}
 	}
 
+	/**
+	 * D2 (Wave 3 U2): add or remove a reaction on a message. Routes through the
+	 * outbox pacer — a reaction is a send under R9, so it rides the same single
+	 * send path. An empty emoji string removes a prior reaction. The outbox row
+	 * is merged into the tray; the reaction chip itself updates when the server
+	 * emits a `message-updated` event after the WhatsApp reaction ack arrives.
+	 */
+	async react(messageId: string, emoji: string): Promise<void> {
+		try {
+			const row = await api.react(messageId, emoji);
+			this.#mergeOutbox(row);
+		} catch (err) {
+			this.error = describeError(err);
+		}
+	}
+
 	/** D2 — fetch media for one message, on demand. */
 	async loadMedia(messageId: string): Promise<void> {
 		try {

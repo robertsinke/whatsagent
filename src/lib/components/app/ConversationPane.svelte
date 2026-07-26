@@ -21,7 +21,8 @@
 		unreadBoundary = null,
 		onloadolder,
 		onloadmedia,
-		onreply
+		onreply,
+		onreact
 	}: {
 		chatJid: string;
 		/** Drives group sender attribution; 1:1 bubbles stay unlabelled. */
@@ -33,6 +34,8 @@
 		onloadolder?: () => void | Promise<void>;
 		onloadmedia?: (messageId: string) => void;
 		onreply?: (message: Message) => void;
+		/** D2 (Wave 3 U2): add/remove a reaction. Empty emoji removes. */
+		onreact?: (messageId: string, emoji: string) => void;
 	} = $props();
 
 	let lightboxMessage = $state<Message | null>(null);
@@ -60,6 +63,7 @@
 				{onloadolder}
 				{onloadmedia}
 				{onreply}
+				{onreact}
 				onopenmedia={(m) => (lightboxMessage = m)}
 			/>
 		{/if}

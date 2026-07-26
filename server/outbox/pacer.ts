@@ -12,7 +12,7 @@ import {
 	recoverSendingOutbox,
 	type OutboxRow
 } from '../store/outbox.js';
-import { BufferJSON, type WAMessage } from 'baileys';
+import { BufferJSON, type WAMessage, type WAMessageKey } from 'baileys';
 import { getLastInboundMessage, getMessage } from '../store/messages.js';
 import { getOutboxPacingSettings } from '../store/settings.js';
 import type { WhatsAppSendTransport } from '../channels/whatsapp/send.js';
@@ -57,6 +57,33 @@ function resolveQuotedTarget(db: AppDatabase, row: OutboxRow): WAMessage | undef
 	} catch (error) {
 		if (error instanceof QuotedReplyTargetError) throw error;
 		throw new QuotedReplyTargetError('Quoted reply target data is corrupt');
+	}
+}
+
+/**
+ * D2 (Wave 3 U2): reconstruct the WAMessageKey for a reaction target. The
+ * reaction call needs the target message's key (its id, remoteJid, fromMe) —
+ * the same envelope stored in `messages.raw`. A missing, cross-chat, or
+ * corrupt target cancels the row rather than retrying, mirroring the quoted-
+ * reply policy: a broken target is a deterministic cancellation.
+ */
+function resolveReactionTargetKey(db: AppDatabase, row: OutboxRow): WAMessageKey {
+	if (!row.reaction_target_msg_id) {
+		throw new QuotedReplyTargetError('Reaction target is missing');
+	}
+	const target = getMessage(db, row.reaction_target_msg_id);
+	if (!target || target.chat_jid !== row.chat_jid || !target.raw) {
+		throw new QuotedReplyTargetError('Reaction target is unavailable');
+	}
+	try {
+		const parsed = JSON.parse(target.raw, BufferJSON.reviver) as WAMessage;
+		if (!parsed?.key || parsed.key.id !== target.id) {
+			throw new Error('Invalid stored message envelope');
+		}
+		return parsed.key;
+	} catch (error) {
+		if (error instanceof QuotedReplyTargetError) throw error;
+		throw new QuotedReplyTargetError('Reaction target data is corrupt');
 	}
 }
 
@@ -142,64 +169,125 @@ export class OutboxPacer {
 		this.#emit(row.id);
 
 		try {
+			if (row.payload_kind === 'reaction') {
+				await this.#drainReaction(row);
+			} else {
+				await this.#drainText(row);
+			}
+		} finally {
+			this.#running = false;
+			this.wake();
+		}
+	}
+
+	/**
+	 * D2 (Wave 3 U2): a reaction row sends a single `react` payload. No staleness
+	 * check, no composing presence, no read receipts, no draft marking — a
+	 * reaction is not a reply and has no basis message. The target key is
+	 * reconstructed from `messages.raw` after the row is claimed, so restart
+	 * recovery stays idempotent without persisting a credential-adjacent payload
+	 * in the outbox. A broken target cancels the row rather than retrying.
+	 */
+	async #drainReaction(row: OutboxRow): Promise<void> {
+		let targetKey: WAMessageKey;
+		try {
+			targetKey = resolveReactionTargetKey(this.#options.db, row);
+		} catch (error) {
+			const normalized = error instanceof Error ? error : new Error(String(error));
+			cancelClaimedOutbox(this.#options.db, row.id);
+			this.#emit(row.id);
+			this.#options.onError?.(normalized, getOutbox(this.#options.db, row.id)!);
+			return;
+		}
+		try {
+			if (this.#options.dryRun) {
+				console.info(
+					`[outbox:dry-run] ${row.chat_jid}: react ${row.reaction_emoji ?? ''} on ${row.reaction_target_msg_id}`
+				);
+			} else {
+				await this.#options.transport.sendReaction(
+					row.chat_jid,
+					targetKey,
+					row.reaction_emoji ?? ''
+				);
+			}
+		} catch (error) {
+			const normalized = error instanceof Error ? error : new Error(String(error));
+			markOutboxPending(this.#options.db, row.id, this.#now() + this.#retryDelayMs);
+			this.#emit(row.id);
+			this.#options.onError?.(normalized, getOutbox(this.#options.db, row.id)!);
+			return;
+		}
+
+		const sentAt = this.#now();
+		const spacing = this.jitterMs();
+		const commitSend = this.#options.db.transaction(() => {
+			markOutboxSent(this.#options.db, row.id, sentAt);
+			deferPendingDrafts(this.#options.db, sentAt + spacing);
+		});
+		try {
+			commitSend();
+		} catch (error) {
+			this.#stopped = true;
+			const normalized = error instanceof Error ? error : new Error(String(error));
+			this.#options.onError?.(normalized, getOutbox(this.#options.db, row.id)!);
+			return;
+		}
+		this.#emit(row.id);
+	}
+
+	async #drainText(row: OutboxRow): Promise<void> {
+		try {
+			const latestInbound =
+				row.source === 'draft'
+					? getLastInboundMessage(this.#options.db, row.chat_jid)
+					: undefined;
+			if (
+				latestInbound &&
+				row.basis_msg_id &&
+				latestInbound.id !== row.basis_msg_id
+			) {
+				cancelClaimedOutbox(this.#options.db, row.id);
+				this.#emit(row.id);
+				return;
+			}
+			let quoted: WAMessage | undefined;
 			try {
-				const latestInbound =
+				quoted = resolveQuotedTarget(this.#options.db, row);
+			} catch (error) {
+				const normalized = error instanceof Error ? error : new Error(String(error));
+				cancelClaimedOutbox(this.#options.db, row.id);
+				this.#emit(row.id);
+				this.#options.onError?.(normalized, getOutbox(this.#options.db, row.id)!);
+				return;
+			}
+			if (this.#options.dryRun) {
+				console.info(`[outbox:dry-run] ${row.chat_jid}: ${row.text}`);
+			} else {
+				await this.#options.transport.setPresence(row.chat_jid, 'composing');
+				await this.#sleep(this.#manualPresenceMs);
+				const latestBeforeSend =
 					row.source === 'draft'
 						? getLastInboundMessage(this.#options.db, row.chat_jid)
 						: undefined;
 				if (
-					latestInbound &&
+					latestBeforeSend &&
 					row.basis_msg_id &&
-					latestInbound.id !== row.basis_msg_id
+					latestBeforeSend.id !== row.basis_msg_id
 				) {
 					cancelClaimedOutbox(this.#options.db, row.id);
 					this.#emit(row.id);
+					await this.#options.transport
+						.setPresence(row.chat_jid, 'unavailable')
+						.catch(() => undefined);
 					return;
 				}
-				let quoted: WAMessage | undefined;
-				try {
-					quoted = resolveQuotedTarget(this.#options.db, row);
-				} catch (error) {
-					const normalized = error instanceof Error ? error : new Error(String(error));
-					cancelClaimedOutbox(this.#options.db, row.id);
-					this.#emit(row.id);
-					this.#options.onError?.(normalized, getOutbox(this.#options.db, row.id)!);
-					return;
-				}
-				if (this.#options.dryRun) {
-					console.info(`[outbox:dry-run] ${row.chat_jid}: ${row.text}`);
-				} else {
-					await this.#options.transport.setPresence(row.chat_jid, 'composing');
-					await this.#sleep(this.#manualPresenceMs);
-					const latestBeforeSend =
-						row.source === 'draft'
-							? getLastInboundMessage(this.#options.db, row.chat_jid)
-							: undefined;
-					if (
-						latestBeforeSend &&
-						row.basis_msg_id &&
-						latestBeforeSend.id !== row.basis_msg_id
-					) {
-						cancelClaimedOutbox(this.#options.db, row.id);
-						this.#emit(row.id);
-						await this.#options.transport
-							.setPresence(row.chat_jid, 'unavailable')
-							.catch(() => undefined);
-						return;
-					}
-					await this.#options.transport.sendText(
-						row.chat_jid,
-						row.text,
-						row.message_id!,
-						quoted
-					);
-				}
-			} catch (error) {
-				const normalized = error instanceof Error ? error : new Error(String(error));
-				markOutboxPending(this.#options.db, row.id, this.#now() + this.#retryDelayMs);
-				this.#emit(row.id);
-				this.#options.onError?.(normalized, getOutbox(this.#options.db, row.id)!);
-				return;
+				await this.#options.transport.sendText(
+					row.chat_jid,
+					row.text,
+					row.message_id!,
+					quoted
+				);
 			}
 
 			const sentAt = this.#now();
@@ -244,9 +332,11 @@ export class OutboxPacer {
 				}
 				await Promise.allSettled(followups);
 			}
-		} finally {
-			this.#running = false;
-			this.wake();
+		} catch (error) {
+			const normalized = error instanceof Error ? error : new Error(String(error));
+			markOutboxPending(this.#options.db, row.id, this.#now() + this.#retryDelayMs);
+			this.#emit(row.id);
+			this.#options.onError?.(normalized, getOutbox(this.#options.db, row.id)!);
 		}
 	}
 

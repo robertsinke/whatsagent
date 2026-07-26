@@ -153,6 +153,18 @@ export const api = {
 
 	mediaUrl: (messageId: string) => `/api/messages/${encodeURIComponent(messageId)}/media`,
 
+	/**
+	 * D2 (Wave 3 U2): react to (or remove a reaction from) a message. Goes
+	 * through the outbox pacer — a reaction is a Baileys sendMessage call, so
+	 * R9 puts it on the same single send path as every other send. An empty
+	 * emoji string removes a prior reaction.
+	 */
+	react: (messageId: string, emoji: string) =>
+		request<OutboxRow>(`/messages/${encodeURIComponent(messageId)}/reactions`, {
+			method: 'POST',
+			body: JSON.stringify({ emoji })
+		}),
+
 	settings: () => request<Record<string, string>>('/settings'),
 
 	setSetting: (key: string, value: string) =>
