@@ -201,7 +201,14 @@ export type ServerEvent =
 			chatsSynced: number;
 			messagesSynced: number;
 			complete: boolean;
-	  };
+	  }
+	/**
+	 * W4-U8: outbox send-mode flipped at runtime. `live: true` = the pacer
+	 * transmits over WhatsApp; `live: false` (safe default) = rows are marked
+	 * sent without reaching a recipient. Mirrors the server event so the
+	 * topbar indicator and the settings toggle stay in sync without a refetch.
+	 */
+	| { type: 'send-mode'; live: boolean; dry_run: boolean };
 
 /** Thrown by the API client; `status` carries the HTTP code (409 = stale draft). */
 export class ApiError extends Error {

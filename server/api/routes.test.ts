@@ -1127,3 +1127,179 @@ describe('read cursor (U4) — viewing produces no outbound WhatsApp traffic', (
 		expect(transport.sendReaction).not.toHaveBeenCalled();
 	});
 });
+
+describe('outbox send-mode toggle (W4-U8)', () => {
+	it('GET /api/outbox/send-mode reports the fail-safe default (dry-run) on a fresh DB', async () => {
+		await startTestApp();
+		const res = await api('/api/outbox/send-mode');
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ live: false, dry_run: true });
+	});
+
+	it('PUT /api/outbox/send-mode { live: true } flips the pacer live, persists, and emits a WS event', async () => {
+		const transport: WhatsAppSendTransport = {
+			setPresence: vi.fn(async () => undefined),
+			sendText: vi.fn(async () => undefined),
+			sendReaction: vi.fn(async () => undefined),
+			markRead: vi.fn(async () => undefined)
+		};
+		const events = new EventBus();
+		await startTestApp(events, undefined, undefined, { outboxTransport: transport });
+
+		// Seed a queued manual send so we can observe the pacer actually transmit
+		// after the toggle lands.
+		upsertChat(db!, { jid: 'alice@s.whatsapp.net', kind: '1:1', last_msg_at: 1 });
+		const queued = await api('/api/chats/alice%40s.whatsapp.net/messages', {
+			method: 'POST',
+			origin: originForApp(),
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ text: 'will be sent live' })
+		});
+		expect(queued.status).toBe(202);
+
+		// Capture the WS send-mode event emitted by the PUT. The connection
+		// also receives an immediate snapshot (dry-run) on open, so skip the
+		// first send-mode and resolve on the second — the one the PUT emits.
+		let sawSnapshot = false;
+		const wsEvent = new Promise<{ live: boolean; dry_run: boolean }>((resolve, reject) => {
+			const ws = new WebSocket(`ws://127.0.0.1:${app!.port}/api/ws`, {
+				headers: { Origin: originForApp(), Host: `127.0.0.1:${app!.port}` }
+			});
+			ws.on('message', (data) => {
+				const event = JSON.parse(String(data)) as { type: string };
+				if (event.type !== 'send-mode') return;
+				if (!sawSnapshot) {
+					sawSnapshot = true;
+					return;
+				}
+				ws.close();
+				resolve(event as unknown as { live: boolean; dry_run: boolean });
+			});
+			ws.once('error', reject);
+		});
+
+		// Give the WS a tick to subscribe before the PUT fires.
+		await new Promise((r) => setTimeout(r, 10));
+
+		const res = await api('/api/outbox/send-mode', {
+			method: 'PUT',
+			origin: originForApp(),
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ live: true })
+		});
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ live: true, dry_run: false });
+
+		await expect(wsEvent).resolves.toMatchObject({ live: true, dry_run: false });
+
+		// The pacer actually transmitted — the only send path is still the
+		// outbox, and the toggle took effect without a restart. The manual
+		// presence sleep (~2.5s real time) precedes sendText, so wait for it.
+		await vi.waitFor(() => expect(transport.sendText).toHaveBeenCalledTimes(1), {
+			timeout: 5_000,
+			interval: 50
+		});
+	});
+
+	it('PUT /api/outbox/send-mode { live: false } is the safe direction and never confirms', async () => {
+		const transport: WhatsAppSendTransport = {
+			setPresence: vi.fn(async () => undefined),
+			sendText: vi.fn(async () => undefined),
+			sendReaction: vi.fn(async () => undefined),
+			markRead: vi.fn(async () => undefined)
+		};
+		await startTestApp(undefined, undefined, undefined, { outboxTransport: transport });
+		// Start live so the toggle to dry-run is the one we exercise.
+		const enable = await api('/api/outbox/send-mode', {
+			method: 'PUT',
+			origin: originForApp(),
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ live: true })
+		});
+		expect(enable.status).toBe(200);
+
+		const res = await api('/api/outbox/send-mode', {
+			method: 'PUT',
+			origin: originForApp(),
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ live: false })
+		});
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ live: false, dry_run: true });
+
+		// A subsequent queued send is suppressed — the safe direction took
+		// effect immediately and without any confirmation gate.
+		upsertChat(db!, { jid: 'bob@s.whatsapp.net', kind: '1:1', last_msg_at: 2 });
+		await api('/api/chats/bob%40s.whatsapp.net/messages', {
+			method: 'POST',
+			origin: originForApp(),
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ text: 'should not be transmitted' })
+		});
+		// sendText was called once above (the live toggle's own queued send,
+		// if any). The bob send must never produce a transport call. Give the
+		// pacer a moment, then assert it stayed at its prior count.
+		const callsBefore = (transport.sendText as ReturnType<typeof vi.fn>).mock.calls.length;
+		await new Promise((r) => setTimeout(r, 50));
+		expect((transport.sendText as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callsBefore);
+	});
+
+	it('rejects a non-boolean body with 400', async () => {
+		await startTestApp();
+		const res = await api('/api/outbox/send-mode', {
+			method: 'PUT',
+			origin: originForApp(),
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ live: 'yes' })
+		});
+		expect(res.status).toBe(400);
+	});
+
+	it('requires a trusted Origin (R9-adjacent CSRF defense, like every mutating route)', async () => {
+		await startTestApp();
+		const res = await api('/api/outbox/send-mode', {
+			method: 'PUT',
+			origin: 'http://evil.example',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ live: true })
+		});
+		expect(res.status).toBe(403);
+	});
+
+	it('a corrupt or missing outbox_dry_run setting resolves to DRY RUN, not live sends', async () => {
+		// This is the test that matters most for W4-U8: anything other than the
+		// exact string 'false' must mean dry-run. The owner has live sends
+		// enabled on a real account; an unreadable setting must never silently
+		// flip the pacer to live on the next restart.
+		const cases: Array<{ stored: string | undefined; expected: { live: boolean; dry_run: boolean } }> = [
+			{ stored: undefined, expected: { live: false, dry_run: true } },
+			{ stored: 'true', expected: { live: false, dry_run: true } },
+			{ stored: 'invalid', expected: { live: false, dry_run: true } },
+			{ stored: '', expected: { live: false, dry_run: true } },
+			{ stored: 'FALSE', expected: { live: false, dry_run: true } },
+			{ stored: 'false', expected: { live: true, dry_run: false } }
+		];
+		for (const { stored, expected } of cases) {
+			if (app) {
+				await app.close();
+				app = undefined;
+				db = undefined;
+			}
+			if (dataDir) rmSync(dataDir, { recursive: true, force: true });
+			dataDir = mkdtempSync(join(tmpdir(), 'whatsagent-corrupt-'));
+			db = openDatabase({ dataDir });
+			if (stored !== undefined) {
+				db.prepare(
+					`INSERT INTO settings (key, value) VALUES ('outbox_dry_run', ?)
+					 ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+				).run(stored);
+			}
+			app = createApp({ db, port: 0, host: '127.0.0.1', staticDir: null });
+			await app.start();
+
+			const res = await api('/api/outbox/send-mode');
+			expect(res.status).toBe(200);
+			expect(await res.json()).toEqual(expected);
+		}
+	});
+});
