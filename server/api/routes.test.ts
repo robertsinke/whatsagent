@@ -1020,6 +1020,7 @@ describe('read cursor (U4) — viewing produces no outbound WhatsApp traffic', (
 		const transport: WhatsAppSendTransport = {
 			setPresence: vi.fn(async () => undefined),
 			sendText: vi.fn(async () => undefined),
+			sendReaction: vi.fn(async () => undefined),
 			markRead: vi.fn(async () => undefined)
 		};
 		await startTestApp(new EventBus(), undefined, undefined, { outboxTransport: transport });
@@ -1054,12 +1055,14 @@ describe('read cursor (U4) — viewing produces no outbound WhatsApp traffic', (
 		expect(transport.markRead).not.toHaveBeenCalled();
 		expect(transport.sendText).not.toHaveBeenCalled();
 		expect(transport.setPresence).not.toHaveBeenCalled();
+		expect(transport.sendReaction).not.toHaveBeenCalled();
 	});
 
 	it('GET /chats/:jid/messages is read-only and never touches the transport', async () => {
 		const transport: WhatsAppSendTransport = {
 			setPresence: vi.fn(async () => undefined),
 			sendText: vi.fn(async () => undefined),
+			sendReaction: vi.fn(async () => undefined),
 			markRead: vi.fn(async () => undefined)
 		};
 		await startTestApp(new EventBus(), undefined, undefined, { outboxTransport: transport });
@@ -1079,5 +1082,6 @@ describe('read cursor (U4) — viewing produces no outbound WhatsApp traffic', (
 		expect(transport.markRead).not.toHaveBeenCalled();
 		expect(transport.sendText).not.toHaveBeenCalled();
 		expect(transport.setPresence).not.toHaveBeenCalled();
+		expect(transport.sendReaction).not.toHaveBeenCalled();
 	});
 });
