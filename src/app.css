@@ -257,8 +257,47 @@ body::before {
   box-shadow: var(--shadow-bevel);
 }
 
+/* Contextual scrollbar — chrome is hidden at rest and revealed while scrolling
+   (`data-active-scroll`, driven by an idle timer), on hover, or when keyboard
+   focus enters the scroller. The gutter is always reserved (thin track with a
+   transparent thumb) so revealing it never reflows the conversation. */
+@utility scrollbar-contextual {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 160ms ease;
+
+  &:hover,
+  &:focus-within,
+  &[data-active-scroll='true'] {
+    scrollbar-color: color-mix(in srgb, var(--ink-50) 55%, transparent) transparent;
+  }
+
+  &::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background-color: transparent;
+    background-clip: content-box;
+    border: 3px solid transparent;
+    border-radius: 999px;
+    transition: background-color 160ms ease;
+  }
+
+  &:hover::-webkit-scrollbar-thumb,
+  &:focus-within::-webkit-scrollbar-thumb,
+  &[data-active-scroll='true']::-webkit-scrollbar-thumb {
+    background-color: color-mix(in srgb, var(--ink-50) 45%, transparent);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   body::before {
     animation: none;
+  }
+
+  .scrollbar-contextual {
+    transition: none;
   }
 }

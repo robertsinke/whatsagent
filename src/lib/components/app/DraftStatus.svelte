@@ -41,7 +41,8 @@
 		const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 		if (reduce) return;
 		panelEl.style.opacity = '0';
-		panelEl.style.transform = 'translateY(-8px) scale(0.985)';
+		// The editor grows upward out of the draft card, so it enters from below.
+		panelEl.style.transform = 'translateY(8px) scale(0.985)';
 		panelEl.style.filter = 'blur(7px)';
 		animate(
 			panelEl,
@@ -76,7 +77,7 @@
 			if (!reduce) {
 				await animate(
 					panelEl,
-					{ opacity: 0, y: -6, scale: 0.985, filter: 'blur(6px)' },
+					{ opacity: 0, y: 6, scale: 0.985, filter: 'blur(6px)' },
 					{ duration: 0.13 }
 				).finished;
 			}
@@ -300,13 +301,19 @@
 		gap: 0.35rem;
 		flex-wrap: wrap;
 	}
+	/* Opens upward, over the conversation: the draft card sits directly above the
+	   composer at the bottom of the pane, so a downward panel would render off
+	   screen. Height is capped against the viewport and the textarea — not the
+	   action row — absorbs the overflow, so cancel/approve stay reachable
+	   without scrolling the shell. */
 	.draft-editor {
 		position: absolute;
 		z-index: 20;
-		top: calc(100% + 0.35rem);
+		bottom: calc(100% + 0.35rem);
 		left: 0;
 		right: 0;
 		min-height: 7.4rem;
+		max-height: min(22rem, 55dvh);
 		border-radius: var(--radius-md);
 		border: 1px solid color-mix(in srgb, var(--lime) 55%, var(--hairline));
 		background: var(--surface-raised);
@@ -315,12 +322,14 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0.45rem;
-		transform-origin: top center;
+		transform-origin: bottom center;
 	}
 	.draft-editor textarea {
 		width: 100%;
+		flex: 1;
 		min-height: 4.2rem;
-		resize: vertical;
+		overflow-y: auto;
+		resize: none;
 		border-radius: var(--radius-sm);
 		border: 1px solid var(--hairline);
 		background: var(--surface-sunken);
@@ -339,6 +348,7 @@
 			0 0 0 3px color-mix(in srgb, var(--lime) 25%, transparent);
 	}
 	.editor-foot {
+		flex: none;
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
@@ -352,6 +362,15 @@
 		align-items: center;
 		gap: 0.35rem;
 		flex: none;
+	}
+	@media (max-height: 640px) {
+		.draft-editor {
+			min-height: 6rem;
+			max-height: 62dvh;
+		}
+		.draft-editor textarea {
+			min-height: 3rem;
+		}
 	}
 	@media (max-width: 760px) {
 		.editor-foot {

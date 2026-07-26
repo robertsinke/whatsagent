@@ -60,4 +60,15 @@
 		color: var(--ink-50);
 		padding-left: 0.2rem;
 	}
+	/* Short viewports: shrink the composer's resting height so the conversation
+	   keeps usable space. The outbox hint stays — it states an invariant, not a
+	   decoration — and the input still grows with content. */
+	@media (max-height: 640px) {
+		.composer {
+			padding: 0.35rem 0.35rem 0.25rem;
+		}
+		:global(.composer-input textarea) {
+			min-height: 2.4rem;
+		}
+	}
 </style>

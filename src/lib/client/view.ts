@@ -103,6 +103,50 @@ export function mergeMessages(existing: Message[], incoming: Message[]): Message
 	return [...byId.values()].sort((a, b) => a.ts - b.ts || a.id.localeCompare(b.id));
 }
 
+/**
+ * The single "New" marker in an open conversation. `count` is the server's
+ * unread count snapshotted *before* the chat was marked read — the client never
+ * re-derives unread state, it only remembers what the server said on open.
+ */
+export type UnreadBoundary = {
+	/** Id of the first unread inbound message; the marker renders before it. */
+	firstUnreadId: string;
+	count: number;
+	/** False while the loaded window is too short to prove where unread begins. */
+	exact: boolean;
+};
+
+/**
+ * Place one unread boundary inside the loaded window.
+ *
+ * Unread counts inbound messages only. When the count fits inside the loaded
+ * inbound messages the boundary is exact; when it exceeds them the marker sits
+ * at the oldest loaded inbound message — honestly approximate — until older
+ * pages reveal the real boundary.
+ *
+ * Call this only on open and after a prepend: live messages arriving while the
+ * chat is open are not part of the snapshotted unread set, and re-deriving
+ * against them would walk the marker forward.
+ */
+export function deriveUnreadBoundary(
+	messages: Message[],
+	unreadCount: number
+): UnreadBoundary | null {
+	if (unreadCount <= 0) return null;
+	const inbound = messages.filter((m) => !m.from_me);
+	if (inbound.length === 0) return null;
+	const exact = unreadCount <= inbound.length;
+	const first = exact ? inbound[inbound.length - unreadCount]! : inbound[0]!;
+	return { firstUnreadId: first.id, count: unreadCount, exact };
+}
+
+export function unreadBoundaryLabel(boundary: UnreadBoundary): string {
+	const plural = boundary.count === 1 ? 'message' : 'messages';
+	return boundary.exact
+		? `${boundary.count} unread ${plural}`
+		: `${boundary.count} unread ${plural} · earliest not loaded yet`;
+}
+
 export type Tone = 'neutral' | 'progress' | 'good' | 'warn' | 'bad';
 
 export type SessionBanner = {
