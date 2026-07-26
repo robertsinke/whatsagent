@@ -61,6 +61,8 @@ export type CreateAppOptions = {
 	providerName?: string;
 	memory?: Memory;
 	memoryReflectMs?: number;
+	/** Short-interval retry of the memory's retain queue, independent of `memoryReflectMs`. Default 60 s. */
+	memoryQueueDrainMs?: number;
 	draftDebounceMs?: number;
 	/** Exact from-me message ID permitted for one non-production drafting test. */
 	devDraftFromMeMessageId?: string;
@@ -109,7 +111,7 @@ export function createApp(options: CreateAppOptions = {}): App {
 		onChange: (view) => events.emit({ type: 'session', session: view })
 	});
 	const ingestHooks = createIngestEventHooks(events, db);
-	const memory = options.memory ?? new NullMemory();
+	const memory: Memory = options.memory ?? new NullMemory();
 	const scheduler = options.draftProvider
 		? new DraftScheduler({
 				db,
@@ -255,6 +257,7 @@ export function createApp(options: CreateAppOptions = {}): App {
 	let closing = false;
 	let voiceBootstrap: Promise<void> | undefined;
 	let reflectTimer: ReturnType<typeof setInterval> | undefined;
+	let drainTimer: ReturnType<typeof setInterval> | undefined;
 
 	function completeHistorySync(): void {
 		if (voiceBootstrap) {
@@ -358,6 +361,16 @@ export function createApp(options: CreateAppOptions = {}): App {
 			sync();
 			reflectTimer = setInterval(sync, reflectMs);
 		}
+		// Short-interval queue retry: a cold-start retain timeout sets the memory's offline
+		// window, and without this the queue sits until the next retain or the 6-hourly
+		// reflect — one 2 s timeout parked the whole voice bootstrap for six hours. The
+		// memory's `drain` is a no-op when offline or when the queue is empty.
+		const drainMs = options.memoryQueueDrainMs ?? 60_000;
+		if (drainMs > 0 && typeof memory.drain === 'function') {
+			const drain = () =>
+				void memory.drain!().catch((error) => console.warn('[memory] queue drain failed', error));
+			drainTimer = setInterval(drain, drainMs);
+		}
 	}
 
 	async function close(): Promise<void> {
@@ -365,6 +378,8 @@ export function createApp(options: CreateAppOptions = {}): App {
 		channelUnsub?.();
 		if (reflectTimer) clearInterval(reflectTimer);
 		reflectTimer = undefined;
+		if (drainTimer) clearInterval(drainTimer);
+		drainTimer = undefined;
 		scheduler?.stop();
 		pacer?.stop();
 		session.dispose();

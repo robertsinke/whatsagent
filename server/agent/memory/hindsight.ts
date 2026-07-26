@@ -17,6 +17,60 @@ const VOICE_MODEL_PREFIX = 'voice-';
 const REFRESH_IN_PROGRESS_CONTENT = 'Generating content...';
 const GLOBAL_MODEL_ID = `${VOICE_MODEL_PREFIX}${GLOBAL_VOICE_STEM}`;
 
+/**
+ * Positive test for "is this a real voice document?", replacing the two-string blocklist
+ * that could not anticipate what an LLM writes when it has nothing to say. A valid voice
+ * document carries at least one concrete habit as a markdown list item; an LLM with no
+ * data writes a single declarative sentence about not having information (and the
+ * in-flight placeholder is a single line of boilerplate). Both fail this test.
+ *
+ * Exported for testing — do not call from outside the module.
+ */
+export function looksLikeVoiceDocument(content: string): boolean {
+	const trimmed = content.trim();
+	if (!trimmed) return false;
+	if (trimmed === REFRESH_IN_PROGRESS_CONTENT) return false;
+	// A "no information" / "I don't have information" verdict — the failure mode the old
+	// blocklist missed. Match the common phrasings regardless of surrounding sentence.
+	const lower = trimmed.toLowerCase();
+	if (
+		lower.includes("don't have information") ||
+		lower.includes('do not have information') ||
+		lower.includes('no information about the owner') ||
+		lower.includes('not enough information') ||
+		lower.includes('no discernible') ||
+		lower.includes('unable to determine')
+	) {
+		return false;
+	}
+	// A real voice document is a list of habits. Require at least one markdown list item
+	// (`- `) that is more than a bare label — it has to carry a description of the habit.
+	const items = trimmed.split(/\r?\n/).filter((line) => /^\s*[-*]\s+\S/.test(line));
+	if (items.length === 0) return false;
+	// Reject a single-line "list" that is really just the no-information verdict restated
+	// (e.g. "- No information about the owner's writing habits.").
+	const substantive = items.filter((line) => {
+		const text = line.replace(/^\s*[-*]\s+/, '').toLowerCase();
+		return (
+			text.length > 0 &&
+			!text.startsWith('no information') &&
+			!text.startsWith("don't have") &&
+			!text.startsWith('do not have') &&
+			!text.startsWith('unable to')
+		);
+	});
+	return substantive.length > 0;
+}
+
+/**
+ * The floor retain timeout. The steady-state `timeoutMs` (2 s) is a reasonable budget for a
+ * single retain on the drafting path, but the floor cost of the first retain after a cold
+ * start is the LLM warming, not the network. A 2 s budget there aborts the whole bootstrap
+ * and parks the queue for the retry window. Retain uses this longer floor so one cold-start
+ * timeout does not cascade.
+ */
+const DEFAULT_RETAIN_TIMEOUT_MS = 30_000;
+
 const GLOBAL_SOURCE_QUERY =
 	"What are the owner's durable writing habits across all conversations — tone, typical length, " +
 	'greetings, sign-offs, punctuation, emoji use, and language? Quote evidence for each habit.';
@@ -104,7 +158,10 @@ export type HindsightMemoryOptions = {
 	baseUrl?: string;
 	bankId?: string;
 	fallback?: Memory;
+	/** Timeout for the light mirror/ensure/refresh calls (default 2 s). */
 	timeoutMs?: number;
+	/** Timeout for the retain send path (default 30 s). The first retain after a cold start pays the LLM warm-up, not the network. */
+	retainTimeoutMs?: number;
 	maxQueuedRetains?: number;
 	retryDelayMs?: number;
 	refreshCron?: string;
@@ -137,6 +194,7 @@ export class HindsightMemory implements Memory {
 	readonly #baseUrl: string;
 	readonly #fallback: Memory;
 	readonly #timeoutMs: number;
+	readonly #retainTimeoutMs: number;
 	readonly #maxQueuedRetains: number;
 	readonly #retryDelayMs: number;
 	readonly #refreshCron: string;
@@ -155,6 +213,7 @@ export class HindsightMemory implements Memory {
 		this.#bankId = options.bankId ?? DEFAULT_BANK_ID;
 		this.#fallback = options.fallback ?? new NullMemory({ captureVoice: true });
 		this.#timeoutMs = options.timeoutMs ?? 2_000;
+		this.#retainTimeoutMs = options.retainTimeoutMs ?? DEFAULT_RETAIN_TIMEOUT_MS;
 		this.#maxQueuedRetains = options.maxQueuedRetains ?? 1_000;
 		this.#retryDelayMs = options.retryDelayMs ?? 30_000;
 		this.#refreshCron = options.refreshCron ?? DEFAULT_REFRESH_CRON;
@@ -218,12 +277,19 @@ export class HindsightMemory implements Memory {
 	 * The mirror heartbeat. Ensures the models exist and copies whatever markdown they
 	 * currently hold onto disk. Regeneration itself is Hindsight's cron (D1b), so this
 	 * costs no LLM call and a stale file is an acceptable outcome by design.
+	 *
+	 * This does **not** create the global model: creating it before any observation has
+	 * been retained makes Hindsight synthesize a "no information about the owner's writing
+	 * habits" document, which would then be mirrored to `voice/global.md` and handed to
+	 * the drafter as the owner's voice. The global model is ensured lazily on the first
+	 * successful retain (see `#retain`), so by the time it exists the bank has data to
+	 * synthesize from. On a restart the model already exists server-side, so this just
+	 * mirrors its current content.
 	 */
 	async reflect(): Promise<void> {
 		if (Date.now() < this.#offlineUntil) return;
 		try {
 			await this.#flushQueued();
-			await this.#ensureGlobalModel();
 			await this.#mirrorAll();
 		} catch (error) {
 			this.#offlineUntil = Date.now() + this.#retryDelayMs;
@@ -232,12 +298,32 @@ export class HindsightMemory implements Memory {
 	}
 
 	/**
+	 * Short-interval queue retry, independent of the 6-hourly `reflect`. A cold-start retain
+	 * that times out sets `#offlineUntil`; without this, the queue sits until the next retain
+	 * or the next reflect — up to six hours. The runtime wires a ~1-minute timer around this.
+	 * No-op while still offline (the gate matches `#retain`).
+	 */
+	async drain(): Promise<void> {
+		if (Date.now() < this.#offlineUntil) return;
+		if (this.#queued.length === 0) return;
+		try {
+			await this.#flushQueued();
+		} catch (error) {
+			this.#offlineUntil = Date.now() + this.#retryDelayMs;
+			this.#log.warn('[memory] Hindsight queue drain failed; will retry', error);
+		}
+	}
+
+	/**
 	 * Owner-triggered "refresh now" (D1b), so the nightly cron never blocks demonstrating
 	 * the loop. Refresh is asynchronous server-side: this submits it and mirrors whatever
 	 * is present now — the regenerated content lands on a later `reflect`.
+	 *
+	 * Does not create the global model here: an owner hitting "refresh now" before any
+	 * observation has been retained would otherwise synthesize the "no information"
+	 * document. The model is ensured lazily on the first successful retain.
 	 */
 	async refreshVoiceModels(): Promise<string[]> {
-		await this.#ensureGlobalModel();
 		const ids = await this.#listVoiceModelIds();
 		for (const id of ids) {
 			await this.#withTimeout((signal) => this.#client.refreshMentalModel(this.#bankId, id, { signal }));
@@ -268,7 +354,7 @@ export class HindsightMemory implements Memory {
 				this.#client.getMentalModel(this.#bankId, id, { signal })
 			);
 			const content = (model.content ?? '').trim();
-			if (!content || content === REFRESH_IN_PROGRESS_CONTENT) continue;
+			if (!looksLikeVoiceDocument(content)) continue;
 			this.#files.write(id.slice(VOICE_MODEL_PREFIX.length), content);
 		}
 	}
@@ -358,6 +444,15 @@ export class HindsightMemory implements Memory {
 		try {
 			await this.#flushQueued();
 			await this.#send(retain);
+			// Ensure the global model exists now that the bank has at least one observation.
+		 // Creating it earlier would make Hindsight synthesize a "no information about the
+		 // owner's writing habits" document from an empty bank. `#ensureModel` dedupes via
+		 // `#ensuring`, so the bootstrap's hundreds of retains pay one creation, not
+		 // hundreds — the rest return the same in-flight promise. Per-chat models stay
+		 // deferred to a real edit/skip demand signal. Awaited (not fire-and-forget) so a
+		 // reflect that runs immediately after sees the created model, but errors here
+		 // are swallowed inside `#ensureModel` and never fail the retain.
+			await this.#ensureGlobalModel();
 		} catch (error) {
 			this.#queue(retain);
 			this.#offlineUntil = Date.now() + this.#retryDelayMs;
@@ -379,19 +474,25 @@ export class HindsightMemory implements Memory {
 	}
 
 	async #send(retain: PendingRetain): Promise<void> {
-		await this.#withTimeout((signal) => this.#client.retain(this.#bankId, retain.content, {
-			context: retain.context,
-			metadata: retain.metadata,
-			tags: retain.tags,
-			documentId: retain.documentId,
-			updateMode: retain.updateMode,
-			signal
-		}));
+		await this.#withTimeout(
+			(signal) => this.#client.retain(this.#bankId, retain.content, {
+				context: retain.context,
+				metadata: retain.metadata,
+				tags: retain.tags,
+				documentId: retain.documentId,
+				updateMode: retain.updateMode,
+				signal
+			}),
+			this.#retainTimeoutMs
+		);
 	}
 
-	async #withTimeout<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+	async #withTimeout<T>(
+		operation: (signal: AbortSignal) => Promise<T>,
+		timeoutMs: number = this.#timeoutMs
+	): Promise<T> {
 		const controller = new AbortController();
-		const timeout = setTimeout(() => controller.abort(), this.#timeoutMs);
+		const timeout = setTimeout(() => controller.abort(), timeoutMs);
 		try {
 			return await operation(controller.signal);
 		} finally {
