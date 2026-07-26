@@ -16,7 +16,7 @@
     "preview:ui": "tsx scripts/ui-preview.ts",
     "postinstall": "node scripts/patch-baileys.mjs",
     "prepare": "svelte-kit sync || echo ''",
-    "check": "node scripts/patch-baileys.mjs --check && node scripts/check-migrations.mjs && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json && tsc -p tsconfig.server.json --noEmit",
+    "check": "node scripts/patch-baileys.mjs --check && node scripts/check-migrations.mjs && node scripts/check-hooks.mjs && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json && tsc -p tsconfig.server.json --noEmit",
     "check:server": "tsc -p tsconfig.server.json --noEmit",
     "typecheck": "npm run check",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
