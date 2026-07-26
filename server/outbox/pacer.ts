@@ -101,8 +101,8 @@ export class OutboxPacer {
 	#stopped = true;
 	#draftsPaused: boolean;
 	/**
-	 * Live send-mode. Defaults to the constructor's `dryRun` option (which itself
-	 * defaults to dry-run via `resolveOutboxDryRun`). Flipped at runtime by
+	 * Live send-mode. Defaults to dry-run when the `dryRun` option is unset.
+	 * Flipped at runtime by
 	 * {@link setDryRun} from the settings UI — no restart required. The pacer
 	 * remains the only path to `sendMessage`; this only changes whether it
 	 * actually transmits, never whether the queue advances.
@@ -120,13 +120,18 @@ export class OutboxPacer {
 		this.#manualPresenceMs = options.manualPresenceMs ?? 2_500;
 		this.#retryDelayMs = options.retryDelayMs ?? 5_000;
 		this.#draftsPaused = options.draftsPaused ?? false;
-		// Preserve the historical constructor default: an unset `dryRun` option
-		// means "not dry-run" (live), matching the original `this.#options.dryRun`
-		// truthiness read. The fail-safe polarity lives in `resolveOutboxDryRun`
-		// (settings), which `main()` always passes explicitly — so the runtime
-		// never lands here without an explicit value, and tests that omit it
-		// keep their previous "live" semantics.
-		this.#dryRun = options.dryRun ?? false;
+		// Fail safe: an unset `dryRun` means DRY RUN, never live sends.
+		//
+		// This mirrors `resolveOutboxDryRun`, where anything that is not the exact
+		// string 'false' resolves to dry-run. Defaulting the constructor the other
+		// way would mean any caller that supplies a real transport but forgets
+		// `dryRun` transmits to real recipients — the one failure mode that is not
+		// recoverable, because a sent WhatsApp message cannot be unsent.
+		//
+		// A test that wants live sends must say so with an explicit `dryRun: false`.
+		// That is the correct direction for the ask to point: opting in to sending
+		// is a deliberate act, opting out is the default.
+		this.#dryRun = options.dryRun ?? true;
 	}
 
 	start(): void {

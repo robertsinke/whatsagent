@@ -1146,16 +1146,7 @@ describe('outbox send-mode toggle (W4-U8)', () => {
 		const events = new EventBus();
 		await startTestApp(events, undefined, undefined, { outboxTransport: transport });
 
-		// Seed a queued manual send so we can observe the pacer actually transmit
-		// after the toggle lands.
 		upsertChat(db!, { jid: 'alice@s.whatsapp.net', kind: '1:1', last_msg_at: 1 });
-		const queued = await api('/api/chats/alice%40s.whatsapp.net/messages', {
-			method: 'POST',
-			origin: originForApp(),
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ text: 'will be sent live' })
-		});
-		expect(queued.status).toBe(202);
 
 		// Capture the WS send-mode event emitted by the PUT. The connection
 		// also receives an immediate snapshot (dry-run) on open, so skip the
@@ -1191,6 +1182,18 @@ describe('outbox send-mode toggle (W4-U8)', () => {
 		expect(await res.json()).toEqual({ live: true, dry_run: false });
 
 		await expect(wsEvent).resolves.toMatchObject({ live: true, dry_run: false });
+
+		// Queue the send only AFTER the toggle has landed. Queuing it first would
+		// let the pacer drain it while the app is still in its fail-safe dry-run
+		// default, so the test would pass only on an app that booted live — which
+		// is the unsafe default this suite must not depend on.
+		const queued = await api('/api/chats/alice%40s.whatsapp.net/messages', {
+			method: 'POST',
+			origin: originForApp(),
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ text: 'will be sent live' })
+		});
+		expect(queued.status).toBe(202);
 
 		// The pacer actually transmitted — the only send path is still the
 		// outbox, and the toggle took effect without a restart. The manual

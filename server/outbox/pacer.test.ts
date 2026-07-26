@@ -56,6 +56,10 @@ function pacer(
 		now: Date.now,
 		random: () => 0,
 		sleep: async () => undefined,
+		// These tests assert what the pacer transmits, so they need live sends —
+		// and the constructor fails safe to dry-run. Opting in explicitly here
+		// keeps that default honest rather than weakening it for production.
+		dryRun: false,
 		...overrides,
 		db: database,
 		transport: sendTransport
@@ -592,6 +596,43 @@ describe('OutboxPacer', () => {
 	});
 
 	describe('live send-mode toggle (W4-U8)', () => {
+		it('fails safe: an omitted dryRun option means DRY RUN, never live sends', async () => {
+			// A caller that supplies a real transport but forgets `dryRun` must not
+			// transmit to real recipients. A sent WhatsApp message cannot be unsent,
+			// so this default is the difference between a recoverable mistake and an
+			// unrecoverable one. The `pacer()` helper opts into live explicitly, so
+			// construct directly here to exercise the real default.
+			vi.useFakeTimers({ now: NOW });
+			const database = setup();
+			const id = enqueueManualOutbox(database, {
+				chatJid: 'alice@s.whatsapp.net',
+				text: 'must not be transmitted',
+				now: NOW
+			});
+			const sendTransport = transport();
+			const instance = new OutboxPacer({
+				db: database,
+				transport: sendTransport,
+				minDraftDelayMs: 1_000,
+				maxDraftDelayMs: 1_000,
+				manualPresenceMs: 0,
+				now: Date.now,
+				random: () => 0,
+				sleep: async () => undefined
+			});
+			pacers.push(instance);
+
+			expect(instance.isDryRun()).toBe(true);
+
+			instance.start();
+			await vi.advanceTimersByTimeAsync(0);
+
+			// The queue still advances — dry-run changes whether we transmit, not
+			// whether the row is processed — but nothing reached the transport.
+			expect(getOutbox(database, id)?.status).toBe('sent');
+			expect(sendTransport.sendText).not.toHaveBeenCalled();
+		});
+
 		it('flips from live to dry-run mid-flight and suppresses the next send', async () => {
 			vi.useFakeTimers({ now: NOW });
 			const database = setup();
