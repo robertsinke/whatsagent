@@ -289,6 +289,8 @@ export class WhatsAppConnection implements Channel {
 			this.#detachIngest = attachIngest(socket.ev, this.#db, {
 				onMessageIngested: (message) =>
 					this.#emit({ type: 'message-committed', message }),
+				onMessageUpdated: (message) =>
+					this.#emit({ type: 'message-updated', message }),
 				onSyncProgress: (progress) =>
 					this.#emit({
 						type: 'sync-progress',

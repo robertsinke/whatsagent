@@ -1,6 +1,7 @@
 import type { ChannelConnectionState } from '../channels/channel.js';
 import type { Chat } from '../store/chats.js';
 import type { Draft } from '../store/drafts.js';
+import type { AppDatabase } from '../store/db.js';
 import type { Message } from '../store/messages.js';
 import type { OutboxRow } from '../store/outbox.js';
 import type { ChatView } from './chat-view.js';
@@ -16,6 +17,7 @@ export type ConnectionState = ChannelConnectionState | 'unpaired';
 export type ServerEvent =
 	/** Carries the client-facing view (no `raw` envelope) — see message-view.ts. */
 	| { type: 'message-new'; message: MessageView }
+	| { type: 'message-updated'; message: MessageView }
 	| { type: 'chat-updated'; chat: Chat | ChatView }
 	| { type: 'draft-updated'; draft: Draft }
 	| { type: 'draft-removed'; chat_jid: string }
@@ -70,14 +72,18 @@ export type SyncProgressPayload = {
 
 export type IngestEventHooks = {
 	onMessageIngested(message: Message): void;
+	onMessageUpdated(message: Message): void;
 	onChatUpdated(chat: Chat): void;
 	onSyncProgress(progress: SyncProgressPayload): void;
 };
 
-export function createIngestEventHooks(bus: EventBus): IngestEventHooks {
+export function createIngestEventHooks(bus: EventBus, db: AppDatabase): IngestEventHooks {
 	return {
 		onMessageIngested(message) {
-			bus.emit({ type: 'message-new', message: toMessageView(message) });
+			bus.emit({ type: 'message-new', message: toMessageView(db, message) });
+		},
+		onMessageUpdated(message) {
+			bus.emit({ type: 'message-updated', message: toMessageView(db, message) });
 		},
 		onChatUpdated(chat) {
 			bus.emit({ type: 'chat-updated', chat });

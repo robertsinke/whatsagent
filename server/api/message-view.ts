@@ -1,4 +1,35 @@
-import type { MediaFailureReason, MediaState, Message } from '../store/messages.js';
+import { resolveContact } from '../store/contacts.js';
+import type { AppDatabase } from '../store/db.js';
+import {
+	getMessage,
+	listMessageReactions,
+	type MediaFailureReason,
+	type MediaState,
+	type Message
+} from '../store/messages.js';
+
+export type IdentityView = {
+	/** Stable stored identity; `me` represents the linked owner account. */
+	jid: string;
+	/** Phone alias when known, otherwise the stable JID. */
+	display_jid: string;
+	/** Best local name, with an honest identity fallback. */
+	name: string;
+};
+
+export type QuoteView = {
+	target_id: string;
+	resolved: boolean;
+	sender: IdentityView | null;
+	type: string;
+	text: string | null;
+};
+
+export type ReactionView = {
+	emoji: string;
+	count: number;
+	actors: IdentityView[];
+};
 
 /**
  * What the SPA gets for a message. `raw` (the full WAMessage envelope, needed
@@ -10,11 +41,13 @@ export type MessageView = {
 	chat_jid: string;
 	channel: string;
 	from_me: boolean;
-	sender: string | null;
+	sender: IdentityView | null;
 	ts: number;
 	type: string;
 	text: string | null;
 	media: MediaView | null;
+	quote: QuoteView | null;
+	reactions: ReactionView[];
 };
 
 /** D2 — everything the media viewer needs, all of it server-decided. */
@@ -101,16 +134,55 @@ export function describeMedia(message: Message): MediaView | null {
 	};
 }
 
-export function toMessageView(message: Message): MessageView {
+function toIdentityView(db: AppDatabase, jid: string | null): IdentityView | null {
+	if (!jid) return null;
+	if (jid === 'me') return { jid, display_jid: jid, name: 'You' };
+	const contact = resolveContact(db, jid);
+	const displayJid = contact?.phone_jid ?? jid;
+	return {
+		jid,
+		display_jid: displayJid,
+		name: contact?.name?.trim() || contact?.push_name?.trim() || displayJid
+	};
+}
+
+function toQuoteView(db: AppDatabase, message: Message): QuoteView | null {
+	if (!message.quote_target_id || !message.quote_type) return null;
+	const target = getMessage(db, message.quote_target_id);
+	const resolved = target?.chat_jid === message.chat_jid ? target : undefined;
+	return {
+		target_id: message.quote_target_id,
+		resolved: Boolean(resolved),
+		sender: toIdentityView(db, resolved ? (resolved.from_me ? 'me' : resolved.sender) : message.quote_sender),
+		type: resolved?.type ?? message.quote_type,
+		text: resolved?.text ?? message.quote_text
+	};
+}
+
+function toReactionViews(db: AppDatabase, message: Message): ReactionView[] {
+	const grouped = new Map<string, IdentityView[]>();
+	for (const reaction of listMessageReactions(db, message.chat_jid, message.id)) {
+		const actor = toIdentityView(db, reaction.actor);
+		if (!actor) continue;
+		const actors = grouped.get(reaction.emoji) ?? [];
+		actors.push(actor);
+		grouped.set(reaction.emoji, actors);
+	}
+	return [...grouped].map(([emoji, actors]) => ({ emoji, count: actors.length, actors }));
+}
+
+export function toMessageView(db: AppDatabase, message: Message): MessageView {
 	return {
 		id: message.id,
 		chat_jid: message.chat_jid,
 		channel: message.channel,
 		from_me: message.from_me,
-		sender: message.sender,
+		sender: toIdentityView(db, message.from_me ? null : message.sender),
 		ts: message.ts,
 		type: message.type,
 		text: message.text,
-		media: describeMedia(message)
+		media: describeMedia(message),
+		quote: toQuoteView(db, message),
+		reactions: toReactionViews(db, message)
 	};
 }

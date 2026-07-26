@@ -3,12 +3,15 @@ import {
 	extractMessageContent,
 	getContentType,
 	isJidGroup,
+	proto,
 	type Chat,
 	type ChatUpdate,
 	type Contact,
 	type LIDMapping,
 	type MessageUpsertType,
-	type WAMessage
+	type WAMessage,
+	type WAMessageKey,
+	type WAMessageUpdate
 } from 'baileys';
 import { getChat, upsertChat, type ChatKind } from '../../store/chats.js';
 import {
@@ -17,7 +20,12 @@ import {
 	upsertContact
 } from '../../store/contacts.js';
 import type { AppDatabase } from '../../store/db.js';
-import { getMessage, upsertMessage, type Message } from '../../store/messages.js';
+import {
+	getMessage,
+	upsertMessage,
+	upsertMessageReaction,
+	type Message
+} from '../../store/messages.js';
 
 export type HistorySetPayload = {
 	chats: Chat[];
@@ -31,6 +39,13 @@ export type MessagesUpsertPayload = {
 	messages: WAMessage[];
 	type: MessageUpsertType;
 };
+
+export type MessagesUpdatePayload = WAMessageUpdate[];
+
+export type MessagesReactionPayload = Array<{
+	key: WAMessageKey;
+	reaction: proto.IReaction;
+}>;
 
 export type SyncProgress = {
 	/** Baileys' own percentage. Kept for logs; the UI must not render it (D5). */
@@ -49,6 +64,7 @@ export type IngestListener = {
 export type AttachIngestOptions = {
 	onSyncProgress?: (progress: SyncProgress) => void;
 	onMessageIngested?: (message: Message) => void;
+	onMessageUpdated?: (message: Message) => void;
 };
 
 type ContactPatch = Partial<Contact> & Pick<Contact, 'id'>;
@@ -137,6 +153,34 @@ export function extractMessageText(msg: WAMessage): string | null {
 	if (content.documentMessage?.caption) return content.documentMessage.caption;
 	if (content.reactionMessage?.text) return content.reactionMessage.text;
 	return null;
+}
+
+type QuoteSnapshot = {
+	targetId: string;
+	sender: string | null;
+	type: string;
+	text: string | null;
+};
+
+function messageContextInfo(message: proto.IMessage | null | undefined): proto.IContextInfo | undefined {
+	const content = extractMessageContent(message);
+	const type = getContentType(content);
+	if (!content || !type) return undefined;
+	const value = (content as Record<string, unknown>)[type];
+	if (!value || typeof value !== 'object' || !('contextInfo' in value)) return undefined;
+	return (value as { contextInfo?: proto.IContextInfo | null }).contextInfo ?? undefined;
+}
+
+function quoteSnapshot(msg: WAMessage): QuoteSnapshot | null {
+	const context = messageContextInfo(msg.message);
+	if (!context?.stanzaId || !context.quotedMessage) return null;
+	const quoted = { message: context.quotedMessage } as WAMessage;
+	return {
+		targetId: context.stanzaId,
+		sender: context.participant ?? null,
+		type: classifyMessageType(quoted),
+		text: extractMessageText(quoted)
+	};
 }
 
 function chatJidFromMessage(msg: WAMessage): string | undefined {
@@ -292,6 +336,21 @@ export function ingestBaileysMessage(
 	const senderIdentity = lidPhonePair(msg.key?.participant, msg.key?.participantAlt);
 	if (senderIdentity) handleLidMappingUpdate(db, senderIdentity);
 
+	if (type === 'reaction') {
+		const reaction = extractMessageContent(msg.message)?.reactionMessage;
+		const targetId = reaction?.key?.id;
+		if (!targetId) return;
+		upsertChatMerged(db, { jid: chatJid, kind: chatKindFromJid(chatJid) });
+		upsertMessageReaction(db, {
+			chat_jid: chatJid,
+			target_msg_id: targetId,
+			actor: reactionActor(msg.key, chatJid),
+			emoji: reaction.text ?? null,
+			updated_at: toNumber(reaction.senderTimestampMs) ?? ts
+		});
+		return;
+	}
+
 	// FK: chat row must exist before the message row.
 	const existing = getChat(db, chatJid);
 	const existingMessage = getMessage(db, id);
@@ -306,6 +365,7 @@ export function ingestBaileysMessage(
 		unread
 	});
 
+	const quote = quoteSnapshot(msg);
 	upsertMessage(db, {
 		id,
 		chat_jid: chatJid,
@@ -316,9 +376,68 @@ export function ingestBaileysMessage(
 		type,
 		text,
 		media_ref: null,
+		quote_target_id: quote?.targetId ?? null,
+		quote_sender: quote?.sender ?? null,
+		quote_type: quote?.type ?? null,
+		quote_text: quote?.text ?? null,
 		// Full WAMessage envelope — required for getMessage(key) → .message retries.
 		raw: JSON.stringify(msg, BufferJSON.replacer)
 	});
+}
+
+function reactionActor(key: WAMessageKey | null | undefined, chatJid: string): string {
+	return key?.participant ?? key?.participantAlt ?? (key?.fromMe ? 'me' : chatJid);
+}
+
+function applyReaction(
+	db: AppDatabase,
+	targetKey: WAMessageKey,
+	reaction: proto.IReaction
+): string | undefined {
+	const chatJid = targetKey.remoteJid ?? targetKey.remoteJidAlt ?? undefined;
+	const targetId = targetKey.id ?? undefined;
+	if (!chatJid || !targetId) return undefined;
+	upsertChatMerged(db, { jid: chatJid, kind: chatKindFromJid(chatJid) });
+	upsertMessageReaction(db, {
+		chat_jid: chatJid,
+		target_msg_id: targetId,
+		actor: reactionActor(reaction.key, chatJid),
+		emoji: reaction.text ?? null,
+		updated_at: toNumber(reaction.senderTimestampMs) ?? Date.now()
+	});
+	return targetId;
+}
+
+export function handleMessagesUpdate(
+	db: AppDatabase,
+	updates: MessagesUpdatePayload
+): string[] {
+	const targetIds = new Set<string>();
+	const apply = db.transaction(() => {
+		for (const { key, update } of updates) {
+			for (const reaction of update.reactions ?? []) {
+				const id = applyReaction(db, key, reaction);
+				if (id) targetIds.add(id);
+			}
+		}
+	});
+	apply();
+	return [...targetIds];
+}
+
+export function handleMessagesReaction(
+	db: AppDatabase,
+	updates: MessagesReactionPayload
+): string[] {
+	const targetIds = new Set<string>();
+	const apply = db.transaction(() => {
+		for (const { key, reaction } of updates) {
+			const id = applyReaction(db, key, reaction);
+			if (id) targetIds.add(id);
+		}
+	});
+	apply();
+	return [...targetIds];
 }
 
 export function handleHistorySet(db: AppDatabase, payload: HistorySetPayload): SyncProgress {
@@ -393,15 +512,33 @@ export function attachIngest(
 				.map((message) => message.key?.id)
 				.filter((id): id is string => Boolean(id && getMessage(db, id)))
 		);
+		const reactionTargetIds = new Set(
+			payload.messages
+				.map((message) => extractMessageContent(message.message)?.reactionMessage?.key?.id)
+				.filter((id): id is string => Boolean(id))
+		);
 		handleMessagesUpsert(db, payload);
 		// The transaction above has committed. Consumers may now safely classify
 		// against the complete stored chat/message state.
 		for (const incoming of payload.messages) {
 			const id = incoming.key?.id;
-			if (!id || existingIds.has(id)) continue;
+			if (!id || existingIds.has(id) || classifyMessageType(incoming) === 'reaction') continue;
 			const stored = getMessage(db, id);
 			if (stored) options.onMessageIngested?.(stored);
 		}
+		publishUpdated([...reactionTargetIds]);
+	};
+	const publishUpdated = (ids: string[]) => {
+		for (const id of ids) {
+			const stored = getMessage(db, id);
+			if (stored) options.onMessageUpdated?.(stored);
+		}
+	};
+	const onMessageUpdates = (updates: MessagesUpdatePayload) => {
+		publishUpdated(handleMessagesUpdate(db, updates));
+	};
+	const onMessageReactions = (updates: MessagesReactionPayload) => {
+		publishUpdated(handleMessagesReaction(db, updates));
 	};
 	const onChats = (chats: Chat[]) => handleChatsUpsert(db, chats);
 	const onChatUpdates = (updates: ChatUpdate[]) => handleChatsUpdate(db, updates);
@@ -411,6 +548,8 @@ export function attachIngest(
 
 	ev.on('messaging-history.set', onHistory);
 	ev.on('messages.upsert', onMessages);
+	ev.on('messages.update', onMessageUpdates);
+	ev.on('messages.reaction', onMessageReactions);
 	ev.on('chats.upsert', onChats);
 	ev.on('chats.update', onChatUpdates);
 	ev.on('contacts.upsert', onContacts);
@@ -422,6 +561,8 @@ export function attachIngest(
 		const off = (ev as { off?: (event: string, handler: (...args: any[]) => void) => void }).off;
 		off?.('messaging-history.set', onHistory);
 		off?.('messages.upsert', onMessages);
+		off?.('messages.update', onMessageUpdates);
+		off?.('messages.reaction', onMessageReactions);
 		off?.('chats.upsert', onChats);
 		off?.('chats.update', onChatUpdates);
 		off?.('contacts.upsert', onContacts);

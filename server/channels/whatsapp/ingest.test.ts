@@ -6,14 +6,22 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getChat, listChats } from '../../store/chats.js';
 import { getContact } from '../../store/contacts.js';
 import { openDatabase, type AppDatabase } from '../../store/db.js';
-import { countMessages, getMessage, listMessages } from '../../store/messages.js';
+import {
+	countMessages,
+	getMessage,
+	listMessageReactions,
+	listMessages
+} from '../../store/messages.js';
 import { deepenChatHistory } from './history.js';
 import {
 	attachIngest,
 	handleLidMappingUpdate,
 	handleHistorySet,
+	handleMessagesReaction,
+	handleMessagesUpdate,
 	handleMessagesUpsert,
-	isChatMuted
+	isChatMuted,
+	type HistorySetPayload
 } from './ingest.js';
 import { downloadAndCacheMedia } from './media.js';
 
@@ -82,6 +90,50 @@ describe('ingest helpers', () => {
 });
 
 describe('messaging-history.set', () => {
+	it('normalizes group senders, quotes, and historical reactions from a fixture', () => {
+		const database = openTempDb();
+		const fixture = JSON.parse(
+			readFileSync(new URL('./fixtures/message-fidelity.json', import.meta.url), 'utf8')
+		) as HistorySetPayload;
+
+		handleHistorySet(database, fixture);
+		const messages = listMessages(database, 'team@g.us');
+
+		expect(messages.map((message) => message.id)).toEqual([
+			'group-target',
+			'group-bob',
+			'quote-resolved',
+			'quote-missing'
+		]);
+		expect(messages.map((message) => message.sender)).toEqual([
+			'alice@s.whatsapp.net',
+			'222@lid',
+			'unknown@s.whatsapp.net',
+			'alice@s.whatsapp.net'
+		]);
+		expect(getMessage(database, 'quote-resolved')).toMatchObject({
+			quote_target_id: 'group-target',
+			quote_sender: 'alice@s.whatsapp.net',
+			quote_type: 'text',
+			quote_text: 'Original text'
+		});
+		expect(getMessage(database, 'quote-missing')).toMatchObject({
+			quote_target_id: 'missing-target',
+			quote_sender: '222@lid',
+			quote_type: 'image',
+			quote_text: 'Fallback caption'
+		});
+		expect(listMessageReactions(database, 'team@g.us', 'group-target')).toMatchObject([
+			{ actor: 'alice@s.whatsapp.net', emoji: '👍' },
+			{ actor: '222@lid', emoji: '👍' }
+		]);
+
+		// Full replay remains duplicate-free for messages and reaction actors.
+		handleHistorySet(database, fixture);
+		expect(countMessages(database)).toBe(4);
+		expect(listMessageReactions(database, 'team@g.us', 'group-target')).toHaveLength(2);
+	});
+
 	it('persists chats, contacts, and messages with kind / from_me / timestamps', () => {
 		const database = openTempDb();
 		const progress = handleHistorySet(database, {
@@ -228,7 +280,7 @@ describe('messaging-history.set', () => {
 		expect(getMessage(database, 'dup-id')?.text).toBe('second');
 	});
 
-	it('ingests sticker, reaction, and call-log messages as typed placeholders', () => {
+	it('ingests sticker and call-log placeholders without rendering reactions as messages', () => {
 		const database = openTempDb();
 		handleHistorySet(database, {
 			chats: [{ id: 'alice@s.whatsapp.net', name: 'Alice', conversationTimestamp: 1 }],
@@ -261,10 +313,12 @@ describe('messaging-history.set', () => {
 		const msgs = listMessages(database, 'alice@s.whatsapp.net');
 		expect(msgs.map((m) => [m.id, m.type, m.text])).toEqual([
 			['sticker-1', 'sticker', null],
-			['reaction-1', 'reaction', '👍'],
 			['call-1', 'call', null]
 		]);
-		expect(countMessages(database)).toBe(3);
+		expect(countMessages(database)).toBe(2);
+		expect(listMessageReactions(database, 'alice@s.whatsapp.net', 'sticker-1')).toMatchObject([
+			{ actor: 'me', emoji: '👍' }
+		]);
 	});
 });
 
@@ -327,6 +381,67 @@ describe('messages.upsert (live)', () => {
 	});
 });
 
+describe('live reaction updates', () => {
+	it('adds, changes, and removes one actor reaction across installed Baileys payload shapes', () => {
+		const database = openTempDb();
+		handleHistorySet(database, {
+			chats: [{ id: 'team@g.us', conversationTimestamp: 1 }],
+			contacts: [],
+			messages: [
+				{
+					key: { id: 'target', remoteJid: 'team@g.us', participant: 'alice@s.whatsapp.net' },
+					messageTimestamp: 1,
+					message: { conversation: 'hello' }
+				}
+			]
+		});
+
+		expect(
+			handleMessagesReaction(database, [
+				{
+					key: { id: 'target', remoteJid: 'team@g.us' },
+					reaction: {
+						key: { id: 'reaction', remoteJid: 'team@g.us', participant: 'bob@s.whatsapp.net' },
+						text: '👍',
+						senderTimestampMs: 2
+					}
+				}
+			])
+		).toEqual(['target']);
+		expect(
+			handleMessagesUpdate(database, [
+				{
+					key: { id: 'target', remoteJid: 'team@g.us' },
+					update: {
+						reactions: [
+							{
+								key: { id: 'reaction', remoteJid: 'team@g.us', participant: 'bob@s.whatsapp.net' },
+								text: '❤️',
+								senderTimestampMs: 3
+							}
+						]
+					}
+				}
+			])
+		).toEqual(['target']);
+		expect(listMessageReactions(database, 'team@g.us', 'target')).toMatchObject([
+			{ actor: 'bob@s.whatsapp.net', emoji: '❤️' }
+		]);
+
+		handleMessagesReaction(database, [
+			{
+				key: { id: 'target', remoteJid: 'team@g.us' },
+				reaction: {
+					key: { id: 'reaction', remoteJid: 'team@g.us', participant: 'bob@s.whatsapp.net' },
+					text: '',
+					senderTimestampMs: 4
+				}
+			}
+		]);
+		expect(listMessageReactions(database, 'team@g.us', 'target')).toEqual([]);
+	});
+});
+
 describe('attachIngest + mute/archive updates', () => {
 	it('wires socket events and applies chats.update mute/archive flags', () => {
 		const database = openTempDb();
@@ -340,7 +455,8 @@ describe('attachIngest + mute/archive updates', () => {
 		};
 		const onSyncProgress = vi.fn();
 		const onMessageIngested = vi.fn();
-		attachIngest(ev, database, { onSyncProgress, onMessageIngested });
+		const onMessageUpdated = vi.fn();
+		attachIngest(ev, database, { onSyncProgress, onMessageIngested, onMessageUpdated });
 
 		for (const handler of handlers.get('messaging-history.set') ?? []) {
 			handler({
@@ -400,6 +516,21 @@ describe('attachIngest + mute/archive updates', () => {
 			expect.objectContaining({ id: 'live-once', text: 'new inbound' })
 		);
 		expect(getChat(database, 'alice@s.whatsapp.net')?.unread).toBe(1);
+
+		for (const handler of handlers.get('messages.reaction') ?? []) {
+			handler([
+				{
+					key: { id: 'live-once', remoteJid: 'alice@s.whatsapp.net' },
+					reaction: {
+						key: { id: 'reaction-live', remoteJid: 'alice@s.whatsapp.net', fromMe: true },
+						text: '🔥'
+					}
+				}
+			]);
+		}
+		expect(onMessageUpdated).toHaveBeenCalledWith(
+			expect.objectContaining({ id: 'live-once' })
+		);
 	});
 });
 

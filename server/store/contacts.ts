@@ -46,6 +46,20 @@ export function listContacts(db: AppDatabase): Contact[] {
 	return db.prepare('SELECT * FROM contacts ORDER BY name ASC, jid ASC').all() as Contact[];
 }
 
+/** Resolve either side of a LID/phone identity pair without rewriting messages. */
+export function resolveContact(db: AppDatabase, jid: string): Contact | undefined {
+	return db
+		.prepare(
+			`SELECT * FROM contacts
+			 WHERE jid = ? OR lid_jid = ? OR phone_jid = ?
+			 ORDER BY CASE WHEN name IS NOT NULL THEN 0 ELSE 1 END,
+			          CASE WHEN push_name IS NOT NULL THEN 0 ELSE 1 END,
+			          CASE WHEN jid = ? THEN 0 ELSE 1 END
+			 LIMIT 1`
+		)
+		.get(jid, jid, jid, jid) as Contact | undefined;
+}
+
 export type ContactIdentity = {
 	lidJid: string;
 	phoneJid: string;

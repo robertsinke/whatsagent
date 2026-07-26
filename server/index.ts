@@ -107,7 +107,7 @@ export function createApp(options: CreateAppOptions = {}): App {
 		initialSyncComplete: historySyncComplete,
 		onChange: (view) => events.emit({ type: 'session', session: view })
 	});
-	const ingestHooks = createIngestEventHooks(events);
+	const ingestHooks = createIngestEventHooks(events, db);
 	const memory = options.memory ?? new NullMemory();
 	const scheduler = options.draftProvider
 		? new DraftScheduler({
@@ -327,6 +327,8 @@ export function createApp(options: CreateAppOptions = {}): App {
 						}
 					}
 					if (schedulerStarted) scheduler?.onMessage(event.message);
+				} else if (event.type === 'message-updated') {
+					ingestHooks.onMessageUpdated(event.message);
 				}
 			});
 			await options.channel.start();

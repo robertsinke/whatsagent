@@ -38,7 +38,7 @@ import {
 	type AllowedOrigins
 } from './security.js';
 import { toChatView } from './chat-view.js';
-import { isMediaType, toMessageView } from './message-view.js';
+import { describeMedia, isMediaType, toMessageView } from './message-view.js';
 
 export type RoutesDeps = {
 	db: AppDatabase;
@@ -238,7 +238,7 @@ async function handleMedia(
 
 	if (method === 'POST') {
 		if (message.media_state === 'ready' && message.media_ref) {
-			json(res, 200, toMessageView(message));
+			json(res, 200, toMessageView(deps.db, message));
 			return;
 		}
 		if (message.media_state === 'failed' && message.media_error === 'unavailable') {
@@ -261,7 +261,7 @@ async function handleMedia(
 			});
 			return;
 		}
-		json(res, 200, toMessageView(getMessage(deps.db, messageId)!));
+		json(res, 200, toMessageView(deps.db, getMessage(deps.db, messageId)!));
 		return;
 	}
 
@@ -297,7 +297,7 @@ async function handleMedia(
 }
 
 function mediaContentType(message: Message): string {
-	const described = toMessageView(message).media;
+	const described = describeMedia(message);
 	const mime = described?.mime?.toLowerCase();
 	if (message.type === 'image' && mime?.startsWith('image/') && mime !== 'image/svg+xml') return mime;
 	if (message.type === 'video' && mime?.startsWith('video/')) return mime;
@@ -314,7 +314,7 @@ function mediaDisposition(message: Message): 'inline' | 'attachment' {
 }
 
 function mediaFilename(message: Message): string {
-	const described = toMessageView(message).media;
+	const described = describeMedia(message);
 	const name = described?.filename ?? `${message.id}${extname(message.media_ref ?? '')}`;
 	return name.replace(/["\\\r\n]/g, '_');
 }
@@ -459,7 +459,7 @@ async function handleApi(
 			beforeTs: beforeTs !== undefined && Number.isFinite(beforeTs) ? beforeTs : undefined,
 			beforeId
 		});
-		json(res, 200, { items: items.map(toMessageView) });
+		json(res, 200, { items: items.map((message) => toMessageView(db, message)) });
 		return;
 	}
 
