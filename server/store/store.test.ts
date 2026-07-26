@@ -13,7 +13,13 @@ import { listChats, upsertChat } from './chats.js';
 import { upsertContact, getContact } from './contacts.js';
 import { openDatabase, type AppDatabase } from './db.js';
 import { getDraft, upsertDraft } from './drafts.js';
-import { countMessages, listMessages, upsertMessage } from './messages.js';
+import {
+	countMessages,
+	listMessageReactions,
+	listMessages,
+	upsertMessage,
+	upsertMessageReaction
+} from './messages.js';
 import { enqueueOutbox, listPendingOutbox } from './outbox.js';
 import { getSetting, setSetting } from './settings.js';
 
@@ -49,6 +55,7 @@ describe('migrations', () => {
 			'contacts',
 			'draft_feedback',
 			'drafts',
+			'message_reactions',
 			'messages',
 			'outbox',
 			'schema_version',
@@ -211,6 +218,61 @@ describe('chats + messages', () => {
 
 		expect(countMessages(database)).toBe(1);
 		expect(listMessages(database, 'alice@s.whatsapp.net')[0]?.text).toBe('second');
+	});
+
+	it('stores quote snapshots and replay-safe actor reactions before a target exists', () => {
+		const database = openTempDb();
+		upsertChat(database, {
+			jid: 'team@g.us',
+			kind: 'group',
+			last_msg_at: 100
+		});
+		upsertMessage(database, {
+			id: 'reply',
+			chat_jid: 'team@g.us',
+			from_me: false,
+			sender: 'alice@s.whatsapp.net',
+			ts: 100,
+			text: 'reply',
+			quote_target_id: 'not-here-yet',
+			quote_sender: 'bob@s.whatsapp.net',
+			quote_type: 'image',
+			quote_text: 'fallback caption'
+		});
+
+		upsertMessageReaction(database, {
+			chat_jid: 'team@g.us',
+			target_msg_id: 'not-here-yet',
+			actor: 'alice@s.whatsapp.net',
+			emoji: '👍',
+			updated_at: 1
+		});
+		upsertMessageReaction(database, {
+			chat_jid: 'team@g.us',
+			target_msg_id: 'not-here-yet',
+			actor: 'alice@s.whatsapp.net',
+			emoji: '❤️',
+			updated_at: 2
+		});
+
+		expect(listMessages(database, 'team@g.us')[0]).toMatchObject({
+			quote_target_id: 'not-here-yet',
+			quote_sender: 'bob@s.whatsapp.net',
+			quote_type: 'image',
+			quote_text: 'fallback caption'
+		});
+		expect(listMessageReactions(database, 'team@g.us', 'not-here-yet')).toEqual([
+			expect.objectContaining({ actor: 'alice@s.whatsapp.net', emoji: '❤️' })
+		]);
+
+		upsertMessageReaction(database, {
+			chat_jid: 'team@g.us',
+			target_msg_id: 'not-here-yet',
+			actor: 'alice@s.whatsapp.net',
+			emoji: '',
+			updated_at: 3
+		});
+		expect(listMessageReactions(database, 'team@g.us', 'not-here-yet')).toEqual([]);
 	});
 });
 

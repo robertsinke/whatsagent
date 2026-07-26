@@ -1,0 +1,133 @@
+{
+  "chats": [
+    {
+      "id": "team@g.us",
+      "name": "Team",
+      "conversationTimestamp": 1700000060,
+      "unreadCount": 3
+    }
+  ],
+  "contacts": [
+    {
+      "id": "alice@s.whatsapp.net",
+      "name": "Alice"
+    },
+    {
+      "id": "222@lid",
+      "phoneNumber": "31600000002@s.whatsapp.net",
+      "name": "Bob"
+    }
+  ],
+  "messages": [
+    {
+      "key": {
+        "id": "group-target",
+        "remoteJid": "team@g.us",
+        "participant": "alice@s.whatsapp.net",
+        "fromMe": false
+      },
+      "messageTimestamp": 1700000000,
+      "message": {
+        "conversation": "Original text"
+      }
+    },
+    {
+      "key": {
+        "id": "group-bob",
+        "remoteJid": "team@g.us",
+        "participant": "222@lid",
+        "participantAlt": "31600000002@s.whatsapp.net",
+        "fromMe": false
+      },
+      "messageTimestamp": 1700000010,
+      "message": {
+        "conversation": "Bob here"
+      }
+    },
+    {
+      "key": {
+        "id": "quote-resolved",
+        "remoteJid": "team@g.us",
+        "participant": "unknown@s.whatsapp.net",
+        "fromMe": false
+      },
+      "messageTimestamp": 1700000020,
+      "message": {
+        "extendedTextMessage": {
+          "text": "Reply to Alice",
+          "contextInfo": {
+            "stanzaId": "group-target",
+            "participant": "alice@s.whatsapp.net",
+            "quotedMessage": {
+              "conversation": "Original text"
+            }
+          }
+        }
+      }
+    },
+    {
+      "key": {
+        "id": "quote-missing",
+        "remoteJid": "team@g.us",
+        "participant": "alice@s.whatsapp.net",
+        "fromMe": false
+      },
+      "messageTimestamp": 1700000030,
+      "message": {
+        "extendedTextMessage": {
+          "text": "Reply to missing photo",
+          "contextInfo": {
+            "stanzaId": "missing-target",
+            "participant": "222@lid",
+            "quotedMessage": {
+              "imageMessage": {
+                "caption": "Fallback caption",
+                "mimetype": "image/jpeg"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "key": {
+        "id": "reaction-alice",
+        "remoteJid": "team@g.us",
+        "participant": "alice@s.whatsapp.net",
+        "fromMe": false
+      },
+      "messageTimestamp": 1700000040,
+      "message": {
+        "reactionMessage": {
+          "key": {
+            "id": "group-target",
+            "remoteJid": "team@g.us"
+          },
+          "text": "👍",
+          "senderTimestampMs": 1700000040
+        }
+      }
+    },
+    {
+      "key": {
+        "id": "reaction-bob",
+        "remoteJid": "team@g.us",
+        "participant": "222@lid",
+        "fromMe": false
+      },
+      "messageTimestamp": 1700000050,
+      "message": {
+        "reactionMessage": {
+          "key": {
+            "id": "group-target",
+            "remoteJid": "team@g.us"
+          },
+          "text": "👍",
+          "senderTimestampMs": 1700000050
+        }
+      }
+    }
+  ],
+  "isLatest": true,
+  "progress": 100
+}

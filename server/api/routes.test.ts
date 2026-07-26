@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -9,10 +9,11 @@ import { upsertChat } from '../store/chats.js';
 import { linkContactIdentity, upsertContact } from '../store/contacts.js';
 import { upsertDraft } from '../store/drafts.js';
 import { listDraftFeedback } from '../store/draft-feedback.js';
-import { upsertMessage } from '../store/messages.js';
+import { getMessage, upsertMessage, upsertMessageReaction } from '../store/messages.js';
 import { getOutbox } from '../store/outbox.js';
 import { EventBus } from './events.js';
 import type { Memory } from '../agent/memory/memory.js';
+import { handleHistorySet, type HistorySetPayload } from '../channels/whatsapp/ingest.js';
 
 let dataDir: string | undefined;
 let app: App | undefined;
@@ -112,6 +113,16 @@ function seedNeedsReplyFixture(database: AppDatabase): void {
 		ts: 190,
 		text: 'muted inbound'
 	});
+}
+
+function seedMessageFidelityFixture(database: AppDatabase): void {
+	const fixture = JSON.parse(
+		readFileSync(
+			new URL('../channels/whatsapp/fixtures/message-fidelity.json', import.meta.url),
+			'utf8'
+		)
+	) as HistorySetPayload;
+	handleHistorySet(database, fixture);
 }
 
 afterEach(async () => {
@@ -223,6 +234,78 @@ describe('POST /api/chats/:jid/messages (send → outbox)', () => {
 		const body = (await res.json()) as { error: string; jid: string };
 		expect(body.error).toBe('Chat not found');
 		expect(body.jid).toBe('missing@s.whatsapp.net');
+	});
+});
+
+describe('GET /api/chats/:jid/messages (structured views)', () => {
+	it('returns late-bound senders, quote fallbacks, and reaction aggregates without raw envelopes', async () => {
+		await startTestApp();
+		seedMessageFidelityFixture(db!);
+
+		const response = await api('/api/chats/team%40g.us/messages?limit=20');
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as {
+			items: Array<Record<string, any>>;
+		};
+		const target = body.items.find((message) => message.id === 'group-target')!;
+		const bob = body.items.find((message) => message.id === 'group-bob')!;
+		const resolved = body.items.find((message) => message.id === 'quote-resolved')!;
+		const missing = body.items.find((message) => message.id === 'quote-missing')!;
+
+		expect(target.sender).toMatchObject({
+			jid: 'alice@s.whatsapp.net',
+			name: 'Alice'
+		});
+		expect(bob.sender).toMatchObject({
+			jid: '222@lid',
+			display_jid: '31600000002@s.whatsapp.net',
+			name: 'Bob'
+		});
+		expect(resolved.quote).toMatchObject({
+			target_id: 'group-target',
+			resolved: true,
+			type: 'text',
+			text: 'Original text',
+			sender: { name: 'Alice' }
+		});
+		expect(missing.quote).toMatchObject({
+			target_id: 'missing-target',
+			resolved: false,
+			type: 'image',
+			text: 'Fallback caption',
+			sender: { name: 'Bob' }
+		});
+		expect(target.reactions).toEqual([
+			expect.objectContaining({
+				emoji: '👍',
+				count: 2,
+				actors: [
+					expect.objectContaining({ name: 'Alice' }),
+					expect.objectContaining({ name: 'Bob' })
+				]
+			})
+		]);
+		expect(JSON.stringify(body)).not.toContain('"raw"');
+	});
+
+	it('uses a JID fallback until a later contact update improves the same stored message', async () => {
+		await startTestApp();
+		seedMessageFidelityFixture(db!);
+
+		const before = await api('/api/chats/team%40g.us/messages?limit=20').then((res) => res.json()) as {
+			items: Array<{ id: string; sender: { name: string } }>;
+		};
+		expect(before.items.find((message) => message.id === 'quote-resolved')?.sender.name).toBe(
+			'unknown@s.whatsapp.net'
+		);
+
+		upsertContact(db!, { jid: 'unknown@s.whatsapp.net', name: 'Charlie' });
+		const after = await api('/api/chats/team%40g.us/messages?limit=20').then((res) => res.json()) as {
+			items: Array<{ id: string; sender: { name: string } }>;
+		};
+		expect(after.items.find((message) => message.id === 'quote-resolved')?.sender.name).toBe(
+			'Charlie'
+		);
 	});
 });
 
@@ -386,6 +469,10 @@ describe('store write → WS event', () => {
 					media_ref: null,
 					media_state: 'placeholder',
 					media_error: null,
+					quote_target_id: null,
+					quote_sender: null,
+					quote_type: null,
+					quote_text: null,
 					raw: null
 				});
 			});
@@ -396,6 +483,58 @@ describe('store write → WS event', () => {
 			type: 'message-new',
 			message: { id: 'in1', text: 'inbound' }
 		});
+	});
+
+	it('fans a sanitized reaction aggregate as a targeted message-updated event', async () => {
+		const events = new EventBus();
+		await startTestApp(events);
+		upsertChat(db!, { jid: 'team@g.us', kind: 'group', last_msg_at: 1 });
+		upsertContact(db!, { jid: 'alice@s.whatsapp.net', name: 'Alice' });
+		upsertMessage(db!, {
+			id: 'target',
+			chat_jid: 'team@g.us',
+			from_me: false,
+			sender: 'alice@s.whatsapp.net',
+			ts: 1,
+			text: 'hello',
+			raw: '{"credentialAdjacent":"must-not-leak"}'
+		});
+		upsertMessageReaction(db!, {
+			chat_jid: 'team@g.us',
+			target_msg_id: 'target',
+			actor: 'alice@s.whatsapp.net',
+			emoji: '🔥',
+			updated_at: 2
+		});
+		const stored = getMessage(db!, 'target')!;
+		const origin = originForApp();
+
+		const received = new Promise<Record<string, unknown>>((resolve, reject) => {
+			const ws = new WebSocket(`ws://127.0.0.1:${app!.port}/api/ws`, {
+				headers: { Origin: origin, Host: `127.0.0.1:${app!.port}` }
+			});
+			ws.on('message', (data) => {
+				const event = JSON.parse(String(data)) as { type: string };
+				if (event.type === 'message-updated') {
+					ws.close();
+					resolve(event);
+				}
+			});
+			ws.once('open', () => app!.ingestHooks.onMessageUpdated(stored));
+			ws.once('error', reject);
+		});
+
+		const event = await received;
+		expect(event).toMatchObject({
+			type: 'message-updated',
+			message: {
+				id: 'target',
+				sender: { name: 'Alice' },
+				reactions: [{ emoji: '🔥', count: 1, actors: [{ name: 'Alice' }] }]
+			}
+		});
+		expect(JSON.stringify(event)).not.toContain('must-not-leak');
+		expect(JSON.stringify(event)).not.toContain('"raw"');
 	});
 });
 

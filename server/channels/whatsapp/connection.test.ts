@@ -184,6 +184,56 @@ describe('WhatsApp connection', () => {
 		expect(await config.getMessage?.({ id: 'missing' })).toBeUndefined();
 	});
 
+	it('turns a live messages.update reaction delta into a committed target update', async () => {
+		const database = openTempDb();
+		upsertChat(database, {
+			jid: 'team@g.us',
+			name: 'Team',
+			kind: 'group',
+			last_msg_at: 1
+		});
+		upsertMessage(database, {
+			id: 'target',
+			chat_jid: 'team@g.us',
+			from_me: false,
+			sender: 'alice@s.whatsapp.net',
+			ts: 1,
+			text: 'hello'
+		});
+		const fake = fakeSocketFactory();
+		const connection = new WhatsAppConnection(database, {
+			authStore: createSqliteAuthStore(database, Buffer.alloc(32, 5)),
+			socketFactory: fake.factory,
+			waVersion: WA_WEB_VERSION_FALLBACK
+		});
+		const events: ChannelEvent[] = [];
+		connection.onEvent((event) => events.push(event));
+		await connection.start();
+
+		fake.sockets[0]!.emit('messages.update', [
+			{
+				key: { id: 'target', remoteJid: 'team@g.us' },
+				update: {
+					reactions: [
+						{
+							key: {
+								id: 'reaction',
+								remoteJid: 'team@g.us',
+								participant: 'bob@s.whatsapp.net'
+							},
+							text: '👍'
+						}
+					]
+				}
+			}
+		]);
+
+		expect(events.at(-1)).toMatchObject({
+			type: 'message-updated',
+			message: { id: 'target', raw: null }
+		});
+	});
+
 	it('backfills encrypted LID mappings into contact aliases before connecting', async () => {
 		const database = openTempDb();
 		const authStore = createSqliteAuthStore(database, Buffer.alloc(32, 4));

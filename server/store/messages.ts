@@ -22,6 +22,10 @@ export type Message = {
 	media_ref: string | null;
 	media_state: MediaState;
 	media_error: MediaFailureReason | null;
+	quote_target_id: string | null;
+	quote_sender: string | null;
+	quote_type: string | null;
+	quote_text: string | null;
 	raw: string | null;
 };
 
@@ -35,7 +39,23 @@ export type MessageInput = {
 	type?: string;
 	text?: string | null;
 	media_ref?: string | null;
+	quote_target_id?: string | null;
+	quote_sender?: string | null;
+	quote_type?: string | null;
+	quote_text?: string | null;
 	raw?: string | null;
+};
+
+export type MessageReaction = {
+	chat_jid: string;
+	target_msg_id: string;
+	actor: string;
+	emoji: string;
+	updated_at: number;
+};
+
+export type MessageReactionInput = Omit<MessageReaction, 'emoji'> & {
+	emoji: string | null;
 };
 
 type MessageRow = {
@@ -50,6 +70,10 @@ type MessageRow = {
 	media_ref: string | null;
 	media_state: MediaState;
 	media_error: MediaFailureReason | null;
+	quote_target_id: string | null;
+	quote_sender: string | null;
+	quote_type: string | null;
+	quote_text: string | null;
 	raw: string | null;
 };
 
@@ -66,6 +90,10 @@ function mapMessage(row: MessageRow): Message {
 		media_ref: row.media_ref,
 		media_state: row.media_state,
 		media_error: row.media_error,
+		quote_target_id: row.quote_target_id,
+		quote_sender: row.quote_sender,
+		quote_type: row.quote_type,
+		quote_text: row.quote_text,
 		raw: row.raw
 	};
 }
@@ -102,8 +130,13 @@ export function setMediaRef(db: AppDatabase, id: string, mediaRef: string): void
  */
 export function upsertMessage(db: AppDatabase, message: MessageInput): void {
 	db.prepare(
-		`INSERT INTO messages (id, chat_jid, channel, from_me, sender, ts, type, text, media_ref, raw)
-		 VALUES (@id, @chat_jid, @channel, @from_me, @sender, @ts, @type, @text, @media_ref, @raw)
+		`INSERT INTO messages (
+		   id, chat_jid, channel, from_me, sender, ts, type, text, media_ref,
+		   quote_target_id, quote_sender, quote_type, quote_text, raw
+		 ) VALUES (
+		   @id, @chat_jid, @channel, @from_me, @sender, @ts, @type, @text, @media_ref,
+		   @quote_target_id, @quote_sender, @quote_type, @quote_text, @raw
+		 )
 		 ON CONFLICT(id) DO UPDATE SET
 		   chat_jid = excluded.chat_jid,
 		   channel = excluded.channel,
@@ -113,6 +146,10 @@ export function upsertMessage(db: AppDatabase, message: MessageInput): void {
 		   type = excluded.type,
 		   text = excluded.text,
 		   media_ref = COALESCE(excluded.media_ref, messages.media_ref),
+		   quote_target_id = excluded.quote_target_id,
+		   quote_sender = excluded.quote_sender,
+		   quote_type = excluded.quote_type,
+		   quote_text = excluded.quote_text,
 		   raw = excluded.raw`
 	).run({
 		id: message.id,
@@ -124,8 +161,45 @@ export function upsertMessage(db: AppDatabase, message: MessageInput): void {
 		type: message.type ?? 'text',
 		text: message.text ?? null,
 		media_ref: message.media_ref ?? null,
+		quote_target_id: message.quote_target_id ?? null,
+		quote_sender: message.quote_sender ?? null,
+		quote_type: message.quote_type ?? null,
+		quote_text: message.quote_text ?? null,
 		raw: message.raw ?? null
 	});
+}
+
+/** One actor has at most one reaction per target. Falsey text removes it. */
+export function upsertMessageReaction(db: AppDatabase, reaction: MessageReactionInput): void {
+	const emoji = reaction.emoji?.trim();
+	if (!emoji) {
+		db.prepare(
+			'DELETE FROM message_reactions WHERE chat_jid = ? AND target_msg_id = ? AND actor = ?'
+		).run(reaction.chat_jid, reaction.target_msg_id, reaction.actor);
+		return;
+	}
+
+	db.prepare(
+		`INSERT INTO message_reactions (chat_jid, target_msg_id, actor, emoji, updated_at)
+		 VALUES (@chat_jid, @target_msg_id, @actor, @emoji, @updated_at)
+		 ON CONFLICT(chat_jid, target_msg_id, actor) DO UPDATE SET
+		   emoji = excluded.emoji,
+		   updated_at = excluded.updated_at`
+	).run({ ...reaction, emoji });
+}
+
+export function listMessageReactions(
+	db: AppDatabase,
+	chatJid: string,
+	targetMsgId: string
+): MessageReaction[] {
+	return db
+		.prepare(
+			`SELECT * FROM message_reactions
+			 WHERE chat_jid = ? AND target_msg_id = ?
+			 ORDER BY updated_at ASC, actor ASC`
+		)
+		.all(chatJid, targetMsgId) as MessageReaction[];
 }
 
 export function listMessages(db: AppDatabase, chatJid: string): Message[] {
