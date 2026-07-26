@@ -40,16 +40,50 @@ export type MediaView = {
 	cached: boolean;
 };
 
+/**
+ * A participant, resolved server-side. `name` is already the best local name
+ * with an honest JID fallback — the client never invents a display name, and
+ * never claims a contact name the server did not resolve.
+ */
+export type IdentityView = {
+	jid: string;
+	/** Phone alias when known, otherwise the stable JID. */
+	display_jid: string;
+	name: string;
+};
+
+/**
+ * Compact reply target. `resolved` is the server's verdict on whether the
+ * target message exists locally; the client must not re-derive it by scanning
+ * the loaded page, because the target is often outside the loaded window.
+ */
+export type QuoteView = {
+	target_id: string;
+	resolved: boolean;
+	sender: IdentityView | null;
+	type: string;
+	text: string | null;
+};
+
+/** One emoji aggregated across actors. Display-only in this wave (no create/remove). */
+export type ReactionView = {
+	emoji: string;
+	count: number;
+	actors: IdentityView[];
+};
+
 export type Message = {
 	id: string;
 	chat_jid: string;
 	channel: string;
 	from_me: boolean;
-	sender: string | null;
+	sender: IdentityView | null;
 	ts: number;
 	type: string;
 	text: string | null;
 	media: MediaView | null;
+	quote: QuoteView | null;
+	reactions: ReactionView[];
 };
 
 /**
@@ -117,6 +151,13 @@ export type SessionView = {
 
 export type ServerEvent =
 	| { type: 'message-new'; message: Message }
+	/**
+	 * A message whose *relationships* changed (reactions, resolved quote) —
+	 * never a new message. The client replaces in place and never inserts, or a
+	 * reaction on a message above the loaded window would splice a stranger into
+	 * the middle of the stream.
+	 */
+	| { type: 'message-updated'; message: Message }
 	| { type: 'chat-updated'; chat: Chat }
 	| { type: 'draft-updated'; draft: Draft }
 	| { type: 'draft-removed'; chat_jid: string }

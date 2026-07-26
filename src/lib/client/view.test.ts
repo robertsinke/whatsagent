@@ -12,7 +12,11 @@ import {
 	isVisibleDraftStatus,
 	mediaAffordance,
 	mergeMessages,
+	quotePreview,
+	reactionChip,
 	reconnectDelayMs,
+	replaceMessage,
+	senderLabel,
 	sessionBanner,
 	syncDetail,
 	tabCounts,
@@ -252,12 +256,132 @@ describe('message merge', () => {
 		ts,
 		type: 'text',
 		text: id,
-		media: null
+		media: null,
+		quote: null,
+		reactions: []
 	});
 
 	it('de-duplicates by id and orders oldest-first', () => {
 		const merged = mergeMessages([message('b', 2), message('a', 1)], [message('b', 2), message('c', 3)]);
 		expect(merged.map((m) => m.id)).toEqual(['a', 'b', 'c']);
+	});
+
+	it('replaces a loaded message in place without reordering it', () => {
+		const loaded = [message('a', 1), message('b', 2), message('c', 3)];
+		const updated = { ...message('b', 2), reactions: [{ emoji: '🔥', count: 1, actors: [] }] };
+		const next = replaceMessage(loaded, updated);
+		expect(next.map((m) => m.id)).toEqual(['a', 'b', 'c']);
+		expect(next[1]!.reactions).toHaveLength(1);
+	});
+
+	// A reaction can target a message far above the loaded window. Inserting it
+	// would put a bubble on screen with a history hole around it.
+	it('drops an update for a message outside the loaded window', () => {
+		const loaded = [message('b', 2), message('c', 3)];
+		const next = replaceMessage(loaded, message('a', 1));
+		expect(next).toBe(loaded);
+	});
+});
+
+describe('sender attribution', () => {
+	const identity = (jid: string, name: string) => ({ jid, display_jid: jid, name });
+
+	it('uses the server-resolved name when there is one', () => {
+		expect(senderLabel(identity('maya@s.whatsapp.net', 'Maya'))).toBe('Maya');
+	});
+
+	// The server already falls back to the JID when no contact is known; the
+	// client must surface that honestly rather than inventing a friendly name.
+	it('falls back to the phone/JID local part, never to a placeholder name', () => {
+		expect(senderLabel(identity('4477000111@s.whatsapp.net', '4477000111@s.whatsapp.net'))).toBe(
+			'+4477000111'
+		);
+		expect(senderLabel(null)).toBe('Unknown participant');
+	});
+
+	// A LID is numeric but is not a phone number — `+` there would be a lie.
+	it('does not dress a LID up as a phone number', () => {
+		expect(senderLabel(identity('209384756@lid', '209384756@lid'))).toBe('209384756');
+	});
+});
+
+describe('quote previews', () => {
+	const maya = { jid: 'maya@s.whatsapp.net', display_jid: 'maya@s.whatsapp.net', name: 'Maya' };
+
+	it('identifies sender and content for a resolved text quote', () => {
+		const preview = quotePreview({
+			target_id: 'x1',
+			resolved: true,
+			sender: maya,
+			type: 'text',
+			text: 'see you at seven'
+		});
+		expect(preview).toMatchObject({ sender: 'Maya', body: 'see you at seven', resolved: true });
+		expect(preview.label).toBe('Replying to Maya: see you at seven');
+	});
+
+	it('names the media kind when a resolved quote carries no text', () => {
+		const preview = quotePreview({
+			target_id: 'x2',
+			resolved: true,
+			sender: maya,
+			type: 'image',
+			text: null
+		});
+		expect(preview.body).toBe('Photo');
+		expect(preview.label).toContain('Photo');
+	});
+
+	// The persisted snapshot is the whole point of the compact quote columns:
+	// an unloaded target still shows what was replied to.
+	it('renders the persisted fallback text for an unresolved target', () => {
+		const preview = quotePreview({
+			target_id: 'gone',
+			resolved: false,
+			sender: maya,
+			type: 'text',
+			text: 'the original line'
+		});
+		expect(preview.body).toBe('the original line');
+		expect(preview.resolved).toBe(false);
+		expect(preview.label).toContain('not loaded');
+	});
+
+	it('stays honest when an unresolved target has no snapshot at all', () => {
+		const preview = quotePreview({
+			target_id: 'gone',
+			resolved: false,
+			sender: null,
+			type: 'unknown',
+			text: null
+		});
+		expect(preview.body).toBe('Original message unavailable');
+		expect(preview.sender).toBe('Unknown participant');
+	});
+});
+
+describe('reaction chips', () => {
+	const actor = (name: string) => ({
+		jid: `${name}@s.whatsapp.net`,
+		display_jid: `${name}@s.whatsapp.net`,
+		name
+	});
+
+	it('exposes every actor through an accessible label', () => {
+		const chip = reactionChip({ emoji: '❤️', count: 2, actors: [actor('Maya'), actor('Sam')] });
+		expect(chip).toMatchObject({ emoji: '❤️', count: 2 });
+		expect(chip.label).toBe('Reacted ❤️ by Maya and Sam');
+	});
+
+	it('compacts a crowd without losing the count', () => {
+		const actors = ['Maya', 'Sam', 'Ana', 'Jo', 'Kim'].map(actor);
+		const chip = reactionChip({ emoji: '👍', count: 5, actors });
+		expect(chip.count).toBe(5);
+		expect(chip.label).toBe('Reacted 👍 by Maya, Sam, Ana and 2 more');
+	});
+
+	it('still labels a chip whose actors did not resolve', () => {
+		expect(reactionChip({ emoji: '😂', count: 1, actors: [] }).label).toBe('Reacted 😂');
 	});
 });
 
@@ -271,7 +395,9 @@ describe('unread boundary', () => {
 		ts,
 		type: 'text',
 		text: id,
-		media: null
+		media: null,
+		quote: null,
+		reactions: []
 	});
 
 	const thread = [

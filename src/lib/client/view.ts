@@ -1,8 +1,11 @@
 import type {
 	Chat,
 	DraftStatus,
+	IdentityView,
 	MediaView,
 	Message,
+	QuoteView,
+	ReactionView,
 	SessionStatus,
 	SessionView
 } from './types.js';
@@ -101,6 +104,17 @@ export function mergeMessages(existing: Message[], incoming: Message[]): Message
 	const byId = new Map(existing.map((m) => [m.id, m]));
 	for (const message of incoming) byId.set(message.id, message);
 	return [...byId.values()].sort((a, b) => a.ts - b.ts || a.id.localeCompare(b.id));
+}
+
+/**
+ * In-place replacement for a message already on screen. Unlike `mergeMessages`
+ * this never inserts and never reorders: a relationship update (reaction, quote
+ * resolution, media state) for a message outside the loaded window is dropped
+ * rather than spliced into the middle of the stream.
+ */
+export function replaceMessage(existing: Message[], updated: Message): Message[] {
+	const index = existing.findIndex((m) => m.id === updated.id);
+	return index === -1 ? existing : existing.with(index, updated);
 }
 
 /**
@@ -382,6 +396,88 @@ function mediaNoun(type: string): string {
 		default:
 			return 'Attachment';
 	}
+}
+
+/**
+ * Inbound attribution for a group bubble. The server already resolved the best
+ * local name (contact name → push name → phone/JID), so this only picks the
+ * honest fallback when there is no identity at all — it never guesses a name.
+ */
+export function senderLabel(sender: IdentityView | null): string {
+	if (!sender) return 'Unknown participant';
+	const name = sender.name?.trim();
+	// A `name` still carrying an `@` domain *is* the server's honest fallback,
+	// not a contact name — render it as an identity, not as a person's name.
+	if (name && !name.includes('@')) return name;
+	const jid = sender.display_jid || sender.jid;
+	const local = jid.split('@')[0] || jid;
+	// Only phone-backed JIDs get a `+`; a LID is a number but not a phone number.
+	if (!jid.endsWith('@s.whatsapp.net')) return local;
+	return local.startsWith('+') ? local : `+${local}`;
+}
+
+export type QuotePreview = {
+	/** Who wrote the quoted message. */
+	sender: string;
+	/** One-line gist of the quoted content. */
+	body: string;
+	/** False when the target is not in local history — rendered distinctly. */
+	resolved: boolean;
+	/** Full sentence for assistive technology. */
+	label: string;
+};
+
+/**
+ * Compact reply-target preview. Everything here comes from fields already on
+ * the message: no lookup into the loaded page, no fetch. That matters for more
+ * than purity — the quote inset must reach its final height on first paint or
+ * it would grow underneath the prepend scroll anchor (U1).
+ */
+export function quotePreview(quote: QuoteView): QuotePreview {
+	const sender = senderLabel(quote.sender);
+	const text = quote.text?.trim();
+	const body = text
+		? text
+		: mediaKind(quote.type) !== 'other'
+			? mediaNoun(quote.type)
+			: quote.resolved
+				? 'Message'
+				: 'Original message unavailable';
+	const label = quote.resolved
+		? `Replying to ${sender}: ${body}`
+		: `Replying to ${sender}: ${body} (original message not loaded)`;
+	return { sender, body, resolved: quote.resolved, label };
+}
+
+export type ReactionChip = {
+	emoji: string;
+	count: number;
+	/** Actor names for assistive technology; never a send affordance (display-only). */
+	label: string;
+};
+
+const MAX_NAMED_ACTORS = 3;
+
+/**
+ * Display-only reaction aggregate. This wave renders reactions but adds no way
+ * to create or remove one, so the chip must not read as a button — the actor
+ * detail lives in this label instead.
+ */
+export function reactionChip(reaction: ReactionView): ReactionChip {
+	const names = reaction.actors.map((actor) => senderLabel(actor));
+	const shown = names.slice(0, MAX_NAMED_ACTORS);
+	const rest = names.length - shown.length;
+	const who = rest > 0 ? `${shown.join(', ')} and ${rest} more` : joinNames(shown);
+	return {
+		emoji: reaction.emoji,
+		count: reaction.count,
+		label: who ? `Reacted ${reaction.emoji} by ${who}` : `Reacted ${reaction.emoji}`
+	};
+}
+
+function joinNames(names: string[]): string {
+	if (names.length <= 1) return names[0] ?? '';
+	return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
 }
 
 export function formatBytes(bytes: number): string {

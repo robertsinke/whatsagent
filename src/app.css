@@ -82,6 +82,7 @@ body::before {
   --color-ink-50: var(--ink-50);
   --color-hairline: var(--hairline);
   --color-hairline-soft: var(--hairline-soft);
+  --color-quote-tint: var(--quote-tint);
 
   /* Neumorphic shadow stacks — top-left light source, layered. */
   --shadow-raised: inset 0 1px 0 #fff, 0 1px 2px #00000014, 0 8px 20px #00000008, 0 20px 36px #00000005;
@@ -118,6 +119,10 @@ body::before {
   /* Hairline borders — always paired with shadows on interactive chrome. */
   --hairline: #dee2de;
   --hairline-soft: #e3e3e0;
+
+  /* Quoted-reply inset — a faint recess inside an already-raised bubble, so it
+     reads as context rather than as a second message. */
+  --quote-tint: #26232310;
 
   /* shadcn semantic mapping onto the neumorphic palette. */
   --background: var(--bg);
@@ -173,6 +178,8 @@ body::before {
 
   --hairline: #343332;
   --hairline-soft: #2a2928;
+
+  --quote-tint: #f5f5f214;
 
   --background: var(--bg);
   --foreground: var(--ink-90);
