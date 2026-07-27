@@ -137,6 +137,19 @@ describe('AppState history-sync resync', () => {
 		expect(state.chats).toHaveLength(1);
 	});
 
+	it('keeps the deepen feedback alive when the deepened history lands', async () => {
+		const state = new AppState({ resyncDebounceMs: 5, resyncMaxWaitMs: 200 });
+		const calls = mockBackend([inbound('HIST-OLD', 100)]);
+		state.selectedJid = JID;
+		state.deepenStatus = { kind: 'success', at: Date.now() };
+
+		// The phone answering the deepen is what schedules the resync — so the
+		// resync must not wipe the "Requested" feedback with its own result.
+		state.applyEvent(syncProgress(1, 5));
+		await vi.waitFor(() => expect(calls.chats).toBe(1));
+		expect(state.deepenStatus.kind).toBe('success');
+	});
+
 	it('collapses a burst of history batches into a single refetch', async () => {
 		const state = new AppState({ resyncDebounceMs: 20, resyncMaxWaitMs: 5_000 });
 		const calls = mockBackend([]);

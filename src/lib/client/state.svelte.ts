@@ -181,10 +181,14 @@ export class AppState {
 
 	#runResync(): Promise<void> {
 		this.#clearResyncTimers();
-		return this.refresh();
+		// A machine-triggered resync is not an owner navigation: it must not clear
+		// the deepen feedback the owner is looking at. The phone answers a deepen
+		// with exactly the history batch that schedules this refresh, so without
+		// the flag "Requested" would be wiped by its own result arriving.
+		return this.refresh({ preserveDeepenStatus: true });
 	}
 
-	async refresh(): Promise<void> {
+	async refresh(options: { preserveDeepenStatus?: boolean } = {}): Promise<void> {
 		try {
 			const [session, chats, outbox, sendMode] = await Promise.all([
 				api.session().catch(() => EMPTY_SESSION),
@@ -196,7 +200,12 @@ export class AppState {
 			this.chats = chats;
 			this.outbox = outbox;
 			this.sendsLive = sendMode.live;
-			if (this.selectedJid) await this.openChat(this.selectedJid, { markRead: false });
+			if (this.selectedJid) {
+				await this.openChat(this.selectedJid, {
+					markRead: false,
+					preserveDeepenStatus: options.preserveDeepenStatus
+				});
+			}
 		} catch (err) {
 			this.error = describeError(err);
 		}
