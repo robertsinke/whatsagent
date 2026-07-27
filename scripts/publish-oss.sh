@@ -213,7 +213,15 @@ if [ -z "$CLONE" ]; then
 fi
 
 [ -d "$CLONE/.git" ] || die "$CLONE is not a git clone. Create the public repo and clone it first; this script will not create it."
-( cd "$CLONE" && git rev-parse --abbrev-ref HEAD >/dev/null ) || die "$CLONE has no checked-out branch"
+# `git rev-parse HEAD` is the wrong check here: on a freshly cloned EMPTY repo
+# the branch is unborn and that command fails — and an empty clone is precisely
+# the first-publish case. `symbolic-ref` answers on an unborn branch.
+( cd "$CLONE" && git symbolic-ref -q HEAD >/dev/null ) || die "$CLONE has no branch checked out (detached HEAD?)"
+if ( cd "$CLONE" && git rev-parse --verify -q HEAD >/dev/null ); then
+	say "clone has $(cd "$CLONE" && git rev-list --count HEAD) commit(s); this publish adds one on top"
+else
+	say "clone is empty; this publish creates the root commit"
+fi
 
 head2 "Syncing the export into $CLONE"
 # Delete-and-replace so a file removed from the private tree also disappears
