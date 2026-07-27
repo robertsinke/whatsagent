@@ -98,9 +98,17 @@ export type SpawnProcess = (
 export const spawnProcess: SpawnProcess = (command, args, options) =>
 	nodeSpawn(command, args, options);
 
+/** Union of every provider adapter's strip list — use for version probes too. */
+export const PROVIDER_SECRET_ENV_KEYS = [
+	'ANTHROPIC_API_KEY',
+	'ANTHROPIC_AUTH_TOKEN',
+	'OPENAI_API_KEY',
+	'CODEX_API_KEY'
+] as const;
+
 export function sanitizedEnv(
 	parentEnv: NodeJS.ProcessEnv,
-	keysToStrip: readonly string[]
+	keysToStrip: readonly string[] = PROVIDER_SECRET_ENV_KEYS
 ): NodeJS.ProcessEnv {
 	const stripped = new Set(keysToStrip);
 	const env: NodeJS.ProcessEnv = {};
@@ -183,6 +191,90 @@ export async function withSingleRetry<T>(
 		await sleep(error.retryAfterMs ?? 250);
 		return operation();
 	}
+}
+
+export interface CapturedProcessResult {
+	code: number | null;
+	signal: NodeJS.Signals | null;
+	stdout: string;
+	stderr: string;
+}
+
+/**
+ * Capture stdout/stderr from a one-shot child (e.g. `--version`). Always
+ * resolves — callers decide what a non-zero exit means. Timeout kills the
+ * child (SIGTERM then SIGKILL) and resolves with code null / signal SIGTERM.
+ */
+export function runCapturedProcess(options: {
+	command: string;
+	args: readonly string[];
+	env: NodeJS.ProcessEnv;
+	timeoutMs: number;
+	killGraceMs?: number;
+	spawn?: SpawnProcess;
+	stdin?: string;
+}): Promise<CapturedProcessResult> {
+	return new Promise((resolve) => {
+		let child: ChildProcessLike;
+		try {
+			child = (options.spawn ?? spawnProcess)(options.command, options.args, {
+				env: options.env,
+				stdio: ['pipe', 'pipe', 'pipe']
+			});
+		} catch {
+			resolve({ code: null, signal: null, stdout: '', stderr: '' });
+			return;
+		}
+
+		let settled = false;
+		let timedOut = false;
+		let stdout = '';
+		let stderr = '';
+		let killTimer: ReturnType<typeof setTimeout> | undefined;
+		const finish = (code: number | null, signal: NodeJS.Signals | null) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timeout);
+			if (killTimer) clearTimeout(killTimer);
+			resolve({
+				code: timedOut ? null : code,
+				signal: timedOut ? 'SIGTERM' : signal,
+				stdout,
+				stderr
+			});
+		};
+		const timeout = setTimeout(() => {
+			timedOut = true;
+			child.kill('SIGTERM');
+			killTimer = setTimeout(() => {
+				child.kill('SIGKILL');
+				finish(null, 'SIGTERM');
+			}, options.killGraceMs ?? 1_000);
+		}, options.timeoutMs);
+
+		child.stdout.on('data', (chunk) => {
+			stdout += chunk.toString();
+		});
+		child.stderr.on('data', (chunk) => {
+			stderr += chunk.toString();
+		});
+		child.stdin.on?.('error', () => {
+			finish(null, null);
+		});
+		child.on('error', () => {
+			finish(null, null);
+		});
+		child.on('close', (code, signal) => {
+			finish(code, signal);
+		});
+
+		try {
+			if (options.stdin !== undefined) child.stdin.write(options.stdin);
+			child.stdin.end();
+		} catch {
+			finish(null, null);
+		}
+	});
 }
 
 export function runJsonLinesProcess(options: {
