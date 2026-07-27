@@ -6,6 +6,7 @@ import { CodexProvider } from './codex.js';
 import { fakeSpawn } from './fake-spawn.js';
 import { OllamaProvider } from './ollama.js';
 import { createDraftProvider } from './index.js';
+import { providerFactoryOptionsFromDiscovery } from './discovery.js';
 import { buildRefinementInput, type DraftInput } from './provider.js';
 
 const input: DraftInput = {
@@ -230,5 +231,109 @@ describe('provider selection', () => {
 		expect(createDraftProvider({ provider: 'ollama', provider_model: 'llama3.2' })).toBeInstanceOf(
 			OllamaProvider
 		);
+	});
+
+	it('throws on an unknown provider name', () => {
+		expect(() => createDraftProvider({ provider: 'nope' })).toThrow(/Unknown draft provider/);
+	});
+});
+
+function discoverySnapshot(
+	overrides: Partial<{
+		claudePath: string | null;
+		codexPath: string | null;
+		ollamaInstalled: boolean;
+	}> = {}
+) {
+	const claudePath = overrides.claudePath === undefined ? null : overrides.claudePath;
+	const codexPath = overrides.codexPath === undefined ? null : overrides.codexPath;
+	const ollamaInstalled = overrides.ollamaInstalled ?? false;
+	return {
+		probedAt: 1,
+		searchPath: [] as string[],
+		providers: [
+			{
+				name: 'claude' as const,
+				label: 'Claude',
+				kind: 'cli' as const,
+				installed: Boolean(claudePath),
+				path: claudePath,
+				pathSource: claudePath ? ('known-location' as const) : null,
+				version: claudePath ? '2.1.220' : null,
+				auth: 'unknown' as const,
+				unavailableReason: claudePath ? null : ('not_found' as const),
+				unavailableDetail: claudePath ? null : 'missing',
+				models: [],
+				modelsLive: false,
+				defaultModel: null,
+				allowsCustomModel: true as const,
+				probedAt: 1
+			},
+			{
+				name: 'codex' as const,
+				label: 'Codex',
+				kind: 'cli' as const,
+				installed: Boolean(codexPath),
+				path: codexPath,
+				pathSource: codexPath ? ('known-location' as const) : null,
+				version: codexPath ? '0.145.0' : null,
+				auth: 'unknown' as const,
+				unavailableReason: codexPath ? null : ('not_found' as const),
+				unavailableDetail: codexPath ? null : 'missing',
+				models: [],
+				modelsLive: false,
+				defaultModel: null,
+				allowsCustomModel: true as const,
+				probedAt: 1
+			},
+			{
+				name: 'ollama' as const,
+				label: 'Ollama',
+				kind: 'http' as const,
+				installed: ollamaInstalled,
+				path: null,
+				pathSource: null,
+				version: null,
+				auth: 'unknown' as const,
+				unavailableReason: ollamaInstalled ? null : ('not_running' as const),
+				unavailableDetail: ollamaInstalled ? null : 'down',
+				models: [],
+				modelsLive: ollamaInstalled,
+				defaultModel: null,
+				allowsCustomModel: true as const,
+				probedAt: 1
+			}
+		]
+	};
+}
+
+describe('discovery paths through the factory', () => {
+	it('spawns the absolute path from a discovery snapshot, not the bare name', async () => {
+		const absolute = '/tmp/bin/claude';
+		const process = fakeSpawn([{ stdout: fixture('claude-success.jsonl') }]);
+		const options = providerFactoryOptionsFromDiscovery(
+			discoverySnapshot({ claudePath: absolute })
+		);
+		const provider = createDraftProvider(
+			{ provider: 'claude' },
+			{ claude: { ...options.claude, spawn: process.spawn } }
+		);
+
+		await expect(provider.draft(input)).resolves.toMatchObject({ kind: 'draft' });
+		expect(process.calls[0]?.command).toBe(absolute);
+	});
+
+	it('preserves bare-name spawn when the snapshot leaves the command unresolved', async () => {
+		const process = fakeSpawn([{ stdout: fixture('claude-success.jsonl') }]);
+		const options = providerFactoryOptionsFromDiscovery(discoverySnapshot({ claudePath: null }));
+		expect(options.claude).toBeUndefined();
+
+		const provider = createDraftProvider(
+			{ provider: 'claude' },
+			{ claude: { spawn: process.spawn } }
+		);
+
+		await expect(provider.draft(input)).resolves.toMatchObject({ kind: 'draft' });
+		expect(process.calls[0]?.command).toBe('claude');
 	});
 });

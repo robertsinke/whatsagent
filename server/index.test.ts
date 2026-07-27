@@ -14,6 +14,7 @@ import {
 	assertSupportedPlatform,
 	createApp,
 	HISTORY_SYNC_COMPLETE_SETTING,
+	resolveBootProvider,
 	resolveOutboxDryRun,
 	type App
 } from './index.js';
@@ -390,5 +391,33 @@ describe('assertSupportedPlatform', () => {
 		for (const platform of ['linux', 'win32'] as const) {
 			expect(() => assertSupportedPlatform(platform)).toThrow(/requires macOS/i);
 		}
+	});
+});
+
+describe('resolveBootProvider', () => {
+	it('returns the default and a null coercedFrom when no setting is present', () => {
+		expect(resolveBootProvider({})).toEqual({ name: 'claude', coercedFrom: null });
+	});
+
+	it('returns the default plus the original string when the setting is a typo', () => {
+		expect(resolveBootProvider({ provider: 'claud' })).toEqual({
+			name: 'claude',
+			coercedFrom: 'claud'
+		});
+	});
+
+	it('does not throw on a typo or trailing whitespace', () => {
+		expect(() => resolveBootProvider({ provider: 'nope' })).not.toThrow();
+		expect(resolveBootProvider({ provider: ' Codex ' })).toEqual({
+			name: 'codex',
+			coercedFrom: ' Codex '
+		});
+	});
+
+	it('passes through an exact known provider without coercion', () => {
+		expect(resolveBootProvider({ provider: 'ollama' })).toEqual({
+			name: 'ollama',
+			coercedFrom: null
+		});
 	});
 });

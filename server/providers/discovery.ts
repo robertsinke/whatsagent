@@ -1,3 +1,5 @@
+import { accessSync, constants, readdirSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import {
 	buildKnownLocationDirs,
 	resolveBinary,
@@ -12,6 +14,7 @@ import {
 	PROVIDER_SECRET_ENV_KEYS,
 	runCapturedProcess,
 	sanitizedEnv,
+	spawnProcess,
 	type SpawnProcess
 } from './provider.js';
 
@@ -167,6 +170,34 @@ export function providerFactoryOptionsFromDiscovery(
 		}
 	}
 	return options;
+}
+
+/**
+ * Production discovery deps: real spawn, filesystem execute-bit checks, and the
+ * process environment. Boot and later the settings API both call this.
+ */
+export function createDefaultProviderDiscovery(
+	overrides: Partial<ProviderDiscoveryDeps> = {}
+): ProviderDiscovery {
+	return createProviderDiscovery({
+		spawn: spawnProcess,
+		fetch: globalThis.fetch.bind(globalThis),
+		fileExists: (filePath) => {
+			try {
+				accessSync(filePath, constants.X_OK);
+				return true;
+			} catch {
+				return false;
+			}
+		},
+		readTextFile: async (filePath) => readFileSync(filePath, 'utf8'),
+		readdir: async (dirPath) => readdirSync(dirPath),
+		env: process.env,
+		homedir,
+		platform: process.platform,
+		now: Date.now,
+		...overrides
+	});
 }
 
 export function createProviderDiscovery(deps: ProviderDiscoveryDeps): ProviderDiscovery {

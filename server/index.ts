@@ -33,8 +33,18 @@ import { createRuntimeMemory } from './agent/memory/hindsight.js';
 import { bootstrapOwnerVoice } from './agent/voice.js';
 import { refineDraft } from './agent/refiner.js';
 import { OutboxPacer, type OutboxPacerOptions } from './outbox/pacer.js';
-import { createDraftProvider, type DraftProviderName } from './providers/index.js';
+import {
+	createDefaultProviderDiscovery,
+	providerFactoryOptionsFromDiscovery
+} from './providers/discovery.js';
+import { createDraftProvider } from './providers/index.js';
 import type { DraftProvider } from './providers/provider.js';
+import {
+	DEFAULT_DRAFT_PROVIDER,
+	isDraftProviderName,
+	normalizeDraftProviderName,
+	type DraftProviderName
+} from '../shared/providers.js';
 import { getDraft } from './store/drafts.js';
 import { getChat } from './store/chats.js';
 import {
@@ -461,18 +471,68 @@ export function assertSupportedPlatform(platform: NodeJS.Platform = process.plat
 	);
 }
 
+/**
+ * Resolve the draft provider used at process boot. Never throws — a typo or
+ * trailing space in SQLite must not brick startup. Returns the normalized name
+ * both `createDraftProvider` and the scheduler label must share, plus the raw
+ * string when coercion happened so the caller can log a warning.
+ */
+export function resolveBootProvider(
+	settings: Readonly<Record<string, string>>
+): { name: DraftProviderName; coercedFrom: string | null } {
+	const raw = settings.provider;
+	if (raw === undefined) {
+		return { name: DEFAULT_DRAFT_PROVIDER, coercedFrom: null };
+	}
+	if (typeof raw === 'string' && raw.trim() === '') {
+		return { name: DEFAULT_DRAFT_PROVIDER, coercedFrom: null };
+	}
+	const name = normalizeDraftProviderName(raw);
+	if (isDraftProviderName(raw) && raw === name) {
+		return { name, coercedFrom: null };
+	}
+	return { name, coercedFrom: raw };
+}
+
 async function main(): Promise<void> {
 	assertSupportedPlatform();
 	const db = openDatabase();
 	const settings = listSettings(db);
 	const channel = new WhatsAppConnection(db);
-	const providerName = (settings.provider ?? 'claude') as DraftProviderName;
+	const { name: providerName, coercedFrom } = resolveBootProvider(settings);
+	if (coercedFrom !== null) {
+		console.warn(
+			`Invalid draft provider setting ${JSON.stringify(coercedFrom)}; falling back to ${providerName}`
+		);
+	}
+	// Both factory and scheduler label must see the same normalized name, or
+	// drafts get stamped with a provider that is not the one running.
+	const bootSettings = { ...settings, provider: providerName };
+
+	let factoryOptions = {};
+	try {
+		const snapshot = await createDefaultProviderDiscovery().snapshot();
+		factoryOptions = providerFactoryOptionsFromDiscovery(snapshot);
+	} catch (err) {
+		console.warn('Provider discovery failed; drafting will use bare CLI names', err);
+	}
+
+	let draftProvider: DraftProvider | undefined;
+	try {
+		draftProvider = createDraftProvider(bootSettings, factoryOptions);
+	} catch (err) {
+		console.warn(
+			`Draft provider ${JSON.stringify(providerName)} failed to initialize; drafting is off`,
+			err
+		);
+	}
+
 	const memory = createRuntimeMemory(settings, { dataDir: getDefaultDataDir() });
 	const dryRunSetting = getSetting(db, OUTBOX_DRY_RUN_SETTING);
 	const app = createApp({
 		db,
 		channel,
-		draftProvider: createDraftProvider(settings),
+		draftProvider,
 		providerName,
 		memory,
 		outboxTransport: createWhatsAppSendTransport(() => channel.getSendSocket()),
