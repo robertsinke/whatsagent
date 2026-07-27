@@ -4,6 +4,31 @@ Local single-user WhatsApp desktop client with an AI drafting agent. The agent p
 
 Two-tier local runtime in one repo: a persistent Node backend (Baileys, SQLite, draft agent, paced outbox) and a SvelteKit SPA. Development is one command.
 
+## Privacy
+
+**There is no whatsagent server, and there never will be.** No account, no sign-up, no telemetry, no crash reporting, no analytics, no update ping that carries your data. The author of this project cannot read your messages, contacts, or drafts, and has built no mechanism that could. Everything runs on your machine, against a SQLite file on your disk.
+
+**The only thing that ever leaves your machine is what you send to the LLM you chose**, and you choose it:
+
+| Provider setting | Where your conversation text goes |
+| --- | --- |
+| `ollama` | Nowhere. The model runs on your machine — **zero network egress**. |
+| `claude` | Anthropic, under your own Claude subscription login. |
+| `codex` | OpenAI, under your own ChatGPT/Codex subscription login. |
+
+With a cloud provider, drafting sends recent messages from the chat being drafted — including the other person's words — to that provider, under your account and their terms. That is the deal you are opting into by picking a cloud model, and it is the same deal you already accepted when you installed that CLI. If you would rather not make it on someone else's behalf, run Ollama and the app is fully airgapped from everyone, including us.
+
+WhatsApp itself is the other party you already have a relationship with: the app connects as a linked device using your own account, exactly like WhatsApp Web.
+
+## Safety and risk
+
+Read this before pairing.
+
+- **The agent never sends on its own.** This is structural, not a setting. Exactly one code path can call WhatsApp's send function — the outbox pacer — and its only inputs are messages you approved or typed yourself. There is no toggle that makes the agent autonomous, because there is no code to enable.
+- **Sends are human-paced.** Approving ten drafts at once does not produce ten instant messages; the outbox spaces them out on a global clock.
+- **Account-ban risk is real.** whatsagent talks to WhatsApp through [Baileys](https://github.com/WhiskeySockets/Baileys), an unofficial reimplementation of the WhatsApp Web protocol. WhatsApp does not sanction third-party clients and can ban accounts that use them. Repeated re-pairing is the main trigger, more than ordinary message traffic — but the risk is never zero, and it is a risk to the phone number you actually use. Pair only if you accept that.
+- **Your local data is worth protecting.** The SQLite database contains your message history in plaintext, and the WhatsApp auth blobs are account-hijack credentials. They are encrypted at rest with a key in your login keychain, and the DB is `0600` in a `0700` directory — that protects against a stray copy in a synced folder or an unencrypted backup. It does **not** protect against malware already running as you: the keychain item is authorized for `/usr/bin/security` without a password prompt, so any process running under your account can read the key. Same terms as the credentials already sitting in `~/.claude` and `~/.codex`.
+
 ## Prerequisites
 
 - **Node.js 20+**
