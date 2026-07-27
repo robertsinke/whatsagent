@@ -41,7 +41,11 @@ import {
 	validateOriginAndHost,
 	type AllowedOrigins
 } from './security.js';
-import { toChatView } from './chat-view.js';
+// `chatNeedsReply` lives with the view it feeds, so every emitter (REST *and*
+// WebSocket) builds the same shape. Re-exported here because it was defined in
+// this module first.
+import { chatNeedsReply, toChatView } from './chat-view.js';
+export { chatNeedsReply };
 import { describeMedia, isMediaType, toMessageView } from './message-view.js';
 
 export type RoutesDeps = {
@@ -118,20 +122,6 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
 	const raw = Buffer.concat(chunks).toString('utf8');
 	if (!raw.trim()) return undefined;
 	return JSON.parse(raw) as unknown;
-}
-
-/**
- * Deterministic needs-reply (mirrors U8 classifier floor, without draft pipeline):
- * 1:1 + last message inbound + not muted/archived + not skipped since last inbound.
- */
-export function chatNeedsReply(db: AppDatabase, chat: Chat): boolean {
-	if (chat.kind !== '1:1') return false;
-	if (chat.muted || chat.archived) return false;
-	// 'skipped' = owner opted out; 'quiet' = agent returned no_reply_needed (D3).
-	if (chat.agent_state === 'skipped' || chat.agent_state === 'quiet') return false;
-	const last = getLastMessage(db, chat.jid);
-	if (!last || last.from_me) return false;
-	return true;
 }
 
 function parsePositiveInt(value: string | null, fallback: number): number {

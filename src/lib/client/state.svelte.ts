@@ -572,7 +572,12 @@ export class AppState {
 
 	#mergeChat(chat: Chat): void {
 		const index = this.chats.findIndex((c) => c.jid === chat.jid);
-		const next = index === -1 ? [...this.chats, chat] : this.chats.with(index, chat);
+		// Field-wise merge, not replace: a payload that is missing keys must not
+		// strip `display_jid`/`preview`/`needs_reply` off a row that already has
+		// them. The server is the fix (it now always sends a full ChatView); this
+		// keeps a partial payload from degrading the list if that ever regresses.
+		const merged = index === -1 ? chat : { ...this.chats[index]!, ...chat };
+		const next = index === -1 ? [...this.chats, merged] : this.chats.with(index, merged);
 		this.chats = next.sort((a, b) => (b.last_msg_at ?? 0) - (a.last_msg_at ?? 0));
 	}
 

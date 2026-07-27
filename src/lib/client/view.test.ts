@@ -6,6 +6,7 @@ import {
 	canRefine,
 	deepenStatusView,
 	deriveUnreadBoundary,
+	displayName,
 	jidDigits,
 	deriveUnreadBoundaryFromCursor,
 	draftBadge,
@@ -727,5 +728,26 @@ describe('jidDigits — phone-number search (W4 follow-up)', () => {
 		// '4890107' would be a substring if the two jids were concatenated bare.
 		const digits = jidDigits({ jid: '107777976484081@lid', display_jid: '31620135489@s.whatsapp.net' });
 		expect(digits.includes('4890107')).toBe(false);
+	});
+});
+
+/**
+ * These run inside Svelte effects. A throw there does not degrade one row — it
+ * tears down the reactive graph, which is how a partial `chat-updated` payload
+ * froze the chat list (stale selection, dead chat switching).
+ */
+describe('rendering a chat that is missing display_jid never throws', () => {
+	const partial = { jid: '31620135489@s.whatsapp.net', name: null } as unknown as Chat;
+
+	it('displayName falls back to the routing jid', () => {
+		expect(displayName(partial)).toBe('+31620135489');
+	});
+
+	it('jidDigits still yields searchable digits', () => {
+		expect(jidDigits(partial)).toContain('31620135489');
+	});
+
+	it('toChatRow renders the row', () => {
+		expect(toChatRow(partial).name).toBe('+31620135489');
 	});
 });

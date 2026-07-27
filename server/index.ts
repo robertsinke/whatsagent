@@ -22,6 +22,7 @@ import {
 	type IngestEventHooks,
 	type ServerEvent
 } from './api/events.js';
+import { chatViewFor } from './api/chat-view.js';
 import { createRequestHandler } from './api/routes.js';
 import { createSessionState } from './api/session.js';
 import { buildAllowedOrigins, validateOriginAndHost } from './api/security.js';
@@ -130,7 +131,7 @@ export function createApp(options: CreateAppOptions = {}): App {
 				hooks: {
 					onDraftUpdated: (draft) => events.emit({ type: 'draft-updated', draft }),
 					onDraftRemoved: (chatJid) => events.emit({ type: 'draft-removed', chat_jid: chatJid }),
-					onChatUpdated: (chat) => events.emit({ type: 'chat-updated', chat })
+					onChatUpdated: (chat) => events.emit({ type: 'chat-updated', chat: chatViewFor(db, chat) })
 				}
 			})
 		: undefined;
@@ -158,7 +159,7 @@ export function createApp(options: CreateAppOptions = {}): App {
 					const draft = getDraft(db, outbox.chat_jid);
 					if (draft) events.emit({ type: 'draft-updated', draft });
 					const chat = getChat(db, outbox.chat_jid);
-					if (chat) events.emit({ type: 'chat-updated', chat });
+					if (chat) events.emit({ type: 'chat-updated', chat: chatViewFor(db, chat) });
 				}
 			})
 		: undefined;
