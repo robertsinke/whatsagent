@@ -845,6 +845,168 @@ describe('drafts', () => {
 		expect(draft).not.toHaveBeenCalled();
 	});
 
+	/**
+	 * W4-U15 — owner-triggered generation. Every case here also asserts that the
+	 * outbox stays empty: generating a draft must never approach the send path.
+	 */
+	describe('owner-triggered generate', () => {
+		function outboxCount(): number {
+			return (db!.prepare('SELECT COUNT(*) AS count FROM outbox').get() as { count: number })
+				.count;
+		}
+
+		async function generate(jid: string): Promise<Response> {
+			return api(`/api/chats/${encodeURIComponent(jid)}/draft/generate`, { method: 'POST' });
+		}
+
+		it('drafts in a chat the classifier rejects: owner spoke last and the chat is skipped', async () => {
+			const draft = vi.fn(async () => ({ kind: 'draft' as const, text: 'One more thing —' }));
+			const events = new EventBus();
+			const received: unknown[] = [];
+			events.subscribe((event) => received.push(event));
+			await startTestApp(events, undefined, { draft });
+			seedNeedsReplyFixture(db!);
+			// Bob's last message is outbound; skipping the chat rejects it twice over.
+			db!.prepare("UPDATE chats SET agent_state = 'skipped' WHERE jid = ?").run(
+				'bob@s.whatsapp.net'
+			);
+
+			const response = await generate('bob@s.whatsapp.net');
+
+			expect(response.status).toBe(202);
+			expect(await response.json()).toEqual({ ok: true, chat_jid: 'bob@s.whatsapp.net' });
+			await vi.waitFor(() =>
+				expect(
+					(db!
+						.prepare('SELECT status FROM drafts WHERE chat_jid = ?')
+						.get('bob@s.whatsapp.net') as { status: string } | undefined)?.status
+				).toBe('ready')
+			);
+			expect(draft).toHaveBeenCalledOnce();
+			// The UI is driven entirely by these; the 202 carries no draft body.
+			const draftEvents = received.filter(
+				(event) => (event as { type: string }).type === 'draft-updated'
+			);
+			expect(draftEvents.map((event) => (event as { draft: { status: string } }).draft.status))
+				.toEqual(['drafting', 'ready']);
+			expect(outboxCount()).toBe(0);
+		});
+
+		it('refuses a group chat with 400 — R8 is not an owner preference', async () => {
+			const draft = vi.fn(async () => ({ kind: 'draft' as const, text: 'Never' }));
+			await startTestApp(new EventBus(), undefined, { draft });
+			seedNeedsReplyFixture(db!);
+
+			const response = await generate('team@g.us');
+
+			expect(response.status).toBe(400);
+			expect(draft).not.toHaveBeenCalled();
+			expect(outboxCount()).toBe(0);
+		});
+
+		it('404s for a chat that does not exist', async () => {
+			await startTestApp(new EventBus(), undefined, {
+				draft: async () => ({ kind: 'draft' as const, text: 'Never' })
+			});
+			seedNeedsReplyFixture(db!);
+
+			expect((await generate('nobody@s.whatsapp.net')).status).toBe(404);
+		});
+
+		/**
+		 * History sync creates chat rows independently of message delivery. The
+		 * drafter returns `not_needed` for an empty chat and emits nothing, so a
+		 * 202 here would leave the owner pressing a button that does nothing at
+		 * all — the exact silent no-op this unit exists to remove.
+		 */
+		it('409s for a 1:1 chat with no messages rather than accepting a run that emits nothing', async () => {
+			const draft = vi.fn(async () => ({ kind: 'draft' as const, text: 'Never' }));
+			await startTestApp(new EventBus(), undefined, { draft });
+			seedNeedsReplyFixture(db!);
+			upsertChat(db!, {
+				jid: 'empty@s.whatsapp.net',
+				name: 'Empty',
+				kind: '1:1',
+				last_msg_at: 0,
+				unread: 0
+			});
+
+			const response = await generate('empty@s.whatsapp.net');
+
+			expect(response.status).toBe(409);
+			expect(draft).not.toHaveBeenCalled();
+			expect(outboxCount()).toBe(0);
+		});
+
+		it('503s when no provider is configured', async () => {
+			await startTestApp();
+			seedNeedsReplyFixture(db!);
+
+			const response = await generate('alice@s.whatsapp.net');
+
+			expect(response.status).toBe(503);
+			expect(outboxCount()).toBe(0);
+		});
+
+		it('409s while a draft is already drafting', async () => {
+			const draft = vi.fn(async () => ({ kind: 'draft' as const, text: 'Never' }));
+			await startTestApp(new EventBus(), undefined, { draft });
+			seedNeedsReplyFixture(db!);
+			upsertDraft(db!, {
+				chat_jid: 'alice@s.whatsapp.net',
+				text: '',
+				status: 'drafting',
+				generated_at: 201,
+				provider: 'fake',
+				basis_msg_id: 'a1'
+			});
+
+			const response = await generate('alice@s.whatsapp.net');
+
+			expect(response.status).toBe(409);
+			expect(draft).not.toHaveBeenCalled();
+			expect(outboxCount()).toBe(0);
+		});
+
+		it('409s while a draft is approved, which may already be queued to send', async () => {
+			const draft = vi.fn(async () => ({ kind: 'draft' as const, text: 'Never' }));
+			await startTestApp(new EventBus(), undefined, { draft });
+			seedNeedsReplyFixture(db!);
+			upsertDraft(db!, {
+				chat_jid: 'alice@s.whatsapp.net',
+				text: 'Approved and queued',
+				status: 'approved',
+				generated_at: 201,
+				provider: 'fake',
+				basis_msg_id: 'a1'
+			});
+
+			const response = await generate('alice@s.whatsapp.net');
+
+			expect(response.status).toBe(409);
+			expect(draft).not.toHaveBeenCalled();
+			expect(
+				(db!.prepare('SELECT text FROM drafts WHERE chat_jid = ?').get('alice@s.whatsapp.net') as
+					| { text: string }
+					| undefined)?.text
+			).toBe('Approved and queued');
+		});
+
+		it('is rejected without a valid Origin, like every other mutating route', async () => {
+			const draft = vi.fn(async () => ({ kind: 'draft' as const, text: 'Never' }));
+			await startTestApp(new EventBus(), undefined, { draft });
+			seedNeedsReplyFixture(db!);
+
+			const response = await api('/api/chats/alice%40s.whatsapp.net/draft/generate', {
+				method: 'POST',
+				origin: 'http://evil.example'
+			});
+
+			expect(response.status).toBe(403);
+			expect(draft).not.toHaveBeenCalled();
+		});
+	});
+
 	it('allows only one of two concurrent approvals to enqueue', async () => {
 		await startTestApp();
 		upsertChat(db!, {

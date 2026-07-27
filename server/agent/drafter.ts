@@ -40,6 +40,13 @@ export type DraftChatOptions = {
 	chatJid: string;
 	/** Exact owner-authored message permitted only for a development test. */
 	devDraftFromMeMessageId?: string;
+	/**
+	 * W4-U15 — the owner pressed "Generate draft". Bypasses every needs-reply
+	 * condition (outbound-last, muted, archived, skipped, quiet) because the owner
+	 * asking *is* the authority. Never bypasses R8: groups are still refused here,
+	 * structurally, and not only at the route.
+	 */
+	ownerRequested?: boolean;
 	conversationLimit?: number;
 	now?: () => number;
 	hooks?: AgentDraftHooks;
@@ -73,7 +80,8 @@ async function buildDraftInput(
 	memory: Memory,
 	chat: Chat,
 	conversationLimit: number,
-	devInboundMessageId?: string
+	devInboundMessageId?: string,
+	ownerRequested = false
 ): Promise<DraftInput> {
 	let style: string | null = null;
 	try {
@@ -94,9 +102,32 @@ async function buildDraftInput(
 			(devInboundMessageId
 				? ' Development test: treat the final owner-authored message as inbound and draft a direct reply to it.'
 				: '') +
+			// The owner-requested path is entered precisely when automatic classification
+			// declined, most often because the owner spoke last. Without this the base
+			// instruction above invites no_reply_needed on exactly the runs the owner
+			// asked for, so say plainly that a message is wanted.
+			(ownerRequested
+				? ' The owner has explicitly asked for a draft in this conversation, so a reply is wanted:' +
+					' write the next message the owner would send, even if the owner sent the most recent' +
+					' message (in that case write a natural follow-up). Do not return no_reply_needed.'
+				: '') +
 			styleInstruction,
 		conversation: conversationFor(db, chat.jid, conversationLimit, devInboundMessageId)
 	};
+}
+
+/**
+ * Basis selection for an owner-requested run. There may be no trailing inbound at
+ * all, so the last message in the chat — in either direction — is the basis. The
+ * chat still has to contain something to reply to.
+ */
+function ownerRequestedCandidate(
+	db: AppDatabase,
+	chat: Chat
+): { chat: Chat; lastInbound: Message } | undefined {
+	const lastMessage = getLastMessage(db, chat.jid);
+	if (!lastMessage) return undefined;
+	return { chat, lastInbound: lastMessage };
 }
 
 function emitChat(options: DraftChatOptions): void {
@@ -130,20 +161,30 @@ function markSuperseded(options: DraftChatOptions): DraftAttempt {
 export async function draftChat(options: DraftChatOptions): Promise<DraftAttempt> {
 	const chat = getChat(options.db, options.chatJid);
 	if (!chat) return { kind: 'not_needed' };
-	const candidate = classifyNeedsReply(options.db, chat, {
-		devDraftFromMeMessageId: options.devDraftFromMeMessageId
-	});
+	// R8 is enforced here, not only by classifyNeedsReply — the owner-requested
+	// path deliberately skips the classifier, so the group exclusion has to be
+	// restated on the branch that bypasses it.
+	if (options.ownerRequested && chat.kind !== '1:1') return { kind: 'not_needed' };
+	const candidate = options.ownerRequested
+		? ownerRequestedCandidate(options.db, chat)
+		: classifyNeedsReply(options.db, chat, {
+				devDraftFromMeMessageId: options.devDraftFromMeMessageId
+			});
 	if (!candidate) return { kind: 'not_needed' };
 	const devInboundMessageId =
 		candidate.lastInbound.from_me &&
 		candidate.lastInbound.id === options.devDraftFromMeMessageId
 			? candidate.lastInbound.id
 			: undefined;
+	// An owner-requested basis is often outbound, so the direction clause that
+	// guards the automatic path would supersede the run before the provider is
+	// ever called. Identity of the basis message is the whole check here — which
+	// is what R-draft-basis needs: newer inbound still invalidates the draft.
 	const isCurrentBasis = (message: Message | undefined): boolean =>
 		Boolean(
 			message &&
 				message.id === candidate.lastInbound.id &&
-				(!message.from_me || message.id === devInboundMessageId)
+				(options.ownerRequested || !message.from_me || message.id === devInboundMessageId)
 		);
 
 	const now = options.now ?? Date.now;
@@ -164,7 +205,8 @@ export async function draftChat(options: DraftChatOptions): Promise<DraftAttempt
 			options.memory,
 			chat,
 			options.conversationLimit ?? 50,
-			devInboundMessageId
+			devInboundMessageId,
+			options.ownerRequested
 		);
 		const beforeCall = getLastMessage(options.db, options.chatJid);
 		if (!isCurrentBasis(beforeCall)) {
@@ -182,7 +224,11 @@ export async function draftChat(options: DraftChatOptions): Promise<DraftAttempt
 			// 'quiet' is the agent's own verdict, distinct from an owner 'skip' — the
 			// UI must not present them alike. Both demote out of needs-reply, and
 			// onMessage clears either for a later inbound.
-			setChatAgentState(options.db, options.chatJid, 'quiet');
+			//
+			// An owner-requested run is exempt: demoting the chat *because* the owner
+			// asked for help would silently penalise the request, and the owner can
+			// always press Generate again. The state is cleared instead.
+			setChatAgentState(options.db, options.chatJid, options.ownerRequested ? null : 'quiet');
 			emitChat(options);
 			return { kind: 'no_reply_needed' };
 		}

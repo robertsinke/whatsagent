@@ -919,6 +919,150 @@ describe('AppState draft refinement', () => {
 });
 
 /**
+ * W4-U15. Owner-triggered generation is fire-and-forget: the 202 carries no
+ * draft, so the only local state is the in-flight flag and a readable error.
+ */
+describe('AppState owner-triggered draft generation', () => {
+	afterEach(() => vi.restoreAllMocks());
+
+	it('posts to draft/generate and writes nothing optimistically', async () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		const fetchMock = vi
+			.spyOn(globalThis, 'fetch')
+			.mockResolvedValue(jsonResponse({ ok: true, chat_jid: JID }, 202));
+
+		const promise = state.generateDraft();
+		expect(state.generating).toBe(true);
+
+		expect(await promise).toBe(true);
+		expect(state.generateError).toBeNull();
+		// The draft arrives over draft-updated, not from this response.
+		expect(state.draft).toBeNull();
+		expect(state.outbox).toEqual([]);
+
+		const [input, init] = fetchMock.mock.calls[0]!;
+		expect(String(input)).toContain('/chats/maya%40s.whatsapp.net/draft/generate');
+		expect(init?.method).toBe('POST');
+	});
+
+	/**
+	 * The 202 lands before the scheduler runs, and at the concurrency limit the
+	 * chat sits queued with no draft row. Releasing on the response would show
+	 * "No draft" with a live button while the request is still pending.
+	 */
+	it('stays in flight past the 202 until the first draft event for that chat', async () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+			jsonResponse({ ok: true, chat_jid: JID }, 202)
+		);
+
+		await state.generateDraft();
+		expect(state.generating).toBe(true);
+
+		// An event for a different chat must not release this one.
+		state.applyEvent({ type: 'draft-removed', chat_jid: 'sam@s.whatsapp.net' });
+		expect(state.generating).toBe(true);
+
+		state.applyEvent({ type: 'draft-updated', draft: draftRow({ status: 'drafting' }) });
+		expect(state.generating).toBe(false);
+	});
+
+	it('releases the in-flight flag when the run ends with no draft', async () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+			jsonResponse({ ok: true, chat_jid: JID }, 202)
+		);
+
+		await state.generateDraft();
+		state.applyEvent({ type: 'draft-removed', chat_jid: JID });
+
+		expect(state.generating).toBe(false);
+	});
+
+	it('releases a still-pending generate when the owner switches chats', async () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		state.chats = [chatRow({ jid: 'sam@s.whatsapp.net', unread: 0 })];
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.endsWith('/draft/generate')) return jsonResponse({ ok: true, chat_jid: JID }, 202);
+			if (url.includes('/messages')) return jsonResponse({ items: [] });
+			if (url.endsWith('/draft')) return jsonResponse({ error: 'Not found' }, 404);
+			if (url.endsWith('/read')) {
+				return jsonResponse(chatRow({ unread: 0, jid: 'sam@s.whatsapp.net' }));
+			}
+			throw new Error(`Unexpected request: ${url}`);
+		});
+
+		await state.generateDraft();
+		expect(state.generating).toBe(true);
+
+		await state.openChat('sam@s.whatsapp.net');
+		// Otherwise the button stays disabled in a chat that never asked.
+		expect(state.generating).toBe(false);
+	});
+
+	it('surfaces a readable error on failure rather than failing silently', async () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+			jsonResponse({ error: 'A draft is already being generated' }, 409)
+		);
+
+		expect(await state.generateDraft()).toBe(false);
+		expect(state.generating).toBe(false);
+		expect(state.generateError).toMatch(/already being generated/i);
+	});
+
+	it('explains a missing provider in the owner’s terms on a 503', async () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+			jsonResponse({ error: 'Draft generation unavailable' }, 503)
+		);
+
+		expect(await state.generateDraft()).toBe(false);
+		expect(state.generateError).toMatch(/no draft provider is configured/i);
+	});
+
+	it('ignores a second press while one request is in flight', async () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		const fetchMock = vi
+			.spyOn(globalThis, 'fetch')
+			.mockResolvedValue(jsonResponse({ ok: true, chat_jid: JID }, 202));
+
+		const first = state.generateDraft();
+		expect(await state.generateDraft()).toBe(false);
+		await first;
+
+		expect(fetchMock).toHaveBeenCalledOnce();
+	});
+
+	it('clears the generate error on chat switch', async () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		state.generateError = 'Previous failure';
+		state.chats = [chatRow({ jid: 'sam@s.whatsapp.net', unread: 0 })];
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.includes('/messages')) return jsonResponse({ items: [] });
+			if (url.endsWith('/draft')) return jsonResponse({ error: 'Not found' }, 404);
+			if (url.endsWith('/read')) {
+				return jsonResponse(chatRow({ unread: 0, jid: 'sam@s.whatsapp.net' }));
+			}
+			throw new Error(`Unexpected request: ${url}`);
+		});
+
+		await state.openChat('sam@s.whatsapp.net');
+		expect(state.generateError).toBeNull();
+	});
+});
+
+/**
  * W4-U13. A LID/phone mapping can arrive while the owner is looking at the
  * chat it makes redundant. Dropping the row is not enough: the messages have
  * moved to the survivor, so a still-selected duplicate leaves the owner staring

@@ -203,6 +203,9 @@ export function createApp(options: CreateAppOptions = {}): App {
 		setOutboxDryRun: pacer ? (dryRun: boolean) => pacer.setDryRun(dryRun) : undefined,
 		memory,
 		refineDraft: refiner,
+		// Owner-triggered generation shares the scheduler's queue and hooks, so a
+		// manual run cancels any pending debounce for the chat rather than racing it.
+		generateDraft: scheduler ? (chatJid: string) => scheduler.generate(chatJid) : undefined,
 		deepenHistory: options.channel?.deepenHistory
 			? (chatJid, count) => options.channel!.deepenHistory!(chatJid, count)
 			: undefined
