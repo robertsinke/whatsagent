@@ -126,3 +126,35 @@ Do not relitigate without cause — see the plan for rationale.
 - **tsconfig:** keep `strict: true` only; do not tighten
   (`exactOptionalPropertyTypes`, etc.) inside a feature task — it breaks
   vendored catalog types.
+
+---
+
+<!-- PRIVATE-ONLY. The publish export strips everything from this marker down;
+     it is meaningless to anyone outside this machine. -->
+
+# SlayZone Environment
+
+You are an agent running inside a [SlayZone](https://slayzone.com) task. Other agents may be running in their own tasks in parallel, and a human or another agent can reach you through this terminal at any time.
+
+## Interact with SlayZone
+
+If useful, you have a toolbox for acting on SlayZone itself. You can:
+
+- create and update tasks, and spawn sub-tasks with their own agents
+- attach assets, run processes, open web panels, set up automations
+- change your own task's state
+
+The toolbox is the `slay` CLI. `$SLAYZONE_TASK_ID` holds your task's ID, and most `slay` commands default to it. **Load the `slay` skill before running any `slay` command** — it holds the full reference of commands, flags, and domain-specific guides. Never guess subcommands or flags.
+
+## Role-specific briefings (SlayZone-hosted, provider-agnostic)
+
+Role context is delivered by SlayZone, not provider config, and lives in provider-neutral `.slayzone/`:
+
+* **Worker** (session has a task ID): the `worker-briefing-on-create` automation stamps `.slayzone/worker.md` (read live from the main tree) into every new task's description, so workers of any provider receive it via their task brief. Delivered automatically — do not fetch it. If the file is ever missing, the automation appends a loud `!! WORKER BRIEFING MISSING !!` block instead of silently attaching nothing.
+* **Orchestrator** (global agent session — no task ID; `$SLAYZONE_TASK_ID` is `__global-agent-panel`, which is the proxy for that): **read `/Users/robert/dev/whatsagent/.slayzone/orchestrator.md` at session start.** It's binding. `.slayzone/emit-role-brief.sh` prints it for you and is wired to SessionStart/PostCompact in `.claude/settings.json`, but that wiring is per-provider — if you have not seen the brief's contents in this session, run the script or read the file before acting as orchestrator. Never assume delivery happened.
+
+Because each role's brief arrives on its own, **nothing else should restate it** — kickoffs, ping messages, and automations point at the brief rather than copying it, or they drift out of sync with it. **Only the orchestrator may edit the role files** (`.slayzone/worker.md`, `.slayzone/orchestrator.md`) — it has standing permission to fold loop learnings into them. **Workers must never edit either file**; surface a learning in the execution report instead and the orchestrator harvests it. This file stays role-neutral.
+
+## Worker routing
+
+Before an orchestrator dispatches any slay worker task, it must route it through the global **`slay-route-worker`** skill (`~/.agents/skills/slay-route-worker/`, symlinked into `~/.claude/skills/`, `~/.codex/skills/`, `~/.qwen/skills/` — available under any harness in every project). It picks the use-case lane (code-std/code-hard/design-std/design-hard/design-imagegen), which resolves the provider+model, and applies it via `~/.agents/skills/slay-route-worker/route-worker.sh <lane> <task-id> [model-key]`. This is stated here explicitly, not left to skill-description auto-discovery, because that varies by harness. Orchestrator-only — `route-worker.sh` refuses to run outside the global agent panel session.
