@@ -64,21 +64,34 @@ export function initialsFor(name: string): string {
 	return (words[0]![0]! + words[1]![0]!).toUpperCase();
 }
 
+/**
+ * Whole calendar days between two instants, local time.
+ *
+ * "Yesterday" is a calendar question, not an elapsed-time one: a message sent at
+ * 23:00 on Saturday is 34 hours old on Monday morning, and an elapsed-hours test
+ * would label it "Yesterday" when it was two days ago. Comparing midnights is
+ * also DST-safe — the rounding absorbs the 23- and 25-hour days.
+ */
+function calendarDaysBetween(tsMs: number, nowMs: number): number {
+	const startOfDay = (ms: number): number => {
+		const date = new Date(ms);
+		date.setHours(0, 0, 0, 0);
+		return date.getTime();
+	};
+	return Math.round((startOfDay(nowMs) - startOfDay(tsMs)) / DAY_MS);
+}
+
 /** WhatsApp-style relative stamp: time today, weekday this week, date beyond. */
 export function formatChatTime(ts: number | null, now: number = Date.now()): string {
 	if (!ts) return '';
 	const normalizedTs = epochMilliseconds(ts);
 	const then = new Date(normalizedTs);
-	const today = new Date(now);
-	const sameDay =
-		then.getFullYear() === today.getFullYear() &&
-		then.getMonth() === today.getMonth() &&
-		then.getDate() === today.getDate();
-	if (sameDay) {
+	const daysAgo = calendarDaysBetween(normalizedTs, now);
+	if (daysAgo === 0) {
 		return then.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 	}
-	if (now - normalizedTs < 2 * DAY_MS) return 'Yesterday';
-	if (now - normalizedTs < 7 * DAY_MS) return then.toLocaleDateString(undefined, { weekday: 'short' });
+	if (daysAgo === 1) return 'Yesterday';
+	if (daysAgo < 7) return then.toLocaleDateString(undefined, { weekday: 'short' });
 	return then.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 }
 
@@ -99,13 +112,10 @@ export function formatDayDivider(ts: number, now: number = Date.now()): string {
 	const normalizedTs = epochMilliseconds(ts);
 	const then = new Date(normalizedTs);
 	const today = new Date(now);
-	const sameDay =
-		then.getFullYear() === today.getFullYear() &&
-		then.getMonth() === today.getMonth() &&
-		then.getDate() === today.getDate();
-	if (sameDay) return 'Today';
-	if (now - normalizedTs < 2 * DAY_MS) return 'Yesterday';
-	if (now - normalizedTs < 7 * DAY_MS) {
+	const daysAgo = calendarDaysBetween(normalizedTs, now);
+	if (daysAgo === 0) return 'Today';
+	if (daysAgo === 1) return 'Yesterday';
+	if (daysAgo < 7) {
 		return then.toLocaleDateString(undefined, { weekday: 'long' });
 	}
 	if (then.getFullYear() === today.getFullYear()) {

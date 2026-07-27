@@ -128,6 +128,19 @@ describe('formatDayDivider', () => {
 		expect(formatDayDivider(nowSec - DAY, now)).toBe('Yesterday');
 	});
 
+	/**
+	 * The trap an elapsed-hours test walks into: a late-evening message two
+	 * calendar days back is under 48 hours old but is not "Yesterday".
+	 */
+	it('counts calendar days, not elapsed hours', () => {
+		const morning = new Date(2026, 6, 27, 9, 0, 0).getTime();
+		const twoNightsAgo = Math.floor(new Date(2026, 6, 25, 23, 0, 0).getTime() / 1000);
+		expect(morning - twoNightsAgo * 1000).toBeLessThan(2 * 86_400_000);
+		expect(formatDayDivider(twoNightsAgo, morning)).not.toBe('Yesterday');
+		const lateYesterday = Math.floor(new Date(2026, 6, 26, 23, 0, 0).getTime() / 1000);
+		expect(formatDayDivider(lateYesterday, morning)).toBe('Yesterday');
+	});
+
 	it('uses the weekday name within the last week', () => {
 		const threeDaysAgo = nowSec - 3 * DAY;
 		const label = formatDayDivider(threeDaysAgo, now);
