@@ -5,10 +5,38 @@
 	import { Input } from '$lib/components/ui/input/index.js';
 	import * as Tabs from '$lib/components/ui/tabs/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
-	import { ArrowLeft, Check, Radio, ShieldAlert } from '@lucide/svelte';
+	import * as Select from '$lib/components/ui/select/index.js';
+	import { ArrowLeft, Check, Radio, RefreshCw, ShieldAlert } from '@lucide/svelte';
 	import { api } from '$lib/client/api.js';
+	import type { ProviderInfo, ProvidersResponse } from '$lib/client/types.js';
+	import { PROVIDER_CATALOG } from '../../../shared/provider-catalog.generated.js';
+	import type { CatalogModel, DraftProviderName, ProviderModelOption } from '../../../shared/provider-types.js';
+	import {
+		CUSTOM_MODEL_VALUE,
+		DEFAULT_MODEL_LABEL,
+		DEFAULT_MODEL_VALUE,
+		DRAFT_PROVIDER_NAMES,
+		mergeModelOptions,
+		normalizeDraftProviderName
+	} from '../../../shared/providers.js';
 
-	type Field = { key: string; label: string; help: string; placeholder: string };
+	type TextField = {
+		kind: 'text';
+		key: string;
+		label: string;
+		help: string;
+		placeholder: string;
+	};
+
+	type SelectField = {
+		kind: 'select';
+		key: 'provider' | 'provider_model' | 'memory';
+		label: string;
+		help: string;
+		placeholder: string;
+	};
+
+	type Field = TextField | SelectField;
 
 	type VoiceView = {
 		stem: string;
@@ -18,14 +46,29 @@
 		path: string;
 	};
 
-	const PACING_FIELDS: Field[] = [
+	type ProviderOption = {
+		value: DraftProviderName;
+		label: string;
+		disabled: boolean;
+		reason: string | null;
+	};
+
+	const MEMORY_OPTIONS: { value: string; label: string }[] = [
+		{ value: 'hindsight', label: 'hindsight (default)' },
+		{ value: 'null', label: 'null — static local profile' },
+		{ value: 'off', label: 'off — learn nothing' }
+	];
+
+	const PACING_FIELDS: TextField[] = [
 		{
+			kind: 'text',
 			key: 'pacing_min_seconds',
 			label: 'Global spacing floor (s)',
 			help: 'Minimum delay before the next queued draft. Defaults to 0 for near-immediate sending.',
 			placeholder: '0'
 		},
 		{
+			kind: 'text',
 			key: 'pacing_max_seconds',
 			label: 'Global spacing ceiling (s)',
 			help: 'Upper jitter bound. Defaults to 1 second; values below the floor use the floor.',
@@ -35,18 +78,21 @@
 
 	const FIELDS: Field[] = [
 		{
+			kind: 'select',
 			key: 'provider',
 			label: 'Draft provider',
 			help: 'claude · codex · ollama. Runs under your existing subscription login.',
 			placeholder: 'claude'
 		},
 		{
+			kind: 'select',
 			key: 'provider_model',
 			label: 'Model',
-			help: 'Optional model override for the selected provider.',
+			help: 'Optional model override for the selected provider. Custom… keeps the saved id and opens a text field.',
 			placeholder: 'default'
 		},
 		{
+			kind: 'select',
 			key: 'memory',
 			label: 'Voice memory',
 			help: 'hindsight (default) · null · off. Hindsight consolidates your edits and skips into two markdown voice documents — one global, one per contact — mirrored to voice/ in your data folder. Drafting reads those files, so drafts keep their voice even when Hindsight is down. Null keeps a static local profile; off learns nothing.',
@@ -54,9 +100,31 @@
 		}
 	];
 
-	let values = $state<Record<string, string>>({});
+	let values = $state<Record<string, string>>({
+		provider: 'claude',
+		provider_model: '',
+		memory: 'hindsight'
+	});
 	let saved = $state<string | null>(null);
 	let error = $state<string | null>(null);
+
+	/**
+	 * Discovery is a second, independent promise. Settings populate immediately;
+	 * this only enriches the dropdowns. On rejection the page still works from
+	 * the vendored catalog + saved value + Custom.
+	 */
+	let providersSnapshot = $state<ProvidersResponse | null>(null);
+	let providersError = $state<string | null>(null);
+	let providersLoading = $state(false);
+
+	/**
+	 * Model select value is a VIEW value, never the setting value. Choosing
+	 * Custom sets this flag and deliberately does not write the underlying
+	 * setting; the text input then binds to the same setting value, prefilled.
+	 * Sentinels never reach the wire.
+	 */
+	let modelCustom = $state(false);
+	let modelView = $state<string>(DEFAULT_MODEL_VALUE);
 
 	/**
 	 * W4-U8: outbox send-mode, owned by the dedicated endpoint (not the generic
@@ -74,6 +142,129 @@
 	let voice = $state<VoiceView | null>(null);
 	let voiceLoading = $state(true);
 	let voiceError = $state<string | null>(null);
+
+	function unavailableReasonLabel(info: ProviderInfo): string {
+		switch (info.unavailableReason) {
+			case 'not_found':
+				return 'not found on PATH';
+			case 'probe_failed':
+				return 'version probe failed';
+			case 'not_running':
+				return 'installed but not running';
+			default:
+				return info.unavailableDetail ?? 'unavailable';
+		}
+	}
+
+	function providerOptions(): ProviderOption[] {
+		const byName = new Map(
+			(providersSnapshot?.providers ?? []).map((p) => [p.name, p] as const)
+		);
+		const current = normalizeDraftProviderName(values.provider);
+		return DRAFT_PROVIDER_NAMES.map((name) => {
+			const info = byName.get(name);
+			if (!info) {
+				return { value: name, label: name, disabled: false, reason: null };
+			}
+			const unavailable = !info.installed || info.unavailableReason !== null;
+			let label = info.label || name;
+			if (info.installed && info.version) {
+				label = `${name} — installed, v${info.version}`;
+			} else if (info.installed) {
+				label = `${name} — installed`;
+			} else {
+				label = `${name} — ${unavailableReasonLabel(info)}`;
+			}
+			if (unavailable && info.unavailableReason) {
+				label = `${name} — ${unavailableReasonLabel(info)}`;
+				if (info.version) label = `${name} — v${info.version} (${unavailableReasonLabel(info)})`;
+			}
+			return {
+				value: name,
+				label,
+				// Keep the currently saved provider selectable so a missing binary
+				// cannot silently clear the owner's choice from the control.
+				disabled: unavailable && name !== current,
+				reason: unavailable ? unavailableReasonLabel(info) : null
+			};
+		});
+	}
+
+	function catalogFor(provider: DraftProviderName): readonly CatalogModel[] {
+		if (provider === 'ollama') return [];
+		return PROVIDER_CATALOG[provider] ?? [];
+	}
+
+	function modelOptions(): ProviderModelOption[] {
+		const provider = normalizeDraftProviderName(values.provider);
+		const info = providersSnapshot?.providers.find((p) => p.name === provider);
+		const live = info?.models ?? [];
+		const merged = mergeModelOptions(catalogFor(provider), live, values.provider_model);
+		if (!merged.some((m) => m.value === DEFAULT_MODEL_VALUE)) {
+			merged.push({
+				value: DEFAULT_MODEL_VALUE,
+				label: DEFAULT_MODEL_LABEL,
+				source: 'default'
+			});
+		}
+		return merged;
+	}
+
+	function syncModelViewFromValue() {
+		if (modelCustom) {
+			modelView = CUSTOM_MODEL_VALUE;
+			return;
+		}
+		const trimmed = (values.provider_model ?? '').trim();
+		modelView = trimmed === '' ? DEFAULT_MODEL_VALUE : trimmed;
+	}
+
+	function handleModelViewChange(next: string | undefined) {
+		if (next === undefined) return;
+		if (next === CUSTOM_MODEL_VALUE) {
+			modelCustom = true;
+			modelView = CUSTOM_MODEL_VALUE;
+			// Deliberately do not touch values.provider_model — Custom is a view
+			// mode. The text input stays bound to the prefilled setting value.
+			return;
+		}
+		modelCustom = false;
+		modelView = next;
+		if (next === DEFAULT_MODEL_VALUE) {
+			values.provider_model = '';
+		} else {
+			values.provider_model = next;
+		}
+	}
+
+	function modelTriggerLabel(): string {
+		if (modelCustom || modelView === CUSTOM_MODEL_VALUE) return 'Custom…';
+		if (modelView === DEFAULT_MODEL_VALUE || (values.provider_model ?? '').trim() === '') {
+			return DEFAULT_MODEL_LABEL;
+		}
+		const opt = modelOptions().find((m) => m.value === modelView);
+		return opt?.label ?? modelView;
+	}
+
+	function savedModelWarning(): boolean {
+		const trimmed = (values.provider_model ?? '').trim();
+		if (trimmed === '') return false;
+		return modelOptions().some((m) => m.value === trimmed && m.source === 'saved');
+	}
+
+	async function loadProviders(refresh = false) {
+		providersLoading = true;
+		providersError = null;
+		try {
+			providersSnapshot = refresh ? await api.refreshProviders() : await api.providers();
+		} catch (err) {
+			providersError = err instanceof Error ? err.message : String(err);
+			// Leave providersSnapshot as-is (null on first failure). Dropdowns
+			// still render from catalog + saved + Custom.
+		} finally {
+			providersLoading = false;
+		}
+	}
 
 	async function loadVoice() {
 		voiceLoading = true;
@@ -105,8 +296,14 @@
 	onMount(() => {
 		void api
 			.settings()
-			.then((settings) => (values = settings))
+			.then((settings) => {
+				values = settings;
+				modelCustom = false;
+				syncModelViewFromValue();
+			})
 			.catch((err) => (error = err instanceof Error ? err.message : String(err)));
+		// Independent of settings — enrichment only. Rejection must not brick the page.
+		void loadProviders();
 		void api
 			.sendMode()
 			.then((mode) => (sendsLive = mode.live))
@@ -116,9 +313,23 @@
 
 	async function save(key: string) {
 		try {
-			await api.setSetting(key, values[key] ?? '');
+			// Sentinels are view-only; never persist Custom / Default tokens.
+			let value = values[key] ?? '';
+			if (key === 'provider_model') {
+				if (value === CUSTOM_MODEL_VALUE || value === DEFAULT_MODEL_VALUE) {
+					value = value === DEFAULT_MODEL_VALUE ? '' : (values.provider_model ?? '');
+				}
+				if (modelCustom) {
+					value = values.provider_model ?? '';
+				}
+			}
+			await api.setSetting(key, value);
 			saved = key;
 			setTimeout(() => (saved = saved === key ? null : saved), 1500);
+			// Refresh restartRequired after a provider/model write.
+			if (key === 'provider' || key === 'provider_model' || key === 'memory') {
+				void loadProviders();
+			}
 		} catch (err) {
 			error = err instanceof Error ? err.message : String(err);
 		}
@@ -161,6 +372,21 @@
 			sendingMode = false;
 		}
 	}
+
+	function activeDraftLabel(): string {
+		const active = providersSnapshot?.active;
+		if (!active) return 'the boot provider';
+		const model = active.model?.trim();
+		return model ? `${active.provider} / ${model}` : active.provider;
+	}
+
+	function savedDraftLabel(): string {
+		const savedInfo = providersSnapshot?.saved;
+		if (!savedInfo) return 'the saved settings';
+		const provider = savedInfo.provider?.trim() || 'claude';
+		const model = savedInfo.providerModel?.trim();
+		return model ? `${provider} / ${model}` : `${provider} (provider default)`;
+	}
 </script>
 
 <main class="page">
@@ -170,7 +396,11 @@
 		</Button>
 		<h1>Settings</h1>
 		<p class="subtitle">
-			Stored locally in SQLite. Provider and memory changes take effect after restart.
+			{#if providersSnapshot?.restartRequired}
+				Stored locally in SQLite. Provider and memory changes take effect after restart.
+			{:else}
+				Stored locally in SQLite.
+			{/if}
 		</p>
 	</header>
 
@@ -183,23 +413,163 @@
 			</Tabs.List>
 
 			<Tabs.Content value="agent" class="panel-content">
+				{#if providersSnapshot?.restartRequired}
+					<div class="restart-banner" role="status" data-testid="restart-required">
+						Restart required. The agent is still drafting with <strong>{activeDraftLabel()}</strong>;
+						after restart it will use <strong>{savedDraftLabel()}</strong>.
+					</div>
+				{/if}
+				{#if providersSnapshot?.active.coercedFrom}
+					<div class="coerced-banner" role="alert" data-testid="provider-coerced">
+						Saved provider <code>{providersSnapshot.active.coercedFrom}</code> was invalid at
+						boot; drafting fell back to <strong>{providersSnapshot.active.provider}</strong>.
+					</div>
+				{/if}
+
+				<div class="discovery-row">
+					<span class="discovery-status">
+						{#if providersLoading}
+							Scanning providers…
+						{:else if providersError}
+							Discovery unavailable — using catalog + saved + Custom.
+						{:else if providersSnapshot}
+							Providers scanned.
+						{:else}
+							Waiting for discovery…
+						{/if}
+					</span>
+					<Button
+						size="sm"
+						variant="outline"
+						onclick={() => loadProviders(true)}
+						disabled={providersLoading}
+						data-testid="providers-rescan"
+					>
+						<RefreshCw class="size-3.5" /> Re-scan
+					</Button>
+				</div>
+
 				{#each FIELDS as field (field.key)}
 					<label class="field">
-					<span class="field-label">{field.label}</span>
-						<span class="field-row">
-							<Input
-								bind:value={values[field.key]}
-								placeholder={field.placeholder}
-								class="field-input"
-							/>
-							<Button size="sm" variant="outline" onclick={() => save(field.key)}>
-								{#if saved === field.key}
-									<Check class="size-3.5" /> Saved
-								{:else}
-									Save
-								{/if}
-							</Button>
-						</span>
+						<span class="field-label">{field.label}</span>
+						{#if field.kind === 'text'}
+							<span class="field-row">
+								<Input
+									bind:value={values[field.key]}
+									placeholder={field.placeholder}
+									class="field-input"
+								/>
+								<Button size="sm" variant="outline" onclick={() => save(field.key)}>
+									{#if saved === field.key}
+										<Check class="size-3.5" /> Saved
+									{:else}
+										Save
+									{/if}
+								</Button>
+							</span>
+						{:else if field.key === 'provider'}
+							<span class="field-row">
+								<Select.Root type="single" bind:value={values.provider}>
+									<Select.Trigger class="field-select" data-testid="provider-select">
+										{providerOptions().find((o) => o.value === values.provider)?.label ??
+											values.provider ??
+											'Select provider'}
+									</Select.Trigger>
+									<Select.Content>
+										{#each providerOptions() as opt (opt.value)}
+											<Select.Item
+												value={opt.value}
+												label={opt.label}
+												disabled={opt.disabled}
+											>
+												<span class="option-main">{opt.label}</span>
+												{#if opt.disabled && opt.reason}
+													<span class="option-reason">{opt.reason}</span>
+												{/if}
+											</Select.Item>
+										{/each}
+									</Select.Content>
+								</Select.Root>
+								<Button size="sm" variant="outline" onclick={() => save(field.key)}>
+									{#if saved === field.key}
+										<Check class="size-3.5" /> Saved
+									{:else}
+										Save
+									{/if}
+								</Button>
+							</span>
+						{:else if field.key === 'provider_model'}
+							<span class="field-row">
+								<Select.Root
+									type="single"
+									value={modelView}
+									onValueChange={handleModelViewChange}
+								>
+									<Select.Trigger class="field-select" data-testid="model-select">
+										{modelTriggerLabel()}
+									</Select.Trigger>
+									<Select.Content>
+										{#each modelOptions() as opt (opt.value)}
+											<Select.Item value={opt.value} label={opt.label}>
+												<span class="option-main">{opt.label}</span>
+												{#if opt.source === 'saved'}
+													<span class="option-reason">saved, not detected</span>
+												{:else if opt.note}
+													<span class="option-reason">{opt.note}</span>
+												{/if}
+											</Select.Item>
+										{/each}
+										<Select.Item value={CUSTOM_MODEL_VALUE} label="Custom…">
+											Custom…
+										</Select.Item>
+									</Select.Content>
+								</Select.Root>
+								<Button size="sm" variant="outline" onclick={() => save(field.key)}>
+									{#if saved === field.key}
+										<Check class="size-3.5" /> Saved
+									{:else}
+										Save
+									{/if}
+								</Button>
+							</span>
+							{#if modelCustom}
+								<span class="field-row custom-row">
+									<Input
+										bind:value={values.provider_model}
+										placeholder="model id"
+										class="field-input"
+										data-testid="model-custom-input"
+									/>
+								</span>
+							{/if}
+							{#if savedModelWarning()}
+								<span class="field-warning" data-testid="model-saved-warning">
+									Saved model is not in the detected list — it will be kept until you change it.
+								</span>
+							{/if}
+						{:else if field.key === 'memory'}
+							<span class="field-row">
+								<Select.Root type="single" bind:value={values.memory}>
+									<Select.Trigger class="field-select" data-testid="memory-select">
+										{MEMORY_OPTIONS.find((o) => o.value === values.memory)?.label ??
+											values.memory ??
+											'Select memory'}
+									</Select.Trigger>
+									<Select.Content>
+										{#each MEMORY_OPTIONS as opt (opt.value)}
+											<Select.Item value={opt.value} label={opt.label} />
+										{/each}
+									</Select.Content>
+								</Select.Root>
+								<Button size="sm" variant="outline" onclick={() => save(field.key)}>
+									{#if saved === field.key}
+										<Check class="size-3.5" /> Saved
+									{:else}
+										Save
+									{/if}
+								</Button>
+							</span>
+						{/if}
 						<span class="field-help">{field.help}</span>
 					</label>
 				{/each}
@@ -458,9 +828,60 @@
 		height: 2rem;
 		font-size: 0.82rem;
 	}
+	:global(.field-select) {
+		flex: 1;
+		width: 100%;
+		min-width: 0;
+		height: 2rem;
+		font-size: 0.82rem;
+	}
 	.field-help {
 		font-size: 0.72rem;
 		color: var(--ink-50);
+	}
+	.field-warning {
+		font-size: 0.72rem;
+		color: var(--terracotta, #c45c26);
+		line-height: 1.35;
+	}
+	.option-main {
+		display: block;
+	}
+	.option-reason {
+		display: block;
+		font-size: 0.7rem;
+		color: var(--ink-50);
+	}
+	.custom-row {
+		margin-top: 0.15rem;
+	}
+	.discovery-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.5rem;
+	}
+	.discovery-status {
+		font-size: 0.72rem;
+		color: var(--ink-50);
+	}
+	.restart-banner {
+		font-size: 0.8rem;
+		line-height: 1.4;
+		padding: 0.55rem 0.7rem;
+		border-radius: var(--radius-md);
+		border: 1px solid color-mix(in srgb, var(--terracotta, #c45c26) 35%, var(--hairline));
+		background: color-mix(in srgb, var(--terracotta, #c45c26) 8%, var(--surface-raised));
+		color: var(--ink-90);
+	}
+	.coerced-banner {
+		font-size: 0.8rem;
+		line-height: 1.4;
+		padding: 0.55rem 0.7rem;
+		border-radius: var(--radius-md);
+		border: 1px solid color-mix(in srgb, var(--destructive) 40%, var(--hairline));
+		background: color-mix(in srgb, var(--destructive) 8%, var(--surface-raised));
+		color: var(--ink-90);
 	}
 	.safety {
 		margin: 0;
