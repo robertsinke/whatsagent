@@ -25,11 +25,13 @@ import { join } from 'node:path';
 const dataDir = mkdtempSync(join(tmpdir(), 'whatsagent-smoke-'));
 const db = openDatabase({ dataDir });
 
-const staticDir = join(process.cwd(), 'build');
-
+// staticDir is deliberately NOT passed: `npm start` does not pass one either, so
+// hardcoding it here would test a path production never takes. The first version
+// of this script did exactly that and hid a real bug — the compiled build's
+// default resolved to a directory that does not exist, so `npm start` served no
+// SPA at all while this smoke test reported PASS.
 const app = createApp({
 	db,
-	staticDir,
 	port: 0,
 	host: '127.0.0.1'
 });

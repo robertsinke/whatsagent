@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -124,13 +125,27 @@ export type App = {
  */
 export { resolveOutboxDryRun } from './store/settings.js';
 
+/**
+ * Locate the adapter-static SPA output, whichever layout this module was loaded
+ * from: `server/` in source, `dist/server/server/` compiled, or wherever a
+ * packaged app bundle puts it. Counting `..` hops is what broke this before —
+ * the compiled entry sits two levels deeper than the source one, so a fixed
+ * depth is right for exactly one of them and silently serves nothing for the
+ * other. Walk up instead and take the first ancestor that actually holds a
+ * built SPA; fall back to the source-relative guess so the error surfaces as a
+ * missing `build/` rather than a wrong path.
+ */
 function defaultStaticDir(): string {
 	const here = dirname(fileURLToPath(import.meta.url));
-	// Source (server/index.ts): here is server/ → repo root → build/ (adapter-static).
-	// Compiled (dist/server/server/index.js): here is dist/server/server/ → repo root
-	// → build/ (the SPA sits at the top of build/, the compiled server under dist/server/).
-	const compiled = import.meta.url.endsWith('.js');
-	return compiled ? join(here, '..', '..', 'build') : join(here, '..', 'build');
+	let dir = here;
+	for (;;) {
+		const candidate = join(dir, 'build');
+		if (existsSync(join(candidate, 'index.html'))) return candidate;
+		const parent = dirname(dir);
+		if (parent === dir) break;
+		dir = parent;
+	}
+	return join(here, '..', 'build');
 }
 
 export function createApp(options: CreateAppOptions = {}): App {
