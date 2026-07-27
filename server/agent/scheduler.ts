@@ -32,6 +32,13 @@ export class DraftScheduler {
 	readonly #now: () => number;
 	readonly #timers = new Map<string, ReturnType<typeof setTimeout>>();
 	readonly #queued = new Set<string>();
+	/**
+	 * Chats with an owner "Generate draft" request pending. Consumed exactly once,
+	 * at the top of #run — if the marker could survive a run, the next *automatic*
+	 * debounce for that chat would draft in a muted/skipped chat with no owner
+	 * request behind it.
+	 */
+	readonly #ownerRequested = new Set<string>();
 	readonly #queue: string[] = [];
 	readonly #idleWaiters = new Set<() => void>();
 	#running = 0;
@@ -83,6 +90,40 @@ export class DraftScheduler {
 		this.#schedule(chat.jid, this.#debounceMs);
 	}
 
+	/**
+	 * W4-U15 — owner pressed "Generate draft"; never called automatically.
+	 *
+	 * Routed through the scheduler rather than calling `draftChat` directly so a
+	 * manual run shares the one queue, the one concurrency limit, and the one set
+	 * of hooks — and so `#schedule(jid, 0)` cancels any pending debounce timer for
+	 * this chat instead of racing it.
+	 *
+	 * Generating a draft writes a draft row and nothing else. It never enqueues an
+	 * outbox row and never reaches the send transport (R9).
+	 *
+	 * Returns false when the request was refused, so the caller can distinguish a
+	 * refusal from an accepted run.
+	 */
+	generate(chatJid: string): boolean {
+		const chat = getChat(this.#options.db, chatJid);
+		// R8 restated at the seam: no caller can drive a group into the agent.
+		if (!chat || chat.kind !== '1:1') return false;
+		const draft = getDraft(this.#options.db, chatJid);
+		// An approved draft may already be queued in the outbox — never regenerate
+		// under one. A run already in flight is left to finish.
+		if (draft && (draft.status === 'approved' || draft.status === 'drafting')) return false;
+		if (draft && draft.status !== 'stale') {
+			upsertDraft(this.#options.db, { ...draft, status: 'stale' });
+			this.#options.hooks?.onDraftUpdated?.(getDraft(this.#options.db, chatJid)!);
+		}
+		setChatAgentState(this.#options.db, chatJid, null);
+		const updated = getChat(this.#options.db, chatJid);
+		if (updated) this.#options.hooks?.onChatUpdated?.(updated);
+		this.#ownerRequested.add(chatJid);
+		this.#schedule(chatJid, 0);
+		return true;
+	}
+
 	/** Owner-triggered retry for a failed row; never called automatically. */
 	retry(chatJid: string): void {
 		const draft = getDraft(this.#options.db, chatJid);
@@ -106,6 +147,7 @@ export class DraftScheduler {
 		this.#timers.clear();
 		this.#queue.length = 0;
 		this.#queued.clear();
+		this.#ownerRequested.clear();
 		this.#resolveIdle();
 	}
 
@@ -140,8 +182,11 @@ export class DraftScheduler {
 	}
 
 	async #run(chatJid: string): Promise<void> {
+		// Read-and-delete before the await: the marker authorises this run only.
+		const ownerRequested = this.#ownerRequested.delete(chatJid);
 		try {
 			const result = await draftChat({
+				ownerRequested,
 				db: this.#options.db,
 				provider: this.#options.provider,
 				providerName: this.#options.providerName,
@@ -153,6 +198,10 @@ export class DraftScheduler {
 				hooks: this.#options.hooks
 			});
 			if (result.kind === 'rate_limited') {
+				// The rate-limit reschedule is a continuation of the same request, so
+				// the owner authorisation is carried over rather than silently
+				// downgraded to an automatic run the classifier would then reject.
+				if (ownerRequested) this.#ownerRequested.add(chatJid);
 				this.#schedule(chatJid, result.retryAfterMs);
 			}
 		} finally {

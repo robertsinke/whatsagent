@@ -126,6 +126,9 @@
 								onskip={() => app.skipDraft()}
 								ondismissstale={() => (app.stalePrompt = null)}
 								onrefine={(intent, text) => app.refineDraft(intent, text)}
+								generating={app.generating}
+								generateError={app.generateError}
+								ongenerate={() => app.generateDraft()}
 							/>
 							<Composer
 								bind:value={composerValue}

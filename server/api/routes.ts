@@ -82,6 +82,12 @@ export type RoutesDeps = {
 	deepenHistory?: (chatJid: string, count?: number) => Promise<unknown>;
 	/** Preview-only draft refinement through the configured provider. */
 	refineDraft?: (request: RefineDraftRequest) => Promise<RefinementAttempt>;
+	/**
+	 * W4-U15 — owner-triggered draft generation, queued on the draft scheduler.
+	 * Returns false when the seam itself refused the request. Absent when no
+	 * provider is configured. This never sends and never touches the outbox.
+	 */
+	generateDraft?: (chatJid: string) => boolean;
 };
 
 const MIME: Record<string, string> = {
@@ -693,6 +699,50 @@ async function handleApi(
 		const draft = getDraft(db, jid)!;
 		events.emit({ type: 'draft-updated', draft });
 		json(res, 200, draft);
+		return;
+	}
+
+	/**
+	 * W4-U15 — owner presses "Generate draft". Mutating, so the shared
+	 * Origin/Host validation already covers it; no second check here.
+	 *
+	 * Accepts with 202 and does not wait on the provider: the existing
+	 * `draft-updated` events carry the UI through drafting → ready.
+	 *
+	 * R9 is untouched. This writes a draft row; it enqueues nothing, wakes no
+	 * pacer, and has no path to the WhatsApp send function.
+	 */
+	if (rest === 'draft/generate' && method === 'POST') {
+		if (!chat) {
+			error(res, 404, 'Chat not found', { jid });
+			return;
+		}
+		// R8: groups are structurally excluded from drafting and the owner cannot
+		// opt out of that. The scheduler seam refuses them again.
+		if (chat.kind !== '1:1') {
+			error(res, 400, 'Drafting is available for 1:1 chats only', { kind: chat.kind });
+			return;
+		}
+		if (!deps.generateDraft) {
+			error(res, 503, 'Draft generation unavailable');
+			return;
+		}
+		const existing = getDraft(db, jid);
+		if (existing?.status === 'drafting') {
+			error(res, 409, 'A draft is already being generated', { status: existing.status });
+			return;
+		}
+		// An approved draft may already be queued in the outbox — regenerating
+		// under one would swap the text out from beneath an owner approval.
+		if (existing?.status === 'approved') {
+			error(res, 409, 'Draft is already approved', { status: existing.status });
+			return;
+		}
+		if (!deps.generateDraft(jid)) {
+			error(res, 409, 'Draft generation was refused for this chat');
+			return;
+		}
+		json(res, 202, { ok: true, chat_jid: jid });
 		return;
 	}
 

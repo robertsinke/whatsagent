@@ -72,6 +72,14 @@ export class AppState {
 	 */
 	refineError = $state<string | null>(null);
 	/**
+	 * W4-U15 — true while an owner-triggered "Generate draft" request is in
+	 * flight. Cleared as soon as the server accepts (202); the draft itself then
+	 * arrives as a `draft-updated` event and `DraftStatus` shows its own shimmer.
+	 */
+	generating = $state(false);
+	/** Recoverable generation error, surfaced in the no-draft card. */
+	generateError = $state<string | null>(null);
+	/**
 	 * One "New" marker for the open chat. U4: derived from the persisted read
 	 * cursor (`last_read_msg_id`) when it is present, falling back to the
 	 * count-based placement from W2-U1 for chats that have never been opened
@@ -237,6 +245,7 @@ export class AppState {
 		// clears it. `refining` is left untouched — an in-flight request is not
 		// canceled by a UI reload, and its finally-block clears the flag.
 		if (chatChanged) this.refineError = null;
+		if (chatChanged) this.generateError = null;
 		if (!options.preserveDeepenStatus) {
 			this.deepenStatus = { kind: 'idle', at: null };
 		}
@@ -448,6 +457,37 @@ export class AppState {
 			this.#mergeChat(chat);
 		} catch (err) {
 			this.error = describeError(err);
+		}
+	}
+
+	/**
+	 * W4-U15 — ask the agent for a draft in the open chat, on demand. Valid even
+	 * where automatic classification declined (owner spoke last, chat skipped,
+	 * muted, archived, or gone quiet); the server refuses group chats.
+	 *
+	 * There is no optimistic write: the server accepts with 202 and the draft
+	 * arrives over `draft-updated`, so the card transitions to its own shimmer.
+	 *
+	 * This never approves, enqueues an outbox row, or wakes the pacer (R9).
+	 */
+	async generateDraft(): Promise<boolean> {
+		const jid = this.selectedJid;
+		if (!jid || this.generating) return false;
+		this.generating = true;
+		this.generateError = null;
+		try {
+			await api.generateDraft(jid);
+			return true;
+		} catch (err) {
+			if (this.selectedJid === jid) {
+				this.generateError =
+					err instanceof ApiError && err.status === 503
+						? 'No draft provider is configured, so the agent cannot write a draft.'
+						: describeError(err);
+			}
+			return false;
+		} finally {
+			this.generating = false;
 		}
 	}
 

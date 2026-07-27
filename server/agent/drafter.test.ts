@@ -222,3 +222,146 @@ describe('draftChat', () => {
 		});
 	});
 });
+
+describe('draftChat — owner-requested (W4-U15)', () => {
+	function options(database: AppDatabase, provider: DraftProvider) {
+		return {
+			db: database,
+			provider,
+			providerName: 'fake',
+			memory: new NullMemory() as Memory,
+			chatJid: 'alice@s.whatsapp.net',
+			ownerRequested: true
+		};
+	}
+
+	it('drafts off a trailing outbound message without superseding itself', async () => {
+		const database = setup();
+		upsertMessage(database, {
+			id: 'm3',
+			chat_jid: 'alice@s.whatsapp.net',
+			from_me: true,
+			ts: 300,
+			text: 'Ik laat het je weten.'
+		});
+		const draft = vi.fn(async () => ({ kind: 'draft' as const, text: 'Nog even over morgen…' }));
+
+		const result = await draftChat(options(database, { draft }));
+
+		expect(result.kind).toBe('ready');
+		expect(draft).toHaveBeenCalledOnce();
+		expect(getDraft(database, 'alice@s.whatsapp.net')).toMatchObject({
+			status: 'ready',
+			basis_msg_id: 'm3'
+		});
+	});
+
+	it('keeps the trailing owner message as an assistant turn, unlike the dev override', async () => {
+		const database = setup();
+		upsertMessage(database, {
+			id: 'm3',
+			chat_jid: 'alice@s.whatsapp.net',
+			from_me: true,
+			ts: 300,
+			text: 'Ik laat het je weten.'
+		});
+		let captured: DraftInput | undefined;
+		await draftChat(
+			options(database, {
+				draft: async (input: DraftInput) => {
+					captured = input;
+					return { kind: 'draft' as const, text: 'ok' };
+				}
+			})
+		);
+
+		const last = captured!.conversation.at(-1)!;
+		expect(last).toMatchObject({ role: 'assistant', content: 'Ik laat het je weten.' });
+		// Without this clause the base prompt invites no_reply_needed on exactly
+		// the runs the owner asked for.
+		expect(captured!.system).toContain('Do not return no_reply_needed');
+	});
+
+	it('refuses a group chat — R8 holds inside the drafter, not only at the route', async () => {
+		const database = setup();
+		upsertChat(database, {
+			jid: 'team@g.us',
+			name: 'Team',
+			kind: 'group',
+			last_msg_at: 400,
+			muted: false,
+			archived: false
+		});
+		upsertMessage(database, {
+			id: 'g1',
+			chat_jid: 'team@g.us',
+			from_me: false,
+			ts: 400,
+			text: '@owner joining?'
+		});
+		const draft = vi.fn(async () => ({ kind: 'draft' as const, text: 'Never' }));
+
+		const result = await draftChat({ ...options(database, { draft }), chatJid: 'team@g.us' });
+
+		expect(result).toEqual({ kind: 'not_needed' });
+		expect(draft).not.toHaveBeenCalled();
+		expect(getDraft(database, 'team@g.us')).toBeUndefined();
+	});
+
+	it('still supersedes when newer inbound lands mid-run, so approval re-confirms', async () => {
+		const database = setup();
+		upsertMessage(database, {
+			id: 'm3',
+			chat_jid: 'alice@s.whatsapp.net',
+			from_me: true,
+			ts: 300,
+			text: 'Ik laat het je weten.'
+		});
+		const draft = vi.fn(async () => {
+			upsertMessage(database, {
+				id: 'm4',
+				chat_jid: 'alice@s.whatsapp.net',
+				from_me: false,
+				ts: 400,
+				text: 'Wacht even!'
+			});
+			return { kind: 'draft' as const, text: 'Too late' };
+		});
+
+		const result = await draftChat(options(database, { draft }));
+
+		expect(result).toEqual({ kind: 'superseded' });
+		expect(getDraft(database, 'alice@s.whatsapp.net')?.status).toBe('stale');
+	});
+
+	it('does not silence the chat when the provider declines an owner request', async () => {
+		const database = setup();
+		const draft = vi.fn(async () => ({ kind: 'no_reply_needed' as const, reason: 'owner already covered it' }));
+
+		const result = await draftChat(options(database, { draft }));
+
+		expect(result).toEqual({ kind: 'no_reply_needed' });
+		expect(getChat(database, 'alice@s.whatsapp.net')?.agent_state).toBeNull();
+	});
+
+	it('returns not_needed for an empty chat rather than drafting from nothing', async () => {
+		const database = setup();
+		upsertChat(database, {
+			jid: 'empty@s.whatsapp.net',
+			name: 'Empty',
+			kind: '1:1',
+			last_msg_at: 0,
+			muted: false,
+			archived: false
+		});
+		const draft = vi.fn(async () => ({ kind: 'draft' as const, text: 'Never' }));
+
+		const result = await draftChat({
+			...options(database, { draft }),
+			chatJid: 'empty@s.whatsapp.net'
+		});
+
+		expect(result).toEqual({ kind: 'not_needed' });
+		expect(draft).not.toHaveBeenCalled();
+	});
+});

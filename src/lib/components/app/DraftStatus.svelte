@@ -3,7 +3,7 @@
 	import Shimmer from '$lib/components/ai-elements/shimmer.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { animate, spring } from 'motion';
-	import { AlertTriangle, Check, Pencil, RotateCw, X } from '@lucide/svelte';
+	import { AlertTriangle, Check, Pencil, RotateCw, Sparkles, X } from '@lucide/svelte';
 	import type { Draft, RefinementIntent } from '$lib/client/types.js';
 	import type { StalePrompt } from '$lib/client/state.svelte.js';
 	import { canApprove, canRefine, draftBadge, isVisibleDraftStatus } from '$lib/client/view.js';
@@ -18,22 +18,30 @@
 		refining = false,
 		/** Recoverable refinement error; preserved preview stays visible when set. */
 		refineError = null,
+		/** True while an owner-triggered "Generate draft" request is in flight. */
+		generating = false,
+		/** Recoverable generation error, shown inside the no-draft card. */
+		generateError = null,
 		onapprove,
 		onskip,
 		onconfirmstale,
 		ondismissstale,
-		onrefine
+		onrefine,
+		ongenerate
 	}: {
 		draft: Draft | null;
 		stalePrompt?: StalePrompt | null;
 		agentEligible?: boolean;
 		refining?: boolean;
 		refineError?: string | null;
+		generating?: boolean;
+		generateError?: string | null;
 		onapprove?: (text?: string) => boolean | void | Promise<boolean | void>;
 		onskip?: () => void;
 		onconfirmstale?: (text?: string) => boolean | void | Promise<boolean | void>;
 		ondismissstale?: () => void;
 		onrefine?: (intent: RefinementIntent, text?: string) => Promise<Draft | null>;
+		ongenerate?: () => void | Promise<unknown>;
 	} = $props();
 
 	const badge = $derived(draft ? draftBadge(draft.status) : null);
@@ -394,6 +402,22 @@
 			The agent will draft here once the latest inbound settles (about a minute after the last
 			message). Type your own reply any time — nothing sends without you.
 		</p>
+		<!--
+		  W4-U15: the automatic path above is a promise, not a gate. The owner can
+		  ask for a draft right now — including in chats the classifier declined
+		  (they spoke last, or the chat was skipped, muted, or went quiet). Asking
+		  for a draft writes a draft row and nothing else; it never sends.
+		-->
+		<div class="draft-actions">
+			<Button size="sm" variant="outline" onclick={() => ongenerate?.()} disabled={generating}>
+				<Sparkles class="size-3.5" />
+				{generating ? 'Asking the agent…' : 'Generate draft'}
+			</Button>
+			<span class="draft-note">Writes a draft for you to review — it still never sends itself.</span>
+		</div>
+		{#if generateError}
+			<p class="refine-error" role="alert">{generateError}</p>
+		{/if}
 	</div>
 {/if}
 

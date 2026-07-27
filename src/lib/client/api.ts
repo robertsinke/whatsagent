@@ -148,6 +148,17 @@ export const api = {
 			})
 		}),
 
+	/**
+	 * W4-U15 — owner-triggered draft generation. Accepted with 202; the draft
+	 * itself arrives over the `draft-updated` socket events, so there is nothing
+	 * to apply optimistically here. Never enqueues an outbox row or sends.
+	 */
+	generateDraft: (jid: string) =>
+		request<{ ok: true; chat_jid: string }>(
+			`/chats/${encodeURIComponent(jid)}/draft/generate`,
+			{ method: 'POST' }
+		),
+
 	outbox: () => request<{ items: OutboxRow[] }>('/outbox').then((r) => r.items),
 
 	cancelOutbox: (id: number) => request<OutboxRow>(`/outbox/${id}`, { method: 'DELETE' }),
