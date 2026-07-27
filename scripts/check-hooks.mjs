@@ -11,14 +11,27 @@
  * for it. Fix with:
  *
  *     git config core.hooksPath .githooks
+ *
+ * The guard is SlayZone orchestration, not code health. A public tree (which
+ * drops the `.slayzone/` directory) has no use for it, and a stranger cloning
+ * that tree should not see a failure about a worker-branch guard they do not
+ * have. So this check is a no-op when `.slayzone/` is absent, and stays armed
+ * when it is present — keeping the guard live on the private main tree where
+ * workers must not merge to main.
  */
 import { execFileSync } from 'node:child_process';
-import { accessSync, constants } from 'node:fs';
+import { accessSync, constants, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+const slayzoneDir = join(repoRoot, '.slayzone');
 const hook = join(repoRoot, '.githooks', 'reference-transaction');
+
+if (!existsSync(slayzoneDir)) {
+	console.log('hooks ok: .slayzone absent, guard is a no-op (public tree)');
+	process.exit(0);
+}
 
 function fail(message) {
 	console.error(`hooks check failed: ${message}`);
