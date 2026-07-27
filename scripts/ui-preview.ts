@@ -67,8 +67,14 @@ const db = openDatabase({ dataDir });
 
 const DIRECT = 'preview-direct@s.whatsapp.net';
 const GROUP = 'preview-group@g.us';
-let clock = 1_760_000_000;
+/** Seconds — the unit WhatsApp stores. Anchored so seed spans calendar days. */
+let clock = Math.floor(Date.UTC(2026, 6, 25, 10, 0, 0) / 1000);
 const at = () => (clock += 60);
+/** Jump the preview clock forward by whole calendar days (still in seconds). */
+const daysLater = (n: number) => {
+	clock += n * 86_400;
+	return clock;
+};
 
 upsertChat(db, { jid: DIRECT, name: 'Quote Gallery', kind: '1:1', last_msg_at: at(), unread: 2 });
 upsertChat(db, { jid: GROUP, name: 'Group Sandbox', kind: 'group', last_msg_at: at(), unread: 0 });
@@ -152,8 +158,26 @@ upsertMessageReaction(db, { chat_jid: DIRECT, target_msg_id: 'r-doc', actor: DIR
 upsertMessageReaction(db, { chat_jid: DIRECT, target_msg_id: 'r-long', actor: 'me', emoji: '😂', updated_at: at() });
 
 // Two trailing inbound messages so the unread boundary has somewhere to sit.
-upsertMessage(db, { id: 'u-1', chat_jid: DIRECT, from_me: false, ts: at(), type: 'text', text: 'Still on for tomorrow?' });
-upsertMessage(db, { id: 'u-2', chat_jid: DIRECT, from_me: false, ts: at(), type: 'text', text: 'No rush, just checking.' });
+// Staggered across calendar days so the day-divider chip is visible in screenshots
+// (W4-U17). Without this jump every seed message lands on one fake day.
+daysLater(1);
+upsertMessage(db, {
+	id: 'u-1',
+	chat_jid: DIRECT,
+	from_me: false,
+	ts: at(),
+	type: 'text',
+	text: 'Still on for tomorrow?'
+});
+daysLater(1);
+upsertMessage(db, {
+	id: 'u-2',
+	chat_jid: DIRECT,
+	from_me: false,
+	ts: at(),
+	type: 'text',
+	text: 'No rush, just checking.'
+});
 
 upsertDraft(db, {
 	chat_jid: DIRECT,

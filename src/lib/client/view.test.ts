@@ -12,6 +12,7 @@ import {
 	draftBadge,
 	filterChats,
 	formatBytes,
+	formatDayDivider,
 	formatMessageTime,
 	isVisibleDraftStatus,
 	mediaAffordance,
@@ -112,6 +113,47 @@ describe('chat row', () => {
 	it('renders Baileys epoch-second timestamps like equivalent milliseconds', () => {
 		const seconds = 1_700_000_000;
 		expect(formatMessageTime(seconds)).toBe(formatMessageTime(seconds * 1000));
+	});
+});
+
+describe('formatDayDivider', () => {
+	/** Injected "now" in local wall time so Today/Yesterday don't depend on CI TZ. */
+	const now = new Date(2026, 6, 27, 12, 0, 0).getTime();
+	/** Same instant in the seconds unit the database stores. */
+	const nowSec = Math.floor(now / 1000);
+	const DAY = 86_400;
+
+	it('labels today and yesterday against an injected now', () => {
+		expect(formatDayDivider(nowSec, now)).toBe('Today');
+		expect(formatDayDivider(nowSec - DAY, now)).toBe('Yesterday');
+	});
+
+	it('uses the weekday name within the last week', () => {
+		const threeDaysAgo = nowSec - 3 * DAY;
+		const label = formatDayDivider(threeDaysAgo, now);
+		expect(label).toBe(
+			new Date(threeDaysAgo * 1000).toLocaleDateString(undefined, { weekday: 'long' })
+		);
+		expect(label).not.toMatch(/\d/);
+	});
+
+	it('omits the year inside the current calendar year and includes it across a year boundary', () => {
+		const earlierThisYear = Math.floor(new Date(2026, 0, 14, 12, 0, 0).getTime() / 1000);
+		const lastYear = Math.floor(new Date(2025, 6, 14, 12, 0, 0).getTime() / 1000);
+		expect(formatDayDivider(earlierThisYear, now)).toBe(
+			new Date(earlierThisYear * 1000).toLocaleDateString(undefined, {
+				day: 'numeric',
+				month: 'short'
+			})
+		);
+		expect(formatDayDivider(lastYear, now)).toBe(
+			new Date(lastYear * 1000).toLocaleDateString(undefined, {
+				day: 'numeric',
+				month: 'short',
+				year: 'numeric'
+			})
+		);
+		expect(formatDayDivider(lastYear, now)).toMatch(/2025/);
 	});
 });
 
