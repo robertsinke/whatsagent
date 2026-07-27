@@ -444,7 +444,25 @@ export function createApp(options: CreateAppOptions = {}): App {
 	};
 }
 
+/**
+ * macOS is the supported platform (login keychain for WhatsApp auth encryption).
+ * Fail at process start — before opening the DB or pairing — so Linux/Windows
+ * users get a clear reason instead of a mid-pairing keychain error.
+ * Exported for unit tests; `platform` is injectable so tests do not depend on
+ * the host OS.
+ */
+export function assertSupportedPlatform(platform: NodeJS.Platform = process.platform): void {
+	if (platform === 'darwin') return;
+	throw new Error(
+		'whatsagent requires macOS.\n' +
+			'\n' +
+			'WhatsApp auth credentials are encrypted with a key stored in the macOS\n' +
+			'login keychain. Other platforms are not supported.\n'
+	);
+}
+
 async function main(): Promise<void> {
+	assertSupportedPlatform();
 	const db = openDatabase();
 	const settings = listSettings(db);
 	const channel = new WhatsAppConnection(db);

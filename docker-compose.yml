@@ -8,11 +8,12 @@ services:
     environment:
       HINDSIGHT_API_LLM_PROVIDER: "${HINDSIGHT_LLM_PROVIDER:-ollama}"
       HINDSIGHT_API_LLM_BASE_URL: "${HINDSIGHT_LLM_BASE_URL:-http://host.docker.internal:11434/v1}"
-      # Reflect stays on glm (good prose voice docs). Retain needs structured JSON —
-      # glm-5.2:cloud returns prose through the Ollama Cloud passthrough and poisons
-      # the queue with JSONDecodeError (see docs/solutions/2026-07-26-poison-observation-...).
-      HINDSIGHT_API_LLM_MODEL: "${HINDSIGHT_LLM_MODEL:-glm-5.2:cloud}"
-      HINDSIGHT_API_RETAIN_LLM_MODEL: "${HINDSIGHT_RETAIN_LLM_MODEL:-deepseek-v4-flash:cloud}"
+      # Defaults: locally pullable gemma3:4b. Optional cloud upgrade via .env —
+      # reflect glm-5.2:cloud, retain deepseek-v4-flash:cloud (glm through the
+      # cloud passthrough returns prose and poisons the queue with JSONDecodeError;
+      # see docs/solutions/2026-07-26-poison-observation-...).
+      HINDSIGHT_API_LLM_MODEL: "${HINDSIGHT_LLM_MODEL:-gemma3:4b}"
+      HINDSIGHT_API_RETAIN_LLM_MODEL: "${HINDSIGHT_RETAIN_LLM_MODEL:-gemma3:4b}"
       HINDSIGHT_API_EMBEDDINGS_PROVIDER: local
       HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
     extra_hosts:

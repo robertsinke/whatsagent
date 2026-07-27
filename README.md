@@ -33,7 +33,7 @@ Read this before pairing.
 
 - **Node.js 20+**
 - **npm** (ships with Node)
-- macOS for WhatsApp auth encryption (login keychain). Other platforms are not supported for the encrypted auth store yet.
+- **macOS only.** WhatsApp auth is encrypted with the login keychain; the app exits at startup on other platforms.
 - Optional draft providers (pick at least one you will use):
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI, logged in with your subscription (`claude auth status`)
   - [Codex CLI](https://github.com/openai/codex), logged in with your subscription
