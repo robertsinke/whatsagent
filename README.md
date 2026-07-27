@@ -98,6 +98,49 @@ WhatsApp Desktop pairing identity. The runtime also resolves the live WhatsApp
 Web protocol version with a tested fallback. `npm run check` fails if a Baileys
 upgrade changes the patched layout, so the shim cannot silently disappear.
 
+## First run
+
+An empty, unlinked app opens a three-step welcome flow instead of the chat
+shell: the ban-risk disclosure, drafting setup, then the QR. The QR is not
+rendered at all until the disclosure has been acknowledged — it is a gate, not a
+banner beside a scannable code.
+
+"Empty and unlinked" is derived, not stored: no chat has ever arrived and
+WhatsApp is not linked. There is no first-run flag, so wiping the data directory
+(or launching the desktop build, which keeps its own) is genuinely a first run
+again. An app that already has history and was unlinked on the phone skips the
+flow and gets the plain pairing screen — it has been through setup already.
+
+**Zero drafting tools detected is a supported outcome.** The setup step names
+Claude Code, Codex CLI and Ollama, links each installer, and still continues to
+pairing: the app is usable with drafting off. Two things the screen will never
+say, because the API cannot support them: a present Ollama binary whose daemon
+is dead reads *installed but not running* with a start hint rather than an
+install prompt, and nothing anywhere claims you are logged in — a version probe
+proves a binary answered, not that a subscription login works.
+
+### Looking at these screens without a WhatsApp account
+
+`npm run preview:ui` takes two env vars (see `scripts/ui-preview.ts`):
+
+```bash
+npm run build
+PREVIEW_SESSION=qr_pending PREVIEW_PROVIDERS=none npm run preview:ui
+```
+
+- `PREVIEW_SESSION=initializing|qr_pending|qr_expired|logged_out|syncing|ready`
+  attaches a fake `Channel` that drives the real session state machine with a
+  synthetic QR. No socket is opened and no stored credentials are touched. The
+  QR encodes into a real image but is not a pairing code — scanning it does
+  nothing. `qr_expired` arrives 60 seconds after start, when the real TTL
+  elapses.
+- `PREVIEW_PROVIDERS=real|all|none|ollama-down` stubs discovery, which is the
+  only way to see the zero-provider and dead-daemon screens on a machine that
+  has all three CLIs installed.
+
+A session mode also empties the seeded chat fixtures, because first run is
+defined by an empty app.
+
 ## Draft providers (subscription CLIs)
 
 Provider choice is a setting (`provider`: `claude` | `codex` | `ollama`, optional `provider_model`). Defaults to Claude.

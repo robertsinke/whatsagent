@@ -132,6 +132,13 @@ export class AppState {
 	 * local pending state without flickering on the WS echo.
 	 */
 	sendingMode = $state(false);
+	/**
+	 * OSS-P3.4 — true once the first refresh has come back. Until then an
+	 * already-paired app is indistinguishable from a brand-new one (both are
+	 * `initializing` with zero chats), so the first-run flow must not commit to
+	 * an answer yet or it would flash on every launch. See {@link isFirstRun}.
+	 */
+	hydrated = $state(false);
 
 	#realtime: Realtime | undefined;
 	#conversationEpoch = 0;
@@ -220,6 +227,8 @@ export class AppState {
 			this.chats = chats;
 			this.outbox = outbox;
 			this.sendsLive = sendMode.live;
+			// Session and chats have now both been seen — first-run can be decided.
+			this.hydrated = true;
 			if (this.selectedJid) {
 				await this.openChat(this.selectedJid, {
 					markRead: false,

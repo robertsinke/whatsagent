@@ -11,24 +11,44 @@
 	import ConversationPane from '$lib/components/app/ConversationPane.svelte';
 	import DeepenHistoryButton from '$lib/components/app/DeepenHistoryButton.svelte';
 	import DraftStatus from '$lib/components/app/DraftStatus.svelte';
+	import FirstRunScreen from '$lib/components/app/FirstRunScreen.svelte';
 	import OutboxTray from '$lib/components/app/OutboxTray.svelte';
 	import PairingScreen from '$lib/components/app/PairingScreen.svelte';
 	import SendModeIndicator from '$lib/components/app/SendModeIndicator.svelte';
 	import SessionStatus from '$lib/components/app/SessionStatus.svelte';
 	import { AppState } from '$lib/client/state.svelte.js';
-	import { displayName, initialsFor, sessionBanner } from '$lib/client/view.js';
+	import { displayName, initialsFor, isFirstRun, sessionBanner } from '$lib/client/view.js';
 
 	const app = new AppState();
 	let composerValue = $state('');
 
+	/**
+	 * Electron's `titleBarStyle: 'hiddenInset'` drops the macOS traffic lights on
+	 * top of this header's wordmark, which starts at x=0 because in a browser tab
+	 * nothing else is there. Reserving that space is a renderer change — but it
+	 * must not shift anything in a browser, so it is opt-in: the Electron main
+	 * process sets `window.whatsagentTitleBar = 'inset'` when it adopts
+	 * hiddenInset, and this stamps the attribute the CSS keys on. Dormant until
+	 * then. (`electron/main.js` is OSS-P3.3's file — see the execution report.)
+	 */
+	let titleBarInset = $state(false);
+
 	// Never in `load()` — this route prerenders, and a load-time fetch would run
 	// at build time with no backend listening.
 	onMount(() => {
+		titleBarInset =
+			(window as Window & { whatsagentTitleBar?: string }).whatsagentTitleBar === 'inset';
 		app.start();
 		return () => app.stop();
 	});
 
 	const banner = $derived(sessionBanner(app.session));
+	// OSS-P3.4 — an empty, unlinked app gets the welcome flow instead of a bare
+	// QR. A previously-paired app that was unlinked keeps the plain pairing
+	// screen: it has already been through setup.
+	const firstRun = $derived(
+		isFirstRun({ session: app.session, chatCount: app.chats.length, hydrated: app.hydrated })
+	);
 	const chatTitle = $derived(app.selectedChat ? displayName(app.selectedChat) : '');
 	// Deepen requires an active WhatsApp socket — the server refuses while
 	// disconnected. Syncing is allowed: the phone can still serve history.
@@ -43,7 +63,7 @@
 </script>
 
 <div class="shell">
-	<header class="topbar">
+	<header class="topbar" data-titlebar={titleBarInset ? 'inset' : null}>
 		<div class="brand">
 			<span class="brand-dot"></span>
 			<span class="brand-name">WhatsAgent</span>
@@ -58,7 +78,11 @@
 		</div>
 	</header>
 
-	{#if banner.blocking}
+	{#if firstRun}
+		<!-- Nothing has ever synced and WhatsApp is not linked: risk disclosure,
+		     drafting setup, then the QR. -->
+		<FirstRunScreen session={app.session} onregenerate={() => app.regeneratePairing()} />
+	{:else if banner.blocking}
 		<!-- Pairing and logged-out are the only states that gate the shell. -->
 		<PairingScreen session={app.session} onregenerate={() => app.regeneratePairing()} />
 	{:else}
@@ -186,6 +210,11 @@
 		display: flex;
 		align-items: center;
 		gap: 0.45rem;
+	}
+	/* Room for the macOS traffic lights under Electron's hiddenInset title bar.
+	   Never applies in a browser — see `titleBarInset` above. */
+	.topbar[data-titlebar='inset'] .brand {
+		padding-left: 4.75rem;
 	}
 	.brand-dot {
 		width: 10px;
