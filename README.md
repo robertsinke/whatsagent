@@ -265,3 +265,93 @@ As of this closeout, `npm audit` reports **6 low** severity findings in the Svel
 | `npm run check` | svelte-check + strict server typecheck |
 
 `npx tsx scripts/u6-refinement-smoke.ts` runs a disposable end-to-end smoke of the refinement contract (no live Baileys): it seeds a DB, starts `createApp` without a channel serving `build/`, and verifies refinement is preview-only and the SPA loads.
+
+## Installing the released desktop app (macOS, Apple Silicon)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/robertsinke/whatsagent/main/scripts/install.sh | sh
+```
+
+That downloads the latest release tarball, checks it against the SHA-256
+published with the release, and unpacks it to `/Applications` — or to
+`~/Applications` if `/Applications` is not writable, so no admin account and no
+`sudo` is needed. Then open **whatsagent-desktop** as you would any other app.
+
+Releases are **arm64 only**. Each architecture has to be built on its own CI
+runner, and two runners would each publish an update manifest that overwrote the
+other's, leaving one architecture unable to update. On an Intel Mac, build from
+source with `npm run dist:mac`.
+
+### Ad-hoc signed, not notarized — and why that is fine
+
+whatsagent is **ad-hoc signed** (`codesign -s -`) and **not notarized by Apple**.
+There is no Apple Developer account behind this project.
+
+You will not see a Gatekeeper warning anyway, and that is not a trick. macOS only
+runs the notarization check on files carrying the `com.apple.quarantine`
+attribute, and that attribute is written by the *application that downloaded the
+file* — browsers set it, `curl` does not. A tarball fetched by the install script
+is never evaluated, so there is no right-click→Open dance and nothing to
+`xattr -d`. This is also why whatsagent ships a `.tar.gz` and deliberately no
+`.dmg`: a DMG downloaded in a browser *is* quarantined, and that is the one
+channel that could not work without notarization.
+
+Verify what you got, if you want to:
+
+```bash
+codesign -dv --verbose=4 /Applications/whatsagent-desktop.app   # Signature=adhoc
+xattr -lr /Applications/whatsagent-desktop.app | grep quarantine # no output
+```
+
+`spctl --assess` will report `rejected`. That is expected and is not a problem:
+`spctl` answers "would Gatekeeper allow this *if* it were quarantined", and
+nothing here ever is.
+
+### What replaces notarization: build provenance
+
+Notarization was never proof that a binary matches its public source — it proves
+Apple scanned it and knows who paid the membership fee. For an open-source app
+the stronger guarantee is **build provenance**, and it is free.
+
+Every release is built by GitHub Actions, never on a laptop, and each asset is
+signed with a provenance attestation linking it to the exact commit and workflow
+run that produced it:
+
+```bash
+gh attestation verify whatsagent-desktop-*.tar.gz --repo robertsinke/whatsagent
+```
+
+Together with the published `SHA256SUMS`, that gives a verifiable chain from the
+source you can read to the binary you are running.
+
+### Updates
+
+whatsagent checks for a new release on startup and every six hours, and asks
+before doing anything. Choosing **Install and Restart** downloads the new build,
+verifies it against the SHA-512 in the release manifest, checks the unpacked
+bundle's signature, swaps it into place and reopens the app.
+
+It does *not* use Squirrel.Mac, which every other Electron app uses: Squirrel
+requires the new bundle's code signature to satisfy the running app's designated
+requirement, and an ad-hoc requirement is a hash that changes on every build, so
+that path can never succeed here. The integrity guarantee is therefore the
+checksum plus TLS plus the provenance attestation above — the same properties as
+the install script — rather than a pinned code signature.
+
+Set `WHATSAGENT_UPDATE_CHECK=0` to never check. Set
+`WHATSAGENT_UPDATE_NONINTERACTIVE=1` to install without being asked.
+
+### What the app does and does not send anywhere
+
+- It runs **entirely on your machine**. There is no whatsagent server, no
+  account, and no telemetry of any kind.
+- The creator has **no access to your data** — messages, contacts and
+  credentials never leave your Mac by any path this app controls.
+- The **only** outbound traffic beyond WhatsApp itself goes to the LLM provider
+  *you* select for drafting. Choose a local model via Ollama and there is none at
+  all.
+- Update checks contact GitHub. `WHATSAGENT_UPDATE_CHECK=0` stops that too.
+
+Your WhatsApp credentials are encrypted at rest — see
+[App data and credential security](#app-data-and-credential-security) for the
+honest threat model, including what that encryption does *not* protect against.

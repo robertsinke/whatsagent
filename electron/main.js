@@ -20,6 +20,7 @@ import { app, BrowserWindow, shell } from 'electron';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { startUpdateChecks } from './updater.js';
 
 /**
  * The desktop build's own data directory, deliberately a *different string*
@@ -102,6 +103,8 @@ if (!isPrimaryInstance) {
 /** The running App from server/index.ts, or undefined before start / after quit. */
 let server;
 let window;
+/** Cancels the periodic update check; set once the first window is up. */
+let stopUpdateChecks = () => {};
 
 function createWindow(url) {
 	window = new BrowserWindow({
@@ -164,6 +167,11 @@ app.whenReady().then(async () => {
 	console.log(`whatsagent desktop: PATH=${process.env.PATH ?? '(unset)'}`);
 	createWindow(server.url);
 
+	// Started only after the window exists, so an update prompt has something to
+	// attach to and never appears before the app the user just launched. Every
+	// failure inside is swallowed — an offline machine still gets a working app.
+	stopUpdateChecks = startUpdateChecks(() => window);
+
 	app.on('activate', () => {
 		if (BrowserWindow.getAllWindows().length === 0 && server) createWindow(server.url);
 	});
@@ -186,6 +194,7 @@ app.on('before-quit', (event) => {
 	// Close the socket and the database before the process dies, so the WAL is
 	// checkpointed and the outbox stops mid-flight rather than mid-write.
 	closing = true;
+	stopUpdateChecks();
 	event.preventDefault();
 	const current = server;
 	server = undefined;
