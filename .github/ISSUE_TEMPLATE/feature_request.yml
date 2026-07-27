@@ -1,0 +1,34 @@
+name: Feature request
+description: Suggest an improvement or new capability
+title: "[feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        whatsagent is a local single-user client. The agent **never sends autonomously** — that invariant is structural, not configurable. See **README.md → Safety and risk**.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or opportunity
+      description: What pain does this solve? Who benefits?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How might this work? Alternatives considered?
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: invariants
+    attributes:
+      label: Safety check
+      options:
+        - label: This proposal does not require the agent to send messages without owner approval
+          required: true
