@@ -791,3 +791,44 @@ describe('AppState draft refinement', () => {
 		expect(state.refineError).toBeNull();
 	});
 });
+
+/**
+ * W4-U13. A LID/phone mapping can arrive while the owner is looking at the
+ * chat it makes redundant. Dropping the row is not enough: the messages have
+ * moved to the survivor, so a still-selected duplicate leaves the owner staring
+ * at a conversation that no longer exists.
+ */
+describe('AppState chat identity merge', () => {
+	afterEach(() => vi.restoreAllMocks());
+
+	const LID = '27599493410860@lid';
+
+	it('drops the merged-away chat and follows the selection into the survivor', async () => {
+		const state = new AppState();
+		state.chats = [chatRow(), chatRow({ jid: LID, name: null, last_msg_at: 900 })];
+		state.selectedJid = LID;
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.includes('/messages?')) return jsonResponse({ items: [inbound('M1', 900)] });
+			if (url.endsWith('/draft')) return jsonResponse({ error: 'Not found' }, 404);
+			throw new Error(`Unexpected request: ${url}`);
+		});
+
+		state.applyEvent({ type: 'chat-removed', jid: LID, merged_into: JID });
+
+		expect(state.chats.map((c) => c.jid)).toEqual([JID]);
+		expect(state.selectedJid).toBe(JID);
+		await vi.waitFor(() => expect(state.messages.map((m) => m.id)).toEqual(['M1']));
+	});
+
+	it('leaves the current selection alone when some other chat is merged', () => {
+		const state = new AppState();
+		state.chats = [chatRow(), chatRow({ jid: LID, name: null })];
+		state.selectedJid = JID;
+
+		state.applyEvent({ type: 'chat-removed', jid: LID, merged_into: JID });
+
+		expect(state.chats.map((c) => c.jid)).toEqual([JID]);
+		expect(state.selectedJid).toBe(JID);
+	});
+});

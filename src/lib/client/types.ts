@@ -189,6 +189,12 @@ export type ServerEvent =
 	 */
 	| { type: 'message-updated'; message: Message }
 	| { type: 'chat-updated'; chat: Chat }
+	/**
+	 * W4-U13: `jid` turned out to be a second identity of `merged_into` (LID vs
+	 * phone) and no longer exists server-side. Always preceded by a
+	 * `chat-updated` for the survivor.
+	 */
+	| { type: 'chat-removed'; jid: string; merged_into: string }
 	| { type: 'draft-updated'; draft: Draft }
 	| { type: 'draft-removed'; chat_jid: string }
 	| { type: 'outbox-updated'; outbox: OutboxRow }

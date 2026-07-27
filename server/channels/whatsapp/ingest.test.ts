@@ -1,4 +1,5 @@
 import { BufferJSON, generateWAMessage, makeEventBuffer } from 'baileys';
+import { EventEmitter } from 'node:events';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,6 +17,8 @@ import { deepenChatHistory } from './history.js';
 import {
 	attachIngest,
 	classifyMessageType,
+	handleChatsUpdate,
+	handleChatsUpsert,
 	handleLidMappingUpdate,
 	handleHistorySet,
 	handleMessagesReaction,
@@ -966,5 +969,157 @@ describe('history deepen + media download', () => {
 		expect(readFileSync(join(dataDir!, result.mediaRef))).toEqual(bytes);
 		expect(getMessage(database, 'img-1')?.media_ref).toBe(result.mediaRef);
 		expect(getMessage(database, 'img-1')?.type).toBe('image');
+	});
+});
+
+/**
+ * W4-U13. WhatsApp is migrating contacts to LID addressing, so the same person
+ * starts arriving under a second identifier mid-conversation. Reproduces the
+ * live split exactly: the owner's approved reply went to the phone chat holding
+ * sixteen messages of history, and Quinten's answer 100 seconds later arrived
+ * keyed by LID and opened an empty second chat.
+ */
+describe('canonical chat identity across LID and phone aliases', () => {
+	const LID = '27599493410860@lid';
+	const PHONE = '31618155142@s.whatsapp.net';
+
+	function seedPhoneChatWithHistory(database: AppDatabase): void {
+		handleHistorySet(database, {
+			chats: [{ id: PHONE, name: 'Quinten Muller', conversationTimestamp: 100, unreadCount: 0 }],
+			contacts: [{ id: PHONE, name: 'Quinten Muller' }],
+			messages: [
+				{
+					key: { id: 'history-1', remoteJid: PHONE, fromMe: false },
+					messageTimestamp: 100,
+					message: { conversation: 'eerder bericht' }
+				}
+			]
+		});
+	}
+
+	it('lands a LID-keyed reply in the existing phone chat when the mapping is known', () => {
+		const database = openTempDb();
+		seedPhoneChatWithHistory(database);
+		handleLidMappingUpdate(database, { lid: LID, pn: PHONE });
+
+		handleMessagesUpsert(database, {
+			type: 'notify',
+			messages: [
+				{
+					key: { id: 'reply-1', remoteJid: LID, fromMe: false },
+					messageTimestamp: 200,
+					message: { conversation: 'ja doe maar' }
+				}
+			]
+		});
+
+		expect(listChats(database).map((chat) => chat.jid)).toEqual([PHONE]);
+		expect(getMessage(database, 'reply-1')?.chat_jid).toBe(PHONE);
+		expect(listMessages(database, PHONE).map((m) => m.id)).toEqual(['history-1', 'reply-1']);
+		expect(getChat(database, PHONE)).toMatchObject({ last_msg_at: 200, unread: 1 });
+	});
+
+	it('canonicalises from the key alone, before any mapping event has arrived', () => {
+		const database = openTempDb();
+		seedPhoneChatWithHistory(database);
+
+		// `remoteJid` + `remoteJidAlt` on the key IS the mapping. Learning it here
+		// is what lets this very message land on the chat that already exists.
+		handleMessagesUpsert(database, {
+			type: 'notify',
+			messages: [
+				{
+					key: { id: 'reply-1', remoteJid: LID, remoteJidAlt: PHONE, fromMe: false },
+					messageTimestamp: 200,
+					message: { conversation: 'ja doe maar' }
+				}
+			]
+		});
+
+		expect(listChats(database).map((chat) => chat.jid)).toEqual([PHONE]);
+		expect(getMessage(database, 'reply-1')?.chat_jid).toBe(PHONE);
+	});
+
+	it('keeps an unmapped LID chat rather than dropping the message', () => {
+		const database = openTempDb();
+		handleMessagesUpsert(database, {
+			type: 'notify',
+			messages: [
+				{
+					key: { id: 'reply-1', remoteJid: LID, fromMe: false },
+					messageTimestamp: 200,
+					message: { conversation: 'wie ben ik' }
+				}
+			]
+		});
+
+		expect(listChats(database).map((chat) => chat.jid)).toEqual([LID]);
+		expect(getMessage(database, 'reply-1')?.chat_jid).toBe(LID);
+	});
+
+	it('converges two existing chats when the mapping arrives afterwards', () => {
+		const database = openTempDb();
+		seedPhoneChatWithHistory(database);
+		// Split: the reply arrives before anything knows the two are one person.
+		handleMessagesUpsert(database, {
+			type: 'notify',
+			messages: [
+				{
+					key: { id: 'reply-1', remoteJid: LID, fromMe: false },
+					messageTimestamp: 200,
+					message: { conversation: 'ja doe maar' }
+				}
+			]
+		});
+		expect(listChats(database)).toHaveLength(2);
+
+		expect(handleLidMappingUpdate(database, { lid: LID, pn: PHONE })).toEqual({
+			from: LID,
+			to: PHONE
+		});
+
+		expect(listChats(database).map((chat) => chat.jid)).toEqual([PHONE]);
+		expect(listMessages(database, PHONE).map((m) => m.id)).toEqual(['history-1', 'reply-1']);
+		expect(getChat(database, PHONE)).toMatchObject({ last_msg_at: 200, unread: 1 });
+	});
+
+	it('does not let a chats.update under the old LID resurrect the merged row', () => {
+		const database = openTempDb();
+		seedPhoneChatWithHistory(database);
+		handleLidMappingUpdate(database, { lid: LID, pn: PHONE });
+
+		handleChatsUpsert(database, [{ id: LID, name: 'Quinten', conversationTimestamp: 300 }]);
+		handleChatsUpdate(database, [{ id: LID, unreadCount: 4 }]);
+
+		expect(listChats(database).map((chat) => chat.jid)).toEqual([PHONE]);
+		expect(getChat(database, PHONE)).toMatchObject({ last_msg_at: 300, unread: 4 });
+	});
+
+	it('announces the merge to consumers only after the transaction commits', () => {
+		const database = openTempDb();
+		seedPhoneChatWithHistory(database);
+		handleMessagesUpsert(database, {
+			type: 'notify',
+			messages: [
+				{
+					key: { id: 'reply-1', remoteJid: LID, fromMe: false },
+					messageTimestamp: 200,
+					message: { conversation: 'ja doe maar' }
+				}
+			]
+		});
+
+		const ev = new EventEmitter();
+		const onChatsMerged = vi.fn(() => {
+			// The consumer must never see the losing chat: by the time it is told,
+			// the row is gone and every reference points at the survivor.
+			expect(getChat(database, LID)).toBeUndefined();
+		});
+		attachIngest(ev, database, { onChatsMerged });
+
+		ev.emit('lid-mapping.update', { lid: LID, pn: PHONE });
+
+		expect(onChatsMerged).toHaveBeenCalledWith({ from: LID, to: PHONE });
+		expect(listChats(database).map((chat) => chat.jid)).toEqual([PHONE]);
 	});
 });

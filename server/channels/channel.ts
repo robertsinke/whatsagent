@@ -13,6 +13,11 @@ export type ChannelEvent =
 	| { type: 'message-committed'; message: Message }
 	/** A stored message's normalized relationships changed after commit. */
 	| { type: 'message-updated'; message: Message }
+	/**
+	 * W4-U13: two chat rows were the same person and have been merged. `from` no
+	 * longer exists — every row that referenced it now references `to`.
+	 */
+	| { type: 'chats-merged'; from: string; to: string }
 	| {
 			type: 'sync-progress';
 			/** Baileys' percentage — retained at transport level, never rendered (D5). */

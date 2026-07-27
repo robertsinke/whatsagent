@@ -10,6 +10,7 @@ import makeWASocket, {
 	type WAVersion
 } from 'baileys';
 import type { AppDatabase } from '../../store/db.js';
+import type { ChatMerge } from '../../store/identity.js';
 import { getMessage } from '../../store/messages.js';
 import type { Channel, ChannelConnectionState, ChannelEvent, ChannelEventListener } from '../channel.js';
 import {
@@ -246,9 +247,19 @@ export class WhatsAppConnection implements Channel {
 				.all() as Array<{ id: string }>
 		).map(({ id }) => id);
 
-		const apply = this.#db.transaction((entries: Array<{ lid: string; pn: string }>) => {
-			for (const entry of entries) handleLidMappingUpdate(this.#db, entry);
-		});
+		// A backfilled mapping can converge two chats that were split while the
+		// mapping was unknown (W4-U13). Collected inside the transaction, emitted
+		// after it commits — until then the losing chat still exists.
+		const apply = this.#db.transaction(
+			(entries: Array<{ lid: string; pn: string }>): ChatMerge[] => {
+				const merges: ChatMerge[] = [];
+				for (const entry of entries) {
+					const merge = handleLidMappingUpdate(this.#db, entry);
+					if (merge) merges.push(merge);
+				}
+				return merges;
+			}
+		);
 		for (let offset = 0; offset < ids.length; offset += 250) {
 			const batch = ids.slice(offset, offset + 250);
 			const stored = await this.#authStore.state.keys.get('lid-mapping', batch);
@@ -263,7 +274,9 @@ export class WhatsAppConnection implements Channel {
 					pn: `${pnUser}@s.whatsapp.net`
 				});
 			}
-			apply(mappings);
+			for (const merge of apply(mappings)) {
+				this.#emit({ type: 'chats-merged', from: merge.from, to: merge.to });
+			}
 		}
 		this.#identityMappingsBackfilled = true;
 	}
@@ -291,6 +304,8 @@ export class WhatsAppConnection implements Channel {
 					this.#emit({ type: 'message-committed', message }),
 				onMessageUpdated: (message) =>
 					this.#emit({ type: 'message-updated', message }),
+				onChatsMerged: (merge) =>
+					this.#emit({ type: 'chats-merged', from: merge.from, to: merge.to }),
 				onSyncProgress: (progress) =>
 					this.#emit({
 						type: 'sync-progress',

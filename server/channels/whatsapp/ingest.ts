@@ -14,12 +14,13 @@ import {
 	type WAMessageUpdate
 } from 'baileys';
 import { getChat, upsertChat, type ChatKind } from '../../store/chats.js';
-import {
-	getContact,
-	linkContactIdentity,
-	upsertContact
-} from '../../store/contacts.js';
+import { getContact, upsertContact } from '../../store/contacts.js';
 import type { AppDatabase } from '../../store/db.js';
+import {
+	canonicalChatJid,
+	linkIdentityAndMergeChats,
+	type ChatMerge
+} from '../../store/identity.js';
 import {
 	getMessage,
 	upsertMessage,
@@ -65,6 +66,11 @@ export type AttachIngestOptions = {
 	onSyncProgress?: (progress: SyncProgress) => void;
 	onMessageIngested?: (message: Message) => void;
 	onMessageUpdated?: (message: Message) => void;
+	/**
+	 * W4-U13: two chat rows turned out to be the same person and were merged.
+	 * Fired after the transaction commits — `merge.from` no longer exists.
+	 */
+	onChatsMerged?: (merge: ChatMerge) => void;
 	/**
 	 * Called when a handler (or one of its consumer callbacks) threw and was
 	 * contained. The throw is always logged; this is the opt-in seam for a caller
@@ -265,10 +271,18 @@ function lidPhonePair(
 	return undefined;
 }
 
-export function handleLidMappingUpdate(db: AppDatabase, mapping: LIDMapping): void {
+/**
+ * Learn a LID/phone pair. Returns the chat merge it caused, if any: the mapping
+ * may arrive long after both chats already exist, and the two must converge
+ * then rather than staying split forever (W4-U13).
+ */
+export function handleLidMappingUpdate(
+	db: AppDatabase,
+	mapping: LIDMapping
+): ChatMerge | null {
 	const pair = lidPhonePair(mapping.lid, mapping.pn);
-	if (!pair) return;
-	linkContactIdentity(db, { lidJid: pair.lid, phoneJid: pair.pn });
+	if (!pair) return null;
+	return linkIdentityAndMergeChats(db, { lidJid: pair.lid, phoneJid: pair.pn });
 }
 
 /**
@@ -305,7 +319,9 @@ export function upsertChatMerged(
 }
 
 export function ingestBaileysChat(db: AppDatabase, chat: Chat): void {
-	const jid = chat.id;
+	// Canonical identity before any chat write — a `chats.upsert` keyed by LID
+	// must land on the phone chat, not recreate the row a merge just removed.
+	const jid = chat.id ? canonicalChatJid(db, chat.id) : undefined;
 	if (!jid) return;
 
 	const ts =
@@ -325,7 +341,7 @@ export function ingestBaileysChat(db: AppDatabase, chat: Chat): void {
 }
 
 export function ingestBaileysChatUpdate(db: AppDatabase, update: ChatUpdate): void {
-	const jid = update.id;
+	const jid = update.id ? canonicalChatJid(db, update.id) : undefined;
 	if (!jid) return;
 
 	// Ensure the chat row exists before applying a partial update.
@@ -351,8 +367,11 @@ export function ingestBaileysChatUpdate(db: AppDatabase, update: ChatUpdate): vo
 	upsertChatMerged(db, patch);
 }
 
-export function ingestBaileysContact(db: AppDatabase, contact: ContactPatch): void {
-	if (!contact.id) return;
+export function ingestBaileysContact(
+	db: AppDatabase,
+	contact: ContactPatch
+): ChatMerge | null {
+	if (!contact.id) return null;
 	const name = contact.name ?? contact.verifiedName ?? null;
 	const pushName = contact.notify ?? null;
 	const lidJid = contact.lid ?? (contact.id.endsWith('@lid') ? contact.id : undefined);
@@ -361,8 +380,9 @@ export function ingestBaileysContact(db: AppDatabase, contact: ContactPatch): vo
 		(contact.id.endsWith('@s.whatsapp.net') ? contact.id : undefined);
 
 	if (lidJid && phoneJid) {
-		linkContactIdentity(db, { lidJid, phoneJid, name, pushName });
-		return;
+		// A contact carrying both aliases is the same signal as a
+		// `lid-mapping.update`, and must converge the chats the same way.
+		return linkIdentityAndMergeChats(db, { lidJid, phoneJid, name, pushName });
 	}
 
 	const existing = getContact(db, contact.id);
@@ -374,17 +394,33 @@ export function ingestBaileysContact(db: AppDatabase, contact: ContactPatch): vo
 		lid_jid: lidJid ?? existing?.lid_jid ?? null,
 		phone_jid: phoneJid ?? existing?.phone_jid ?? null
 	});
+	return null;
 }
 
 export function ingestBaileysMessage(
 	db: AppDatabase,
 	msg: WAMessage,
-	options: { bumpUnread?: boolean } = {}
+	options: { bumpUnread?: boolean; onChatsMerged?: (merge: ChatMerge) => void } = {}
 ): void {
 	const id = msg.key?.id;
-	const chatJid = chatJidFromMessage(msg);
-	if (!id || !chatJid) return;
+	const rawChatJid = chatJidFromMessage(msg);
+	if (!id || !rawChatJid) return;
 
+	// Identity first: a key carrying both `remoteJid` and `remoteJidAlt` IS the
+	// mapping, so learning it here lets this very message canonicalise instead
+	// of opening a second chat for a person we already know (W4-U13).
+	const chatIdentity = lidPhonePair(msg.key?.remoteJid, msg.key?.remoteJidAlt);
+	if (chatIdentity) {
+		const merge = handleLidMappingUpdate(db, chatIdentity);
+		if (merge) options.onChatsMerged?.(merge);
+	}
+	const senderIdentity = lidPhonePair(msg.key?.participant, msg.key?.participantAlt);
+	if (senderIdentity) {
+		const merge = handleLidMappingUpdate(db, senderIdentity);
+		if (merge) options.onChatsMerged?.(merge);
+	}
+
+	const chatJid = canonicalChatJid(db, rawChatJid);
 	const fromMe = Boolean(msg.key?.fromMe);
 	const ts = toNumber(msg.messageTimestamp) ?? Date.now();
 	const type = classifyMessageType(msg);
@@ -392,10 +428,6 @@ export function ingestBaileysMessage(
 	const sender = fromMe
 		? null
 		: (msg.key?.participant ?? msg.participant ?? chatJid);
-	const chatIdentity = lidPhonePair(msg.key?.remoteJid, msg.key?.remoteJidAlt);
-	if (chatIdentity) handleLidMappingUpdate(db, chatIdentity);
-	const senderIdentity = lidPhonePair(msg.key?.participant, msg.key?.participantAlt);
-	if (senderIdentity) handleLidMappingUpdate(db, senderIdentity);
 
 	if (type === 'reaction') {
 		const reaction = extractMessageContent(msg.message)?.reactionMessage;
@@ -455,9 +487,10 @@ function applyReaction(
 	targetKey: WAMessageKey,
 	reaction: proto.IReaction
 ): string | undefined {
-	const chatJid = targetKey.remoteJid ?? targetKey.remoteJidAlt ?? undefined;
+	const rawChatJid = targetKey.remoteJid ?? targetKey.remoteJidAlt ?? undefined;
 	const targetId = targetKey.id ?? undefined;
-	if (!chatJid || !targetId) return undefined;
+	if (!rawChatJid || !targetId) return undefined;
+	const chatJid = canonicalChatJid(db, rawChatJid);
 	upsertChatMerged(db, { jid: chatJid, kind: chatKindFromJid(chatJid) });
 	upsertMessageReaction(db, {
 		chat_jid: chatJid,
@@ -501,15 +534,30 @@ export function handleMessagesReaction(
 	return [...targetIds];
 }
 
-export function handleHistorySet(db: AppDatabase, payload: HistorySetPayload): SyncProgress {
+/**
+ * Chat merges are collected inside the transaction and returned to the caller,
+ * never announced from within it: until the transaction commits, `merge.from`
+ * still exists, and a consumer that reacted early would read a chat the merge
+ * is about to delete.
+ */
+export function handleHistorySet(
+	db: AppDatabase,
+	payload: HistorySetPayload,
+	options: { onChatsMerged?: (merge: ChatMerge) => void } = {}
+): SyncProgress {
+	const merges: ChatMerge[] = [];
+	const collect = (merge: ChatMerge | null) => {
+		if (merge) merges.push(merge);
+	};
 	const apply = db.transaction(() => {
 		for (const chat of payload.chats) ingestBaileysChat(db, chat);
-		for (const contact of payload.contacts) ingestBaileysContact(db, contact);
+		for (const contact of payload.contacts) collect(ingestBaileysContact(db, contact));
 		for (const message of payload.messages) {
-			ingestBaileysMessage(db, message, { bumpUnread: false });
+			ingestBaileysMessage(db, message, { bumpUnread: false, onChatsMerged: collect });
 		}
 	});
 	apply();
+	for (const merge of merges) options.onChatsMerged?.(merge);
 
 	return {
 		progress: payload.progress ?? null,
@@ -519,14 +567,22 @@ export function handleHistorySet(db: AppDatabase, payload: HistorySetPayload): S
 	};
 }
 
-export function handleMessagesUpsert(db: AppDatabase, payload: MessagesUpsertPayload): void {
+export function handleMessagesUpsert(
+	db: AppDatabase,
+	payload: MessagesUpsertPayload
+): ChatMerge[] {
 	const bumpUnread = payload.type === 'notify';
+	const merges: ChatMerge[] = [];
 	const apply = db.transaction(() => {
 		for (const message of payload.messages) {
-			ingestBaileysMessage(db, message, { bumpUnread });
+			ingestBaileysMessage(db, message, {
+				bumpUnread,
+				onChatsMerged: (merge) => merges.push(merge)
+			});
 		}
 	});
 	apply();
+	return merges;
 }
 
 export function handleChatsUpsert(db: AppDatabase, chats: Chat[]): void {
@@ -543,18 +599,24 @@ export function handleChatsUpdate(db: AppDatabase, updates: ChatUpdate[]): void 
 	apply();
 }
 
-export function handleContactsUpsert(db: AppDatabase, contacts: Contact[]): void {
-	const apply = db.transaction(() => {
-		for (const contact of contacts) ingestBaileysContact(db, contact);
-	});
-	apply();
+export function handleContactsUpsert(db: AppDatabase, contacts: Contact[]): ChatMerge[] {
+	return ingestContacts(db, contacts);
 }
 
-export function handleContactsUpdate(db: AppDatabase, contacts: ContactPatch[]): void {
+export function handleContactsUpdate(db: AppDatabase, contacts: ContactPatch[]): ChatMerge[] {
+	return ingestContacts(db, contacts);
+}
+
+function ingestContacts(db: AppDatabase, contacts: ContactPatch[]): ChatMerge[] {
+	const merges: ChatMerge[] = [];
 	const apply = db.transaction(() => {
-		for (const contact of contacts) ingestBaileysContact(db, contact);
+		for (const contact of contacts) {
+			const merge = ingestBaileysContact(db, contact);
+			if (merge) merges.push(merge);
+		}
 	});
 	apply();
+	return merges;
 }
 
 /**
@@ -602,8 +664,15 @@ export function attachIngest(
 	 */
 	const notify = (event: string, fn: () => void) => contain(event, fn)();
 
+	const publishMerges = (merges: ChatMerge[]) => {
+		for (const merge of merges) {
+			notify('onChatsMerged', () => options.onChatsMerged?.(merge));
+		}
+	};
 	const onHistory = (payload: HistorySetPayload) => {
-		const progress = handleHistorySet(db, payload);
+		const progress = handleHistorySet(db, payload, {
+			onChatsMerged: (merge) => publishMerges([merge])
+		});
 		options.onSyncProgress?.(progress);
 	};
 	const onMessages = (payload: MessagesUpsertPayload) => {
@@ -617,7 +686,7 @@ export function attachIngest(
 				.map((message) => extractMessageContent(message.message)?.reactionMessage?.key?.id)
 				.filter((id): id is string => Boolean(id))
 		);
-		handleMessagesUpsert(db, payload);
+		publishMerges(handleMessagesUpsert(db, payload));
 		// The transaction above has committed. Consumers may now safely classify
 		// against the complete stored chat/message state.
 		for (const incoming of payload.messages) {
@@ -646,9 +715,13 @@ export function attachIngest(
 	};
 	const onChats = (chats: Chat[]) => handleChatsUpsert(db, chats);
 	const onChatUpdates = (updates: ChatUpdate[]) => handleChatsUpdate(db, updates);
-	const onContacts = (contacts: Contact[]) => handleContactsUpsert(db, contacts);
-	const onContactUpdates = (contacts: ContactPatch[]) => handleContactsUpdate(db, contacts);
-	const onLidMapping = (mapping: LIDMapping) => handleLidMappingUpdate(db, mapping);
+	const onContacts = (contacts: Contact[]) => publishMerges(handleContactsUpsert(db, contacts));
+	const onContactUpdates = (contacts: ContactPatch[]) =>
+		publishMerges(handleContactsUpdate(db, contacts));
+	const onLidMapping = (mapping: LIDMapping) => {
+		const merge = handleLidMappingUpdate(db, mapping);
+		if (merge) publishMerges([merge]);
+	};
 
 	// Registered as [event, contained handler] pairs so nothing can be bound to
 	// Baileys unwrapped, and so detach removes the identical function object.

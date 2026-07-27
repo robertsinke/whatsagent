@@ -608,6 +608,16 @@ export class AppState {
 			case 'chat-updated':
 				this.#mergeChat(event.chat);
 				return;
+			case 'chat-removed':
+				// The two rows were one person all along. Dropping the duplicate is
+				// not enough: if the owner is *looking* at it, leaving it selected
+				// leaves them staring at a conversation whose messages have just
+				// moved elsewhere. Follow the merge into the survivor.
+				this.chats = this.chats.filter((c) => c.jid !== event.jid);
+				if (this.selectedJid === event.jid) {
+					void this.openChat(event.merged_into, { markRead: false });
+				}
+				return;
 			case 'message-new':
 				if (event.message.chat_jid === this.selectedJid) {
 					this.messages = mergeMessages(this.messages, [event.message]);

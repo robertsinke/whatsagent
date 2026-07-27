@@ -365,6 +365,14 @@ export function createApp(options: CreateAppOptions = {}): App {
 					if (schedulerStarted) scheduler?.onMessage(event.message);
 				} else if (event.type === 'message-updated') {
 					ingestHooks.onMessageUpdated(event.message);
+				} else if (event.type === 'chats-merged') {
+					// Survivor first, then the removal: a client that drops `from` on
+					// receipt must already have the row it is about to be pointed at.
+					const survivor = getChat(db, event.to);
+					if (survivor) {
+						events.emit({ type: 'chat-updated', chat: chatViewFor(db, survivor) });
+					}
+					events.emit({ type: 'chat-removed', jid: event.from, merged_into: event.to });
 				}
 			});
 			await options.channel.start();

@@ -24,6 +24,12 @@ export type ServerEvent =
 	 * without them. `chatViewFor` is the only correct way to build this.
 	 */
 	| { type: 'chat-updated'; chat: ChatView }
+	/**
+	 * W4-U13: `jid` was a duplicate identity of `merged_into` and no longer
+	 * exists. Always preceded by a `chat-updated` for the survivor, so a client
+	 * that drops `jid` on receipt never ends up holding neither row.
+	 */
+	| { type: 'chat-removed'; jid: string; merged_into: string }
 	| { type: 'draft-updated'; draft: Draft }
 	| { type: 'draft-removed'; chat_jid: string }
 	| { type: 'outbox-updated'; outbox: OutboxRow }

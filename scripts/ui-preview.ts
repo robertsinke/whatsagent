@@ -30,6 +30,8 @@ import { openDatabase } from '../server/store/db.js';
 import { upsertChat } from '../server/store/chats.js';
 import { upsertMessage, upsertMessageReaction } from '../server/store/messages.js';
 import { upsertDraft } from '../server/store/drafts.js';
+import { linkContactIdentity } from '../server/store/contacts.js';
+import { linkIdentityAndMergeChats } from '../server/store/identity.js';
 import type { DraftProvider, DraftResult } from '../server/providers/provider.js';
 
 const dataDir = mkdtempSync(join(tmpdir(), 'whatsagent-ui-preview-'));
@@ -166,6 +168,37 @@ upsertDraft(db, {
 upsertMessage(db, { id: 'g-1', chat_jid: GROUP, from_me: false, sender: 'ana@s.whatsapp.net', ts: at(), type: 'text', text: 'Anyone else running late?' });
 upsertMessage(db, { id: 'g-2', chat_jid: GROUP, from_me: false, sender: 'ben@s.whatsapp.net', ts: at(), type: 'text', text: 'Five minutes out.' });
 upsertMessage(db, { id: 'g-3', chat_jid: GROUP, from_me: true, ts: at(), type: 'text', text: 'Grabbing a table now.' });
+
+/**
+ * W4-U13 — a contact WhatsApp has migrated to LID addressing. The owner's real
+ * data now contains four of these; the preview carries one so the chat list can
+ * be looked at on both sides of the merge.
+ *
+ * `PREVIEW_SPLIT_IDENTITY=1` seeds the pair and stops there — the duplicate the
+ * owner actually saw. Without it, the same seed goes through the production
+ * convergence path and the list shows the single canonical chat.
+ */
+const SPLIT_LID = '27599493410860@lid';
+const SPLIT_PHONE = '31618155142@s.whatsapp.net';
+upsertChat(db, { jid: SPLIT_PHONE, kind: '1:1', last_msg_at: at(), unread: 0 });
+upsertMessage(db, { id: 's-1', chat_jid: SPLIT_PHONE, from_me: false, ts: at(), type: 'text', text: 'Zullen we het zo even doornemen?' });
+upsertMessage(db, { id: 's-2', chat_jid: SPLIT_PHONE, from_me: true, ts: at(), type: 'text', text: 'Ja prima — ik stuur je zo de opzet door.' });
+upsertChat(db, { jid: SPLIT_LID, kind: '1:1', last_msg_at: at(), unread: 2 });
+upsertMessage(db, { id: 's-3', chat_jid: SPLIT_LID, from_me: false, ts: at(), type: 'text', text: 'Top, ik kijk ernaar.' });
+upsertMessage(db, { id: 's-4', chat_jid: SPLIT_LID, from_me: false, ts: at(), type: 'text', text: 'Nog één ding trouwens.' });
+if (process.env.PREVIEW_SPLIT_IDENTITY === '1') {
+	linkContactIdentity(db, {
+		lidJid: SPLIT_LID,
+		phoneJid: SPLIT_PHONE,
+		name: 'Quinten Muller'
+	});
+} else {
+	linkIdentityAndMergeChats(db, {
+		lidJid: SPLIT_LID,
+		phoneJid: SPLIT_PHONE,
+		name: 'Quinten Muller'
+	});
+}
 
 const fakeProvider: DraftProvider = {
 	draft: async (): Promise<DraftResult> => ({ kind: 'draft', text: 'Preview draft — no provider was called.' })
