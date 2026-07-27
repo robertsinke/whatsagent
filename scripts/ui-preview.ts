@@ -405,8 +405,7 @@ unread boundary. "Group Sandbox" covers group sender attribution.
 the contact name, not "+31 [dots] 85".
 
 Capture with:
-  slay tasks browser new http://127.0.0.1:${app.port}
-  slay tasks browser screenshot -o /tmp/<name>.png
+  node scripts/screenshot.mjs http://127.0.0.1:${app.port} /tmp/<name>.png
 
 Ctrl-C to stop. The temp database is discarded with it.
 `);

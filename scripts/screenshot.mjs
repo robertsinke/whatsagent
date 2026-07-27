@@ -1,12 +1,12 @@
 /**
  * Capture visual evidence from a headless Chrome over CDP.
  *
- * Why this exists rather than `slay tasks browser screenshot`: that path has now
- * failed two different ways on this machine. Once with `UnknownVizError` on the
- * `-o` flag, and once — worse — by returning a *valid* 406-byte PNG of a 1×1
- * viewport, because the browser panel is never mounted so `innerWidth === 1`.
- * Nothing errors; you get a grey square and no signal, and the visual-evidence
- * gate accepts it. A blank that passes is worse than a failure that bounces.
+ * Why a dedicated script rather than an editor/agent screenshot helper: the one
+ * used here previously failed two ways, and the second was silent — it returned
+ * a *valid* 406-byte PNG of a 1×1 viewport, because its browser panel was never
+ * mounted so `innerWidth === 1`. Nothing errored; you got a grey square and no
+ * signal, and any "did somebody look at this?" review step accepted it. A blank
+ * that passes is worse than a failure that bounces.
  *
  * This gives a real viewport, real clicks (needed for any multi-step flow), and
  * `Runtime.evaluate` for computed-value assertions in the same pass — which

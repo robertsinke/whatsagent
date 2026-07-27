@@ -13,8 +13,8 @@ node_modules/
 
 # Contributor-local editor / agent settings (must live in-repo; a global
 # ignore only covers the owner machine). settings.json IS tracked — it holds
-# this repo's SlayZone hooks, and the publish export drops .claude/ wholesale,
-# so nothing here reaches the public tree by being versioned.
+# this repo's local orchestration hooks, and the publish export drops .claude/
+# wholesale, so nothing here reaches the public tree by being versioned.
 .claude/settings.local.json
 .vscode/
 .idea/
