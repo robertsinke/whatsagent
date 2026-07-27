@@ -19,6 +19,19 @@ import {
 
 const PAGE_SIZE = 60;
 
+/**
+ * W4-U12. History sync writes chat and message rows straight to SQLite and
+ * publishes no per-row event — deliberately, because one batch can carry
+ * thousands of messages and a `message-new` per row would flood the socket and
+ * re-sort the open conversation once per message. `sync-progress` is the
+ * notification, and the client answers it with one coalesced {@link
+ * AppState.refresh}: batches inside the debounce window collapse into a single
+ * refetch, and the max-wait keeps a long initial sync (whose batches arrive
+ * with no gap between them) from starving the trailing timer forever.
+ */
+const RESYNC_DEBOUNCE_MS = 750;
+const RESYNC_MAX_WAIT_MS = 4_000;
+
 const EMPTY_SESSION: SessionView = {
 	status: 'initializing',
 	qr: null,
@@ -102,6 +115,13 @@ export class AppState {
 
 	#realtime: Realtime | undefined;
 	#conversationEpoch = 0;
+	/** Coalescing state for the history-sync resync — see {@link RESYNC_DEBOUNCE_MS}. */
+	readonly #resyncDebounceMs: number;
+	readonly #resyncMaxWaitMs: number;
+	#resyncTimer: ReturnType<typeof setTimeout> | undefined;
+	#resyncMaxWaitTimer: ReturnType<typeof setTimeout> | undefined;
+	/** Highest cumulative sync counters seen on the wire, to spot a batch that wrote rows. */
+	#syncedSeen = { chats: 0, messages: 0 };
 	/** Server unread count at the moment this chat was opened. */
 	#unreadAtOpen = 0;
 	/**
@@ -111,6 +131,11 @@ export class AppState {
 	 * {@link deriveUnreadBoundary} is used as the fallback in that case.
 	 */
 	#cursorAtOpen: string | null = null;
+
+	constructor(options: { resyncDebounceMs?: number; resyncMaxWaitMs?: number } = {}) {
+		this.#resyncDebounceMs = options.resyncDebounceMs ?? RESYNC_DEBOUNCE_MS;
+		this.#resyncMaxWaitMs = options.resyncMaxWaitMs ?? RESYNC_MAX_WAIT_MS;
+	}
 
 	get connected(): boolean {
 		return this.#realtime?.connected ?? false;
@@ -133,6 +158,30 @@ export class AppState {
 	stop(): void {
 		this.#realtime?.stop();
 		this.#realtime = undefined;
+		this.#clearResyncTimers();
+	}
+
+	#clearResyncTimers(): void {
+		if (this.#resyncTimer) clearTimeout(this.#resyncTimer);
+		if (this.#resyncMaxWaitTimer) clearTimeout(this.#resyncMaxWaitTimer);
+		this.#resyncTimer = undefined;
+		this.#resyncMaxWaitTimer = undefined;
+	}
+
+	/**
+	 * Ask for one refetch after the current burst of history batches settles.
+	 * Trailing-only would never fire during an initial sync, whose batches land
+	 * back to back for minutes; the max-wait timer forces progress meanwhile.
+	 */
+	#scheduleResync(): void {
+		if (this.#resyncTimer) clearTimeout(this.#resyncTimer);
+		this.#resyncTimer = setTimeout(() => void this.#runResync(), this.#resyncDebounceMs);
+		this.#resyncMaxWaitTimer ??= setTimeout(() => void this.#runResync(), this.#resyncMaxWaitMs);
+	}
+
+	#runResync(): Promise<void> {
+		this.#clearResyncTimers();
+		return this.refresh();
 	}
 
 	async refresh(): Promise<void> {
@@ -488,9 +537,15 @@ export class AppState {
 	/**
 	 * Owner-triggered on-demand history deepen for the selected chat. Asks the
 	 * server to call Baileys `fetchMessageHistory` for older messages; the
-	 * server returns 202 once the request is accepted, and the new (older)
-	 * messages arrive over WS as `message-new`/`sync-progress` events and merge
-	 * into the open conversation pane like any other inbound.
+	 * server returns 202 once the request is accepted, and the phone answers
+	 * later with a `messaging-history.set` batch.
+	 *
+	 * Those older messages never arrive as `message-new` — history sync writes
+	 * rows without per-row events (W4-U12). What arrives is `sync-progress`, and
+	 * {@link applyEvent} answers it with a coalesced {@link refresh}. The
+	 * immediate `openChat` below is the fast path for history that already
+	 * landed between request and response; the WS-driven resync is what covers
+	 * a phone that answers seconds later.
 	 *
 	 * This is read-only with respect to WhatsApp — it pulls history from the
 	 * phone, never sends to a recipient — so it is safe to expose without the
@@ -531,6 +586,15 @@ export class AppState {
 						complete: event.complete
 					}
 				};
+				// The counters are cumulative; a rise means the batch actually wrote
+				// chat or message rows that no other event will ever announce.
+				if (
+					event.chatsSynced > this.#syncedSeen.chats ||
+					event.messagesSynced > this.#syncedSeen.messages
+				) {
+					this.#syncedSeen = { chats: event.chatsSynced, messages: event.messagesSynced };
+					this.#scheduleResync();
+				}
 				return;
 			case 'chat-updated':
 				this.#mergeChat(event.chat);

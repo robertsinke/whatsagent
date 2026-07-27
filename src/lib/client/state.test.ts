@@ -73,6 +73,111 @@ describe('AppState deepen history feedback', () => {
 	});
 });
 
+/**
+ * W4-U12 fragility 1. `handleHistorySet` writes chat and message rows and
+ * publishes no per-row event — by design, a batch can carry thousands of rows.
+ * `sync-progress` is the only announcement the client gets, so it has to be the
+ * trigger for a refetch, otherwise recovered history sits invisible until the
+ * owner clicks something.
+ */
+describe('AppState history-sync resync', () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+		vi.useRealTimers();
+	});
+
+	/** Counts the calls refresh() makes, and serves history that only a refetch can reveal. */
+	function mockBackend(historyMessages: Message[]) {
+		const calls = { chats: 0, messages: 0 };
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.endsWith('/session')) {
+				return jsonResponse({
+					status: 'connected',
+					qr: null,
+					qrExpiresAt: null,
+					sync: { chatsSynced: 0, messagesSynced: 0, complete: false }
+				});
+			}
+			if (url.includes('/chats?filter=')) {
+				calls.chats += 1;
+				return jsonResponse({ items: [chatRow({ last_msg_at: 900 })] });
+			}
+			if (url.includes('/messages?')) {
+				calls.messages += 1;
+				return jsonResponse({ items: historyMessages });
+			}
+			if (url.endsWith('/draft')) return jsonResponse({ error: 'Not found' }, 404);
+			if (url.endsWith('/outbox/send-mode')) return jsonResponse({ live: false, dry_run: true });
+			if (url.endsWith('/outbox')) return jsonResponse({ items: [] });
+			throw new Error(`Unexpected request: ${url}`);
+		});
+		return calls;
+	}
+
+	function syncProgress(chatsSynced: number, messagesSynced: number) {
+		return {
+			type: 'sync-progress' as const,
+			phase: 'history',
+			chatsSynced,
+			messagesSynced,
+			complete: false
+		};
+	}
+
+	it('surfaces history-written messages that arrive with no message-new event', async () => {
+		const state = new AppState({ resyncDebounceMs: 5, resyncMaxWaitMs: 200 });
+		const calls = mockBackend([inbound('HIST-OLD', 100)]);
+		state.selectedJid = JID;
+
+		state.applyEvent(syncProgress(1, 12));
+		expect(calls.chats).toBe(0); // nothing synchronous — the refetch is coalesced
+
+		await vi.waitFor(() => expect(state.messages.map((m) => m.id)).toEqual(['HIST-OLD']));
+		expect(state.chats).toHaveLength(1);
+	});
+
+	it('collapses a burst of history batches into a single refetch', async () => {
+		const state = new AppState({ resyncDebounceMs: 20, resyncMaxWaitMs: 5_000 });
+		const calls = mockBackend([]);
+		state.selectedJid = JID;
+
+		for (let i = 1; i <= 8; i += 1) state.applyEvent(syncProgress(i, i * 50));
+
+		await vi.waitFor(() => expect(calls.chats).toBe(1));
+		await new Promise((resolve) => setTimeout(resolve, 60));
+		expect(calls.chats).toBe(1);
+	});
+
+	it('does not refetch for a repeated batch that wrote nothing', async () => {
+		const state = new AppState({ resyncDebounceMs: 5, resyncMaxWaitMs: 200 });
+		const calls = mockBackend([]);
+
+		state.applyEvent(syncProgress(3, 40));
+		await vi.waitFor(() => expect(calls.chats).toBe(1));
+
+		state.applyEvent(syncProgress(3, 40));
+		await new Promise((resolve) => setTimeout(resolve, 40));
+		expect(calls.chats).toBe(1);
+	});
+
+	it('still refetches mid-sync when batches never pause long enough to settle', async () => {
+		vi.useFakeTimers();
+		const state = new AppState();
+		const calls = mockBackend([]);
+
+		// Batches every 500ms: shorter than the 750ms debounce, so a trailing-only
+		// timer would be rescheduled forever and the chat list would stay empty
+		// for the whole sync. The 4s max-wait is what breaks the starvation.
+		for (let i = 1; i <= 20; i += 1) {
+			state.applyEvent(syncProgress(i, i * 10));
+			await vi.advanceTimersByTimeAsync(500);
+		}
+
+		expect(calls.chats).toBeGreaterThanOrEqual(2);
+	});
+});
+
 describe('AppState unread boundary', () => {
 	afterEach(() => vi.restoreAllMocks());
 

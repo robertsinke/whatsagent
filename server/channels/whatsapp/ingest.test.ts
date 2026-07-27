@@ -780,6 +780,123 @@ describe('owner-sent messages through the real Baileys event buffer', () => {
 	});
 });
 
+/**
+ * W4-U12 fragility 2. Baileys flushes a consolidated map inside one loop
+ * (`Utils/event-buffer.js`: `for (const event in map) ev.emit(event, map[event])`),
+ * so a handler that throws aborts the loop and every later key in that same
+ * flush vanishes without a trace. The map is ordered history-set → chats →
+ * messages, so the earliest key is the one that can swallow the messages.
+ */
+describe('a throwing handler must not drop the rest of a Baileys flush', () => {
+	const quietLogger: any = {
+		info() {},
+		warn() {},
+		error() {},
+		debug() {},
+		trace() {},
+		child() {
+			return quietLogger;
+		}
+	};
+
+	it('keeps ingesting messages.upsert when messaging-history.set throws in the same flush', () => {
+		const database = openTempDb();
+		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+		const ev: any = makeEventBuffer(quietLogger);
+		const onMessageIngested = vi.fn();
+		const onHandlerError = vi.fn();
+		// A realistic throw: the history handler's own consumer blows up after the
+		// rows are committed — index.ts publishes to WS clients from right here.
+		const onSyncProgress = vi.fn(() => {
+			throw new Error('sync-progress consumer exploded');
+		});
+		attachIngest(ev, database, { onSyncProgress, onMessageIngested, onHandlerError });
+
+		ev.buffer();
+		ev.emit('messaging-history.set', {
+			chats: [{ id: 'alice@s.whatsapp.net', conversationTimestamp: 10, unreadCount: 0 }],
+			contacts: [],
+			messages: [
+				{
+					key: { id: 'HIST0001', remoteJid: 'alice@s.whatsapp.net', fromMe: false },
+					messageTimestamp: 10,
+					message: { conversation: 'from history' }
+				}
+			],
+			isLatest: true,
+			progress: 100,
+			syncType: 2
+		});
+		ev.emit('messages.upsert', {
+			type: 'notify',
+			messages: [
+				{
+					key: { id: 'LIVE0001', remoteJid: 'alice@s.whatsapp.net', fromMe: false },
+					messageTimestamp: 20,
+					message: { conversation: 'live inbound behind the throw' }
+				}
+			]
+		});
+
+		expect(() => ev.flush()).not.toThrow();
+
+		// The later key survived the earlier handler's throw.
+		expect(getMessage(database, 'LIVE0001')).toMatchObject({
+			text: 'live inbound behind the throw'
+		});
+		expect(onMessageIngested).toHaveBeenCalledWith(
+			expect.objectContaining({ id: 'LIVE0001' })
+		);
+		// The history rows still committed — the throw was downstream of the write.
+		expect(getMessage(database, 'HIST0001')).toBeDefined();
+
+		// Contained, never silent.
+		expect(onHandlerError).toHaveBeenCalledWith(
+			expect.objectContaining({ event: 'messaging-history.set' })
+		);
+		expect(consoleError).toHaveBeenCalledWith(
+			expect.stringContaining('messaging-history.set'),
+			expect.any(Error)
+		);
+		consoleError.mockRestore();
+	});
+
+	it('keeps notifying later messages when one onMessageIngested callback throws', () => {
+		const database = openTempDb();
+		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+		const handlers = new Map<string, ((...args: any[]) => void)[]>();
+		const ev = {
+			on(event: string, handler: (...args: any[]) => void) {
+				const list = handlers.get(event) ?? [];
+				list.push(handler);
+				handlers.set(event, list);
+			}
+		};
+		const seen: string[] = [];
+		const onMessageIngested = vi.fn((message: { id: string }) => {
+			seen.push(message.id);
+			if (message.id === 'FANOUT01') throw new Error('consumer exploded');
+		});
+		attachIngest(ev, database, { onMessageIngested });
+
+		for (const handler of handlers.get('messages.upsert') ?? []) {
+			handler({
+				type: 'notify',
+				messages: ['FANOUT01', 'FANOUT02', 'FANOUT03'].map((id, index) => ({
+					key: { id, remoteJid: 'alice@s.whatsapp.net', fromMe: false },
+					messageTimestamp: 30 + index,
+					message: { conversation: id }
+				}))
+			});
+		}
+
+		// One bad consumer call must not take its siblings down with it.
+		expect(seen).toEqual(['FANOUT01', 'FANOUT02', 'FANOUT03']);
+		expect(consoleError).toHaveBeenCalled();
+		consoleError.mockRestore();
+	});
+});
+
 describe('history deepen + media download', () => {
 	it('deepenChatHistory calls fetchMessageHistory with the oldest stored key', async () => {
 		const database = openTempDb();
