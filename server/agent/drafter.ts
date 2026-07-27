@@ -38,8 +38,6 @@ export type DraftChatOptions = {
 	providerName: string;
 	memory: Memory;
 	chatJid: string;
-	/** Exact owner-authored message permitted only for a development test. */
-	devDraftFromMeMessageId?: string;
 	/**
 	 * W4-U15 — the owner pressed "Generate draft". Bypasses every needs-reply
 	 * condition (outbound-last, muted, archived, skipped, quiet) because the owner
@@ -56,19 +54,11 @@ function messageContent(message: Message): string {
 	return message.text?.trim() || `[${message.type} message]`;
 }
 
-export function conversationFor(
-	db: AppDatabase,
-	chatJid: string,
-	limit: number,
-	devInboundMessageId?: string
-): Turn[] {
+export function conversationFor(db: AppDatabase, chatJid: string, limit: number): Turn[] {
 	return listMessagesPage(db, chatJid, { limit })
 		.reverse()
 		.map((message) => ({
-			role:
-				message.from_me && message.id !== devInboundMessageId
-					? ('assistant' as const)
-					: ('user' as const),
+			role: message.from_me ? ('assistant' as const) : ('user' as const),
 			content: messageContent(message)
 		}));
 }
@@ -80,7 +70,6 @@ async function buildDraftInput(
 	memory: Memory,
 	chat: Chat,
 	conversationLimit: number,
-	devInboundMessageId?: string,
 	ownerRequested = false
 ): Promise<DraftInput> {
 	let style: string | null = null;
@@ -99,9 +88,6 @@ async function buildDraftInput(
 		system:
 			'Draft a natural reply as the owner. Match the language used in this conversation. ' +
 			'Use the owner voice, stay concise, and return no_reply_needed when no response is warranted.' +
-			(devInboundMessageId
-				? ' Development test: treat the final owner-authored message as inbound and draft a direct reply to it.'
-				: '') +
 			// The owner-requested path is entered precisely when automatic classification
 			// declined, most often because the owner spoke last. Without this the base
 			// instruction above invites no_reply_needed on exactly the runs the owner
@@ -112,7 +98,7 @@ async function buildDraftInput(
 					' message (in that case write a natural follow-up). Do not return no_reply_needed.'
 				: '') +
 			styleInstruction,
-		conversation: conversationFor(db, chat.jid, conversationLimit, devInboundMessageId)
+		conversation: conversationFor(db, chat.jid, conversationLimit)
 	};
 }
 
@@ -167,15 +153,8 @@ export async function draftChat(options: DraftChatOptions): Promise<DraftAttempt
 	if (options.ownerRequested && chat.kind !== '1:1') return { kind: 'not_needed' };
 	const candidate = options.ownerRequested
 		? ownerRequestedCandidate(options.db, chat)
-		: classifyNeedsReply(options.db, chat, {
-				devDraftFromMeMessageId: options.devDraftFromMeMessageId
-			});
+		: classifyNeedsReply(options.db, chat);
 	if (!candidate) return { kind: 'not_needed' };
-	const devInboundMessageId =
-		candidate.lastInbound.from_me &&
-		candidate.lastInbound.id === options.devDraftFromMeMessageId
-			? candidate.lastInbound.id
-			: undefined;
 	// An owner-requested basis is often outbound, so the direction clause that
 	// guards the automatic path would supersede the run before the provider is
 	// ever called. Identity of the basis message is the whole check here — which
@@ -184,7 +163,7 @@ export async function draftChat(options: DraftChatOptions): Promise<DraftAttempt
 		Boolean(
 			message &&
 				message.id === candidate.lastInbound.id &&
-				(options.ownerRequested || !message.from_me || message.id === devInboundMessageId)
+				(options.ownerRequested || !message.from_me)
 		);
 
 	const now = options.now ?? Date.now;
@@ -205,7 +184,6 @@ export async function draftChat(options: DraftChatOptions): Promise<DraftAttempt
 			options.memory,
 			chat,
 			options.conversationLimit ?? 50,
-			devInboundMessageId,
 			options.ownerRequested
 		);
 		const beforeCall = getLastMessage(options.db, options.chatJid);

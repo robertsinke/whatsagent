@@ -72,7 +72,6 @@ export type CreateAppOptions = {
 	memoryQueueDrainMs?: number;
 	draftDebounceMs?: number;
 	/** Exact from-me message ID permitted for one non-production drafting test. */
-	devDraftFromMeMessageId?: string;
 	/** Supplying a transport mounts and starts the sole WhatsApp send path. */
 	outboxTransport?: WhatsAppSendTransport;
 	outboxPacer?: Omit<OutboxPacerOptions, 'db' | 'transport' | 'onUpdated'>;
@@ -126,7 +125,6 @@ export function createApp(options: CreateAppOptions = {}): App {
 				provider: options.draftProvider,
 				providerName: options.providerName ?? 'claude',
 				memory,
-				devDraftFromMeMessageId: options.devDraftFromMeMessageId,
 				debounceMs: options.draftDebounceMs,
 				hooks: {
 					onDraftUpdated: (draft) => events.emit({ type: 'draft-updated', draft }),
@@ -453,22 +451,12 @@ async function main(): Promise<void> {
 	const providerName = (settings.provider ?? 'claude') as DraftProviderName;
 	const memory = createRuntimeMemory(settings, { dataDir: getDefaultDataDir() });
 	const dryRunSetting = getSetting(db, OUTBOX_DRY_RUN_SETTING);
-	const devDraftFromMeMessageId =
-		process.env.NODE_ENV === 'production'
-			? undefined
-			: process.env.WHATSAGENT_DEV_DRAFT_FROM_ME_MESSAGE_ID?.trim() || undefined;
-	if (devDraftFromMeMessageId) {
-		console.warn(
-			`[draft] development override enabled for from-me message ${devDraftFromMeMessageId}`
-		);
-	}
 	const app = createApp({
 		db,
 		channel,
 		draftProvider: createDraftProvider(settings),
 		providerName,
 		memory,
-		devDraftFromMeMessageId,
 		outboxTransport: createWhatsAppSendTransport(() => channel.getSendSocket()),
 		outboxPacer: {
 			dryRun: resolveOutboxDryRun(dryRunSetting)
