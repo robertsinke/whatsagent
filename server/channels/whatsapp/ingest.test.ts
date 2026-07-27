@@ -1123,3 +1123,166 @@ describe('canonical chat identity across LID and phone aliases', () => {
 		expect(listChats(database).map((chat) => chat.jid)).toEqual([PHONE]);
 	});
 });
+
+describe('W4-U16: stop rendering people as phone numbers', () => {
+	it('ingest stores a phone-shaped chat name as null (history sync)', () => {
+		const database = openTempDb();
+		handleHistorySet(database, {
+			chats: [
+				{
+					id: '31612345678@s.whatsapp.net',
+					// The WhatsApp privacy mask — stored verbatim today.
+					name: '+31 \u2219\u2219\u2219\u2219 85',
+					conversationTimestamp: 100
+				}
+			],
+			contacts: [],
+			messages: []
+		});
+
+		const chat = getChat(database, '31612345678@s.whatsapp.net');
+		expect(chat?.name).toBeNull();
+	});
+
+	it('ingest stores a bare-number chat name as null too', () => {
+		const database = openTempDb();
+		handleHistorySet(database, {
+			chats: [
+				{
+					id: '31612345678@s.whatsapp.net',
+					name: '+31683799485',
+					conversationTimestamp: 100
+				}
+			],
+			contacts: [],
+			messages: []
+		});
+		expect(getChat(database, '31612345678@s.whatsapp.net')?.name).toBeNull();
+	});
+
+	it('ingest keeps a real contact name (non-Latin included)', () => {
+		const database = openTempDb();
+		handleHistorySet(database, {
+			chats: [
+				{ id: 'a@s.whatsapp.net', name: '李明', conversationTimestamp: 1 },
+				{ id: 'b@s.whatsapp.net', name: 'Александр', conversationTimestamp: 1 },
+				{ id: 'c@s.whatsapp.net', name: 'محمد', conversationTimestamp: 1 }
+			],
+			contacts: [],
+			messages: []
+		});
+		expect(getChat(database, 'a@s.whatsapp.net')?.name).toBe('李明');
+		expect(getChat(database, 'b@s.whatsapp.net')?.name).toBe('Александр');
+		expect(getChat(database, 'c@s.whatsapp.net')?.name).toBe('محمد');
+	});
+
+	it('a live message with pushName populates contacts.push_name', () => {
+		const database = openTempDb();
+		handleHistorySet(database, {
+			chats: [{ id: '31612345678@s.whatsapp.net', conversationTimestamp: 100 }],
+			contacts: [],
+			messages: []
+		});
+
+		handleMessagesUpsert(database, {
+			type: 'notify',
+			messages: [
+				{
+					key: {
+						id: 'live-1',
+						remoteJid: '31612345678@s.whatsapp.net',
+						fromMe: false
+					},
+					messageTimestamp: 200,
+					message: { conversation: 'hi' },
+					pushName: 'Felix'
+				}
+			]
+		});
+
+		expect(getContact(database, '31612345678@s.whatsapp.net')?.push_name).toBe('Felix');
+	});
+
+	it('a live pushName does not overwrite an existing address-book name', () => {
+		const database = openTempDb();
+		handleHistorySet(database, {
+			chats: [{ id: '31612345678@s.whatsapp.net', conversationTimestamp: 100 }],
+			contacts: [
+				{ id: '31612345678@s.whatsapp.net', name: 'Felix de G.' }
+			],
+			messages: []
+		});
+
+		handleMessagesUpsert(database, {
+			type: 'notify',
+			messages: [
+				{
+					key: {
+						id: 'live-1',
+						remoteJid: '31612345678@s.whatsapp.net',
+						fromMe: false
+					},
+					messageTimestamp: 200,
+					message: { conversation: 'hi' },
+					pushName: 'felix-phone-self-name'
+				}
+			]
+		});
+
+		// The address-book name survives; the push_name is recorded too.
+		const contact = getContact(database, '31612345678@s.whatsapp.net');
+		expect(contact?.name).toBe('Felix de G.');
+		expect(contact?.push_name).toBe('felix-phone-self-name');
+	});
+
+	it('a phone-shaped pushName is not stored as a push name', () => {
+		const database = openTempDb();
+		handleHistorySet(database, {
+			chats: [{ id: '31612345678@s.whatsapp.net', conversationTimestamp: 100 }],
+			contacts: [],
+			messages: []
+		});
+
+		handleMessagesUpsert(database, {
+			type: 'notify',
+			messages: [
+				{
+					key: {
+						id: 'live-1',
+						remoteJid: '31612345678@s.whatsapp.net',
+						fromMe: false
+					},
+					messageTimestamp: 200,
+					message: { conversation: 'hi' },
+					pushName: '+31 \u2219\u2219 85'
+				}
+			]
+		});
+
+		// A phone-shaped pushName is dropped by `usableName`, so no contact row
+		// is created and the chat falls through to its number on render — the
+		// mask never reaches the contact table.
+		const contact = getContact(database, '31612345678@s.whatsapp.net');
+		expect(contact).toBeUndefined();
+	});
+
+	it('a chat.update carrying a mask strips it on the way in', () => {
+		const database = openTempDb();
+		// Seed a real-named chat first.
+		handleHistorySet(database, {
+			chats: [{ id: '31612345678@s.whatsapp.net', name: 'Felix', conversationTimestamp: 1 }],
+			contacts: [],
+			messages: []
+		});
+		expect(getChat(database, '31612345678@s.whatsapp.net')?.name).toBe('Felix');
+
+		// A subsequent chat.update arrives with the mask.
+		handleChatsUpdate(database, [
+			{
+				id: '31612345678@s.whatsapp.net',
+				name: '+31 \u2219\u2219\u2219\u2219 85'
+			}
+		]);
+		expect(getChat(database, '31612345678@s.whatsapp.net')?.name).toBeNull();
+	});
+});

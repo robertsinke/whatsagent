@@ -4,6 +4,7 @@ import { resolveContact } from '../store/contacts.js';
 import { getDraft } from '../store/drafts.js';
 import { getLastMessage } from '../store/messages.js';
 import { isMediaType } from './message-view.js';
+import { usableName } from '../../src/lib/client/names.js';
 
 /**
  * Chat row as the SPA consumes it. Everything the list needs is decided here:
@@ -40,7 +41,13 @@ export function toChatView(
 	// number in the chat list, whenever the chat's jid was one side of a
 	// LID/phone pair and the contact row was keyed by the other.
 	const contact = resolveContact(db, chat.jid);
-	const contactName = contact?.name?.trim() || contact?.push_name?.trim() || null;
+	// Resolution order: usable chat.name → usable contact.name → usable
+	// contact.push_name → null (the client renders the number). A WhatsApp
+	// privacy mask ("+31 [dots] 85") is phone-shaped and so is treated as
+	// not-a-name here — otherwise it would outrank a perfectly good contact
+	// name that is already in the database.
+	const resolvedName =
+		usableName(chat.name) ?? usableName(contact?.name) ?? usableName(contact?.push_name) ?? null;
 
 	let preview: string | null = null;
 	if (last) {
@@ -49,7 +56,7 @@ export function toChatView(
 
 	return {
 		...chat,
-		name: chat.name?.trim() || contactName,
+		name: resolvedName,
 		display_jid: contact?.phone_jid ?? chat.jid,
 		needs_reply: needsReply(chat),
 		preview,

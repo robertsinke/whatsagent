@@ -7,6 +7,7 @@ import {
 	type MediaState,
 	type Message
 } from '../store/messages.js';
+import { usableName } from '../../src/lib/client/names.js';
 
 export type IdentityView = {
 	/** Stable stored identity; `me` represents the linked owner account. */
@@ -139,10 +140,14 @@ function toIdentityView(db: AppDatabase, jid: string | null): IdentityView | nul
 	if (jid === 'me') return { jid, display_jid: jid, name: 'You' };
 	const contact = resolveContact(db, jid);
 	const displayJid = contact?.phone_jid ?? jid;
+	// Same resolution order as `chat-view.ts`: contact name → push name →
+	// identity fallback. A phone-shaped mask must not outrank a contact name.
+	const name =
+		usableName(contact?.name) ?? usableName(contact?.push_name) ?? displayJid;
 	return {
 		jid,
 		display_jid: displayJid,
-		name: contact?.name?.trim() || contact?.push_name?.trim() || displayJid
+		name
 	};
 }
 

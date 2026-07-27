@@ -27,6 +27,7 @@ import {
 	upsertMessageReaction,
 	type Message
 } from '../../store/messages.js';
+import { isPhoneShapedLabel, usableName } from '../../../src/lib/client/names.js';
 
 export type HistorySetPayload = {
 	chats: Chat[];
@@ -329,9 +330,16 @@ export function ingestBaileysChat(db: AppDatabase, chat: Chat): void {
 		toNumber(chat.lastMsgTimestamp) ??
 		toNumber(chat.lastMessageRecvTimestamp);
 
+	// Stop storing masks: a phone-shaped `chat.name` / `chat.displayName` (the
+	// "+31 [dots] 85" privacy mask, or a raw number) is stored as null so the
+	// next history sync can no longer re-poison the column. The view layer
+	// falls through to the contact name / push name / number instead.
+	const rawName = chat.name ?? chat.displayName ?? null;
+	const storedName = isPhoneShapedLabel(rawName) ? null : rawName ?? undefined;
+
 	upsertChatMerged(db, {
 		jid,
-		name: chat.name ?? chat.displayName ?? undefined,
+		name: storedName,
 		kind: chatKindFromJid(jid),
 		last_msg_at: ts ?? undefined,
 		unread: chat.unreadCount != null ? Number(chat.unreadCount) : undefined,
@@ -349,7 +357,10 @@ export function ingestBaileysChatUpdate(db: AppDatabase, update: ChatUpdate): vo
 
 	const patch: Parameters<typeof upsertChatMerged>[1] = { jid };
 	if (update.name !== undefined || update.displayName !== undefined) {
-		patch.name = update.name ?? update.displayName ?? null;
+		// Same mask-stripping rule as `ingestBaileysChat`: a phone-shaped label
+		// is not a name and must not be stored as one.
+		const rawUpdateName = update.name ?? update.displayName ?? null;
+		patch.name = isPhoneShapedLabel(rawUpdateName) ? null : rawUpdateName;
 	}
 	if (update.conversationTimestamp !== undefined || update.lastMsgTimestamp !== undefined) {
 		patch.last_msg_at =
@@ -397,6 +408,25 @@ export function ingestBaileysContact(
 	return null;
 }
 
+/**
+ * Record a push name observed on a live message envelope. `upsertContact`'s
+ * COALESCE guarantees an existing address-book `name` is never overwritten by
+ * a self-chosen push name; we pass `name: null` deliberately. Existing
+ * `lid_jid`/`phone_jid` aliases are preserved, and a `push_name` already set
+ * from a richer source is kept if the new one is null.
+ */
+function harvestPushName(db: AppDatabase, senderJid: string, pushName: string): void {
+	const existing = getContact(db, senderJid);
+	upsertContact(db, {
+		jid: senderJid,
+		channel: 'whatsapp',
+		name: null,
+		push_name: pushName,
+		lid_jid: existing?.lid_jid ?? null,
+		phone_jid: existing?.phone_jid ?? null
+	});
+}
+
 export function ingestBaileysMessage(
 	db: AppDatabase,
 	msg: WAMessage,
@@ -428,6 +458,16 @@ export function ingestBaileysMessage(
 	const sender = fromMe
 		? null
 		: (msg.key?.participant ?? msg.participant ?? chatJid);
+
+	// Harvest the sender's push name from the live envelope. History sync
+	// omits `pushName`, so a stranger who messages you stays a number forever
+	// without this — `contacts.push_name` was only ever written from
+	// `contacts.upsert`/`update`. `upsertContact` COALESCEs, so an existing
+	// address-book `name` is never clobbered by a self-chosen push name, and a
+	// phone-shaped pushName (rare but possible) is dropped by `usableName`.
+	if (!fromMe && sender && usableName(msg.pushName)) {
+		harvestPushName(db, sender, usableName(msg.pushName)!);
+	}
 
 	if (type === 'reaction') {
 		const reaction = extractMessageContent(msg.message)?.reactionMessage;
