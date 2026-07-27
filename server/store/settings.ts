@@ -1,15 +1,97 @@
 import type { AppDatabase } from './db.js';
+import { DRAFT_PROVIDER_NAMES } from '../../shared/providers.js';
 
 export const PACING_MIN_SECONDS_SETTING = 'pacing_min_seconds';
 export const PACING_MAX_SECONDS_SETTING = 'pacing_max_seconds';
 export const OUTBOX_DRY_RUN_SETTING = 'outbox_dry_run';
+export const PROVIDER_SETTING = 'provider';
+export const PROVIDER_MODEL_SETTING = 'provider_model';
+export const MEMORY_SETTING = 'memory';
 export const DEFAULT_MIN_SPACING_MS = 0;
 export const DEFAULT_MAX_SPACING_MS = 1_000;
+
+/** Closed domain for the `memory` setting. Mirrors `MemoryMode` in hindsight.ts. */
+const MEMORY_VALUES: ReadonlySet<string> = new Set(['off', 'null', 'hindsight']);
 
 export type OutboxPacingSettings = {
 	minSpacingMs: number;
 	maxSpacingMs: number;
 };
+
+/**
+ * Result of validating a setting value before it is persisted. {@link ok}
+ * carries the NORMALIZED string to write — a padded, capitalised provider name
+ * must persist trimmed and lowercased, because a trailing space bricks startup
+ * exactly as badly as a misspelling. A failure carries a human message and the
+ * allowed set so the UI can render the options without a second call.
+ */
+export type SettingValidation =
+	| { ok: true; normalized: string }
+	| { ok: false; message: string; allowed: string[] };
+
+/**
+ * Validate a setting VALUE, never the key. This endpoint is also the write path
+ * for `hindsight_url`, `hindsight_bank`, `hindsight_refresh_cron`, `memory`,
+ * the two pacing keys, `outbox_dry_run` and `whatsapp_history_sync_complete`,
+ * so a key whitelist would silently break every one of them. Closed domains
+ * (`provider`, `memory`, `outbox_dry_run`, `pacing_*`) are validated against
+ * their allowed set and normalized; everything else passes through unchanged,
+ * including `provider_model` which stays free text on purpose — a model
+ * released today must be settable without shipping a new build.
+ */
+export function validateSettingValue(key: string, raw: string): SettingValidation {
+	const value = typeof raw === 'string' ? raw : '';
+	if (key === PROVIDER_SETTING) {
+		const trimmed = value.trim();
+		const lower = trimmed.toLowerCase();
+		const allowed: readonly string[] = DRAFT_PROVIDER_NAMES;
+		if (trimmed === '' || !allowed.includes(lower)) {
+			return {
+				ok: false,
+				message: `Unknown provider ${JSON.stringify(raw)}`,
+				allowed: [...DRAFT_PROVIDER_NAMES]
+			};
+		}
+		return { ok: true, normalized: lower };
+	}
+	if (key === MEMORY_SETTING) {
+		const trimmed = value.trim();
+		const lower = trimmed.toLowerCase();
+		if (!MEMORY_VALUES.has(lower)) {
+			return {
+				ok: false,
+				message: `Unknown memory mode ${JSON.stringify(raw)}`,
+				allowed: [...MEMORY_VALUES]
+			};
+		}
+		return { ok: true, normalized: lower };
+	}
+	if (key === OUTBOX_DRY_RUN_SETTING) {
+		const trimmed = value.trim();
+		const lower = trimmed.toLowerCase();
+		if (lower !== 'true' && lower !== 'false') {
+			return {
+				ok: false,
+				message: `outbox_dry_run must be 'true' or 'false'`,
+				allowed: ['true', 'false']
+			};
+		}
+		return { ok: true, normalized: lower };
+	}
+	if (key === PACING_MIN_SECONDS_SETTING || key === PACING_MAX_SECONDS_SETTING) {
+		const trimmed = value.trim();
+		const num = Number(trimmed);
+		if (!Number.isFinite(num) || num < 0) {
+			return {
+				ok: false,
+				message: `${key} must be a non-negative number of seconds`,
+				allowed: []
+			};
+		}
+		return { ok: true, normalized: trimmed };
+	}
+	return { ok: true, normalized: value };
+}
 
 export function getSetting(db: AppDatabase, key: string): string | undefined {
 	const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as

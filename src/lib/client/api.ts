@@ -4,6 +4,7 @@ import {
 	type Draft,
 	type Message,
 	type OutboxRow,
+	type ProvidersResponse,
 	type RefinementIntent,
 	type SessionView
 } from './types.js';
@@ -188,6 +189,17 @@ export const api = {
 			method: 'PUT',
 			body: JSON.stringify({ key, value })
 		}),
+
+	/**
+	 * OSS-P2.4: provider discovery snapshot. The response carries the merged
+	 * provider list, what the running process built at boot (`active`), the
+	 * persisted values (`saved`), and a server-derived `restartRequired` flag.
+	 * `refresh: true` forces a full re-probe of binaries and the Ollama daemon.
+	 */
+	providers: () => request<ProvidersResponse>('/providers'),
+
+	refreshProviders: () =>
+		request<ProvidersResponse>('/providers?refresh=1'),
 
 	/**
 	 * W4-U8: outbox send-mode. `live: true` enables real WhatsApp sends through

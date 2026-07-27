@@ -11,9 +11,17 @@ import { upsertDraft } from '../store/drafts.js';
 import { listDraftFeedback } from '../store/draft-feedback.js';
 import { getMessage, upsertMessage, upsertMessageReaction } from '../store/messages.js';
 import { getOutbox } from '../store/outbox.js';
+import {
+	PROVIDER_MODEL_SETTING,
+	PROVIDER_SETTING,
+	getSetting,
+	setSetting
+} from '../store/settings.js';
 import { EventBus } from './events.js';
 import type { Memory } from '../agent/memory/memory.js';
 import type { DraftProvider } from '../providers/provider.js';
+import type { ProviderDiscoverySnapshot } from '../providers/discovery.js';
+import type { DraftProviderName } from '../../shared/providers.js';
 import type { WhatsAppSendTransport } from '../channels/whatsapp/send.js';
 import { handleHistorySet, type HistorySetPayload } from '../channels/whatsapp/ingest.js';
 import {
@@ -30,7 +38,19 @@ async function startTestApp(
 	events = new EventBus(),
 	memory?: Memory,
 	draftProvider?: DraftProvider,
-	options: { outboxTransport?: WhatsAppSendTransport } = {}
+	options: {
+		outboxTransport?: WhatsAppSendTransport;
+		providerDiscovery?: {
+			snapshot(options?: { refresh?: boolean }): Promise<ProviderDiscoverySnapshot>;
+			invalidate(): void;
+		};
+		activeProvider?: {
+			provider: DraftProviderName;
+			coercedFrom: string | null;
+			drafting: boolean;
+			model: string | null;
+		};
+	} = {}
 ): Promise<App> {
 	dataDir = mkdtempSync(join(tmpdir(), 'whatsagent-api-'));
 	db = openDatabase({ dataDir });
@@ -44,6 +64,8 @@ async function startTestApp(
 		memory,
 		draftProvider,
 		providerName: draftProvider ? 'fake' : undefined,
+		activeProvider: options.activeProvider,
+		providerDiscovery: options.providerDiscovery,
 		outboxTransport: options.outboxTransport
 	});
 	await app.start();
@@ -1549,5 +1571,294 @@ describe('GET /api/voice/global (W4-U10 inspector)', () => {
 		await startTestApp();
 		const res = await api('/api/voice/global', { origin: null });
 		expect(res.status).toBe(200);
+	});
+});
+
+/**
+ * OSS-P2.4 — settings value validation and `GET /api/providers`.
+ *
+ * Discovery is STUBBED through `startTestApp`'s `providerDiscovery` option,
+ * the same injection pattern as `draftProvider`. Real binaries are never
+ * spawned in the API suite — a cold snapshot measured 1011 ms with all three
+ * CLIs resolving, which would make the settings page feel broken.
+ */
+describe('OSS-P2.4 settings value validation', () => {
+	it('PUT provider with a typo returns 400 carrying the allowed list, and a follow-up GET shows the value UNCHANGED (the brick regression)', async () => {
+		await startTestApp();
+		// Seed a known good value so we can prove the typo did not overwrite it.
+		setSetting(db!, PROVIDER_SETTING, 'codex');
+
+		const res = await api('/api/settings', {
+			method: 'PUT',
+			origin: originForApp(),
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ key: 'provider', value: 'claud' })
+		});
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { error: string; allowed: string[] };
+		expect(body.allowed).toEqual(['claude', 'codex', 'ollama']);
+		// The persisted value is untouched — the brick is gone.
+		expect(getSetting(db!, PROVIDER_SETTING)).toBe('codex');
+	});
+
+	it('PUT provider with a padded capitalised value returns 200 and reads back normalized (trailing space bricks startup too)', async () => {
+		await startTestApp();
+		const res = await api('/api/settings', {
+			method: 'PUT',
+			origin: originForApp(),
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ key: 'provider', value: ' Codex ' })
+		});
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { key: string; value: string };
+		expect(body.value).toBe('codex');
+		expect(getSetting(db!, PROVIDER_SETTING)).toBe('codex');
+	});
+
+	it('PUT hindsight_url returns 200 (guards against the key-whitelist mistake)', async () => {
+		await startTestApp();
+		const res = await api('/api/settings', {
+			method: 'PUT',
+			origin: originForApp(),
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ key: 'hindsight_url', value: 'http://localhost:8080' })
+		});
+		expect(res.status).toBe(200);
+		expect(getSetting(db!, 'hindsight_url')).toBe('http://localhost:8080');
+	});
+
+	it('PUT provider_model with an arbitrary new model id returns 200 (free text stays free)', async () => {
+		await startTestApp();
+		const res = await api('/api/settings', {
+			method: 'PUT',
+			origin: originForApp(),
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ key: 'provider_model', value: 'claude-opus-99' })
+		});
+		expect(res.status).toBe(200);
+		expect(getSetting(db!, PROVIDER_MODEL_SETTING)).toBe('claude-opus-99');
+	});
+
+	it('PUT memory with nonsense returns 400, with a valid value returns 200', async () => {
+		await startTestApp();
+		const bad = await api('/api/settings', {
+			method: 'PUT',
+			origin: originForApp(),
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ key: 'memory', value: 'telepathy' })
+		});
+		expect(bad.status).toBe(400);
+		const badBody = (await bad.json()) as { allowed: string[] };
+		expect(badBody.allowed).toEqual(['off', 'null', 'hindsight']);
+
+		const good = await api('/api/settings', {
+			method: 'PUT',
+			origin: originForApp(),
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ key: 'memory', value: 'Null' })
+		});
+		expect(good.status).toBe(200);
+		expect(getSetting(db!, 'memory')).toBe('null');
+	});
+
+	it('PUT outbox_dry_run with a non-boolean returns 400', async () => {
+		await startTestApp();
+		const res = await api('/api/settings', {
+			method: 'PUT',
+			origin: originForApp(),
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ key: 'outbox_dry_run', value: 'maybe' })
+		});
+		expect(res.status).toBe(400);
+	});
+
+	it('the existing GET /api/settings test path still works (pacing normalized)', async () => {
+		await startTestApp();
+		const res = await api('/api/settings');
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as Record<string, string>;
+		expect(body.pacing_min_seconds).toBe('0');
+	});
+});
+
+/** A stub snapshot with three providers, every one allowing a custom model. */
+function stubSnapshot(): ProviderDiscoverySnapshot {
+	const probedAt = Date.now();
+	return {
+		providers: [
+			{
+				name: 'claude',
+				label: 'Claude',
+				kind: 'cli',
+				installed: true,
+				path: '/usr/local/bin/claude',
+				pathSource: 'env-path',
+				version: '2.1.220',
+				auth: 'unknown',
+				unavailableReason: null,
+				unavailableDetail: null,
+				models: [],
+				modelsLive: false,
+				defaultModel: null,
+				allowsCustomModel: true,
+				probedAt
+			},
+			{
+				name: 'codex',
+				label: 'Codex',
+				kind: 'cli',
+				installed: true,
+				path: '/usr/local/bin/codex',
+				pathSource: 'env-path',
+				version: '0.9.0',
+				auth: 'unknown',
+				unavailableReason: null,
+				unavailableDetail: null,
+				models: [],
+				modelsLive: false,
+				defaultModel: null,
+				allowsCustomModel: true,
+				probedAt
+			},
+			{
+				name: 'ollama',
+				label: 'Ollama',
+				kind: 'http',
+				installed: false,
+				path: '/usr/local/bin/ollama',
+				pathSource: 'env-path',
+				version: null,
+				auth: 'unknown',
+				unavailableReason: 'not_running',
+				unavailableDetail: 'Ollama daemon did not respond',
+				models: [],
+				modelsLive: false,
+				defaultModel: null,
+				allowsCustomModel: true,
+				probedAt
+			}
+		],
+		searchPath: ['/usr/local/bin', '/usr/bin'],
+		probedAt
+	};
+}
+
+function stubDiscovery(snapshot: ProviderDiscoverySnapshot = stubSnapshot()): {
+	snapshot(options?: { refresh?: boolean }): Promise<ProviderDiscoverySnapshot>;
+	invalidate(): void;
+} {
+	return {
+		snapshot: async () => snapshot,
+		invalidate: () => {
+			/* no-op for the stub */
+		}
+	};
+}
+
+/** A stub that counts refresh calls — `?refresh=1` forces a re-probe. */
+function countingDiscovery(): {
+	snapshot(options?: { refresh?: boolean }): Promise<ProviderDiscoverySnapshot>;
+	invalidate(): void;
+	refreshCalls: () => number;
+} {
+	const snapshot = stubSnapshot();
+	let calls = 0;
+	return {
+		snapshot: async (options?: { refresh?: boolean }) => {
+			if (options?.refresh) calls += 1;
+			return snapshot;
+		},
+		invalidate: () => {},
+		refreshCalls: () => calls
+	};
+}
+
+describe('OSS-P2.4 GET /api/providers', () => {
+	it('returns 200 with three entries, every one allowing a custom model, and an active provider matching what the app was constructed with', async () => {
+		const discovery = stubDiscovery();
+		await startTestApp(
+			new EventBus(),
+			undefined,
+			undefined,
+			{
+				providerDiscovery: discovery,
+				activeProvider: { provider: 'claude', coercedFrom: null, drafting: true, model: null }
+			}
+		);
+
+		const res = await api('/api/providers');
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			providers: { name: string; allowsCustomModel: boolean; installed: boolean }[];
+			active: { provider: string; drafting: boolean };
+		};
+		expect(body.providers).toHaveLength(3);
+		expect(body.providers.every((p) => p.allowsCustomModel === true)).toBe(true);
+		expect(body.active.provider).toBe('claude');
+		expect(body.active.drafting).toBe(true);
+	});
+
+	it('boot as one provider, PUT another, then GET reports restartRequired true while active is unchanged (server-derived, reload-proof)', async () => {
+		const discovery = stubDiscovery();
+		await startTestApp(
+			new EventBus(),
+			undefined,
+			undefined,
+			{
+				providerDiscovery: discovery,
+				activeProvider: { provider: 'claude', coercedFrom: null, drafting: true, model: null }
+			}
+		);
+
+		// Switch the saved provider away from what booted.
+		const put = await api('/api/settings', {
+			method: 'PUT',
+			origin: originForApp(),
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ key: 'provider', value: 'codex' })
+		});
+		expect(put.status).toBe(200);
+
+		const res = await api('/api/providers');
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			active: { provider: string };
+			saved: { provider: string | null };
+			restartRequired: boolean;
+		};
+		// Active is still what booted; saved is the new value; restart is required.
+		expect(body.active.provider).toBe('claude');
+		expect(body.saved.provider).toBe('codex');
+		expect(body.restartRequired).toBe(true);
+	});
+
+	it('?refresh=1 forces a re-probe', async () => {
+		const discovery = countingDiscovery();
+		await startTestApp(new EventBus(), undefined, undefined, {
+			providerDiscovery: discovery,
+			activeProvider: { provider: 'claude', coercedFrom: null, drafting: true, model: null }
+		});
+
+		const res = await api('/api/providers?refresh=1');
+		expect(res.status).toBe(200);
+		expect(discovery.refreshCalls()).toBe(1);
+	});
+
+	it('reports coercedFrom when the persisted value at boot was invalid', async () => {
+		await startTestApp(new EventBus(), undefined, undefined, {
+			providerDiscovery: stubDiscovery(),
+			activeProvider: { provider: 'claude', coercedFrom: 'claud', drafting: true, model: null }
+		});
+
+		const res = await api('/api/providers');
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { active: { coercedFrom: string | null } };
+		expect(body.active.coercedFrom).toBe('claud');
+	});
+
+	it('returns 503 when discovery was not threaded (no providerDiscovery dep)', async () => {
+		await startTestApp();
+		const res = await api('/api/providers');
+		expect(res.status).toBe(503);
 	});
 });

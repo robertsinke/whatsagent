@@ -4,6 +4,20 @@
  * tsconfig include and the SPA must not pull node-only modules into the bundle.
  */
 
+// The provider-domain response shape lives in `shared/` so server validation
+// and the client dropdown never drift apart — re-exported here so `api.ts`
+// keeps its single-type-import convention.
+export type {
+	ProviderInfo,
+	ProviderModelOption,
+	ProvidersResponse,
+	ProviderAuthState,
+	ProviderUnavailableReason,
+	ProviderPathSource,
+	ActiveProviderInfo,
+	SavedProviderInfo
+} from '../../../shared/provider-types.js';
+
 export type ChatKind = '1:1' | 'group';
 
 export type Chat = {
