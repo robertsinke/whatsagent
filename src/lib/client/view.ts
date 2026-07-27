@@ -9,6 +9,7 @@ import type {
 	SessionStatus,
 	SessionView
 } from './types.js';
+import { usableName } from './names.js';
 
 export type ChatTab = 'all' | 'needs-reply' | 'groups';
 
@@ -512,7 +513,7 @@ function mediaNoun(type: string): string {
  */
 export function senderLabel(sender: IdentityView | null): string {
 	if (!sender) return 'Unknown participant';
-	const name = sender.name?.trim();
+	const name = usableName(sender.name);
 	// A `name` still carrying an `@` domain *is* the server's honest fallback,
 	// not a contact name — render it as an identity, not as a person's name.
 	if (name && !name.includes('@')) return name;

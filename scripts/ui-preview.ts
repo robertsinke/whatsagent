@@ -28,6 +28,7 @@ import { join } from 'node:path';
 import { createApp } from '../server/index.js';
 import { openDatabase } from '../server/store/db.js';
 import { upsertChat } from '../server/store/chats.js';
+import { upsertContact } from '../server/store/contacts.js';
 import { upsertMessage, upsertMessageReaction } from '../server/store/messages.js';
 import { upsertDraft } from '../server/store/drafts.js';
 import { linkContactIdentity } from '../server/store/contacts.js';
@@ -194,6 +195,26 @@ upsertMessage(db, { id: 'g-2', chat_jid: GROUP, from_me: false, sender: 'ben@s.w
 upsertMessage(db, { id: 'g-3', chat_jid: GROUP, from_me: true, ts: at(), type: 'text', text: 'Grabbing a table now.' });
 
 /**
+ * W4-U16 — a chat WhatsApp delivered with a privacy-mask name ("+31 [dots] 85",
+ * U+2219 dot characters) but a contact row with the real name. Before U16 the
+ * mask outranked the contact name and the chat list rendered a phone-shaped
+ * string instead of "Felix De Groene". The view layer now strips phone-shaped
+ * masks and the chat list shows the contact name. This seed is the case the
+ * next worker inherits.
+ */
+const MASKED = '31612345678@s.whatsapp.net';
+upsertChat(db, {
+	jid: MASKED,
+	// The exact WhatsApp privacy mask shape, with U+2219 dot characters.
+	name: '+31 \u2219\u2219\u2219\u2219 85',
+	kind: '1:1',
+	last_msg_at: at(),
+	unread: 1
+});
+upsertContact(db, { jid: MASKED, name: 'Felix De Groene' });
+upsertMessage(db, { id: 'masked-1', chat_jid: MASKED, from_me: false, sender: MASKED, ts: at(), type: 'text', text: 'Heb je de notities nog?' });
+
+/**
  * W4-U13 — a contact WhatsApp has migrated to LID addressing. The owner's real
  * data now contains four of these; the preview carries one so the chat list can
  * be looked at on both sides of the merge.
@@ -260,6 +281,8 @@ UI preview ready — safe to screenshot.
 
 Open "Quote Gallery" for every quote subtype, the reaction chips, and the
 unread boundary. "Group Sandbox" covers group sender attribution.
+"Felix De Groene" is the W4-U16 masked-name case — the chat list must show
+the contact name, not "+31 [dots] 85".
 
 Capture with:
   slay tasks browser new http://127.0.0.1:${app.port}
