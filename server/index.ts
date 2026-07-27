@@ -35,7 +35,8 @@ import { refineDraft } from './agent/refiner.js';
 import { OutboxPacer, type OutboxPacerOptions } from './outbox/pacer.js';
 import {
 	createDefaultProviderDiscovery,
-	providerFactoryOptionsFromDiscovery
+	providerFactoryOptionsFromDiscovery,
+	type ProviderDiscovery
 } from './providers/discovery.js';
 import { createDraftProvider } from './providers/index.js';
 import type { DraftProvider } from './providers/provider.js';
@@ -76,6 +77,21 @@ export type CreateAppOptions = {
 	/** Supplying a provider mounts the U8 scheduler into the live runtime. */
 	draftProvider?: DraftProvider;
 	providerName?: string;
+	/**
+	 * Active provider block describing what the running process actually built
+	 * at boot — the normalized name, the raw persisted value when coercion
+	 * happened, whether drafting is live, and the persisted model. Surfaced
+	 * through `GET /api/providers` so the client never has to re-derive it
+	 * (and a client-side "just saved" flag can't lie after reload).
+	 */
+	activeProvider?: {
+		provider: DraftProviderName;
+		coercedFrom: string | null;
+		drafting: boolean;
+		model: string | null;
+	};
+	/** Provider discovery used by `GET /api/providers`. Injected in tests. */
+	providerDiscovery?: ProviderDiscovery;
 	memory?: Memory;
 	memoryReflectMs?: number;
 	/** Short-interval retry of the memory's retain queue, independent of `memoryReflectMs`. Default 60 s. */
@@ -216,7 +232,9 @@ export function createApp(options: CreateAppOptions = {}): App {
 		generateDraft: scheduler ? (chatJid: string) => scheduler.generate(chatJid) : undefined,
 		deepenHistory: options.channel?.deepenHistory
 			? (chatJid, count) => options.channel!.deepenHistory!(chatJid, count)
-			: undefined
+			: undefined,
+		activeProvider: options.activeProvider,
+		providerDiscovery: options.providerDiscovery
 	});
 
 	const server = createServer((req, res) => {
@@ -509,9 +527,10 @@ async function main(): Promise<void> {
 	// drafts get stamped with a provider that is not the one running.
 	const bootSettings = { ...settings, provider: providerName };
 
+	const discovery = createDefaultProviderDiscovery();
 	let factoryOptions = {};
 	try {
-		const snapshot = await createDefaultProviderDiscovery().snapshot();
+		const snapshot = await discovery.snapshot();
 		factoryOptions = providerFactoryOptionsFromDiscovery(snapshot);
 	} catch (err) {
 		console.warn('Provider discovery failed; drafting will use bare CLI names', err);
@@ -534,6 +553,13 @@ async function main(): Promise<void> {
 		channel,
 		draftProvider,
 		providerName,
+		activeProvider: {
+			provider: providerName,
+			coercedFrom,
+			drafting: draftProvider !== undefined,
+			model: settings.provider_model ?? null
+		},
+		providerDiscovery: discovery,
 		memory,
 		outboxTransport: createWhatsAppSendTransport(() => channel.getSendSocket()),
 		outboxPacer: {

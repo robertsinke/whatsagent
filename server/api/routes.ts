@@ -27,7 +27,7 @@ import {
 	getOutbox,
 	listOutbox
 } from '../store/outbox.js';
-import { getSetting, listEffectiveSettings, OUTBOX_DRY_RUN_SETTING, resolveOutboxDryRun, setSetting } from '../store/settings.js';
+import { getSetting, listEffectiveSettings, OUTBOX_DRY_RUN_SETTING, resolveOutboxDryRun, setSetting, validateSettingValue, PROVIDER_SETTING, PROVIDER_MODEL_SETTING } from '../store/settings.js';
 import type { Memory } from '../agent/memory/memory.js';
 import type { RefinementAttempt, RefineDraftRequest } from '../agent/refiner.js';
 import { retainDraftLearning } from '../agent/voice.js';
@@ -47,6 +47,41 @@ import {
 import { chatNeedsReply, toChatView } from './chat-view.js';
 export { chatNeedsReply };
 import { describeMedia, isMediaType, toMessageView } from './message-view.js';
+import type { DiscoveredProvider } from '../providers/discovery.js';
+import type { ProviderInfo, ProviderModelOption } from '../../shared/provider-types.js';
+
+/**
+ * Map a discovery {@link DiscoveredProvider} onto the shared {@link ProviderInfo}
+ * shape that `GET /api/providers` returns. The two structs are aligned 1:1 so
+ * the API does not define a third parallel set of fields — this is a literal
+ * field-for-field copy with the model `source` narrowed to the shared union
+ * (discovery only ever emits `source: 'live'`).
+ */
+function toProviderInfo(p: DiscoveredProvider): ProviderInfo {
+	const models: ProviderModelOption[] = p.models.map((m) => ({
+		value: m.value,
+		label: m.label,
+		source: 'live',
+		...(m.note ? { note: m.note } : {})
+	}));
+	return {
+		name: p.name,
+		label: p.label,
+		kind: p.kind,
+		installed: p.installed,
+		path: p.path,
+		pathSource: p.pathSource,
+		version: p.version,
+		auth: p.auth,
+		unavailableReason: p.unavailableReason,
+		unavailableDetail: p.unavailableDetail,
+		models,
+		modelsLive: p.modelsLive,
+		defaultModel: p.defaultModel,
+		allowsCustomModel: true,
+		probedAt: p.probedAt
+	};
+}
 
 export type RoutesDeps = {
 	db: AppDatabase;
@@ -88,6 +123,21 @@ export type RoutesDeps = {
 	 * provider is configured. This never sends and never touches the outbox.
 	 */
 	generateDraft?: (chatJid: string) => boolean;
+	/**
+	 * OSS-P2.4 — discovery used by `GET /api/providers`. Injected through
+	 * `CreateAppOptions`; absent in tests that don't exercise the endpoint.
+	 */
+	providerDiscovery?: {
+		snapshot(options?: { refresh?: boolean }): Promise<import('../providers/discovery.js').ProviderDiscoverySnapshot>;
+		invalidate(): void;
+	};
+	/** What the running process built at boot — powers the `active` block. */
+	activeProvider?: {
+		provider: import('../../shared/providers.js').DraftProviderName;
+		coercedFrom: string | null;
+		drafting: boolean;
+		model: string | null;
+	};
 };
 
 const MIME: Record<string, string> = {
@@ -448,16 +498,71 @@ async function handleApi(
 			error(res, 400, 'Expected { key, value }');
 			return;
 		}
-		setSetting(db, body.key, body.value);
+		// OSS-P2.4: validate VALUES, never keys. A key whitelist is the wrong
+		// instrument — this endpoint is also the write path for hindsight_url,
+		// hindsight_bank, hindsight_refresh_cron, memory, the two pacing keys,
+		// outbox_dry_run and whatsapp_history_sync_complete. Whitelisting keys
+		// silently breaks every one of them. Closed domains are validated and
+		// NORMALIZED here; everything else passes through unchanged. Today a
+		// typo saves with a 200, looks like it worked, and the app fails to
+		// start on the next boot — recoverable only by hand-editing SQLite.
+		const result = validateSettingValue(body.key, body.value);
+		if (!result.ok) {
+			error(res, 400, result.message, { allowed: result.allowed });
+			return;
+		}
+		setSetting(db, body.key, result.normalized);
 		// W4-U8: when the outbox dry-run setting is touched, push the resolved
 		// polarity into the live pacer so the toggle takes effect without a
 		// restart. The generic PUT is the settings UI's only path today; a
 		// dedicated endpoint would just duplicate this. The pacer stays the
 		// sole sender — this only flips whether it transmits.
 		if (body.key === OUTBOX_DRY_RUN_SETTING && deps.setOutboxDryRun) {
-			deps.setOutboxDryRun(resolveOutboxDryRun(body.value));
+			deps.setOutboxDryRun(resolveOutboxDryRun(result.normalized));
+		}
+		// OSS-P2.4: invalidate the discovery cache when the provider or model
+		// changed, so the next GET /api/providers reflects the new saved value
+		// (and, for provider, re-probes against the new selection's auth state).
+		if ((body.key === PROVIDER_SETTING || body.key === PROVIDER_MODEL_SETTING) && deps.providerDiscovery) {
+			deps.providerDiscovery.invalidate();
 		}
 		json(res, 200, { key: body.key, value: getSetting(db, body.key) });
+		return;
+	}
+
+	if (path === '/api/providers' && method === 'GET') {
+		// OSS-P2.4: discovery endpoint. The response lets the client compute
+		// nothing — `active` describes what the running process built at boot
+		// (with `coercedFrom` when the persisted value was invalid), `saved`
+		// reports the persisted values, and `restartRequired` is a server-side
+		// comparison of the two. A client-side "just saved" flag dies on reload
+		// and would lie. `allowsCustomModel` is structural and always true for
+		// every provider in every state, including total discovery failure,
+		// because the escape hatch is the entire point. `auth` is tri-state and
+		// defaults to `unknown` — a successful --version proves a binary
+		// exists, not that a subscription login works, and there is no cheap
+		// probe for that.
+		if (!deps.providerDiscovery || !deps.activeProvider) {
+			error(res, 503, 'Provider discovery unavailable');
+			return;
+		}
+		const refresh = url.searchParams.get('refresh') === '1' || url.searchParams.get('refresh') === 'true';
+		const snapshot = await deps.providerDiscovery.snapshot({ refresh });
+		const savedProvider = getSetting(db, PROVIDER_SETTING) ?? null;
+		const savedModel = getSetting(db, PROVIDER_MODEL_SETTING) ?? null;
+		const active = deps.activeProvider;
+		const providers = snapshot.providers.map((p) => toProviderInfo(p));
+		const restartRequired =
+			active.provider !== (savedProvider ?? active.provider) ||
+			(active.model ?? null) !== (savedModel ?? null);
+		json(res, 200, {
+			providers,
+			active,
+			saved: { provider: savedProvider, providerModel: savedModel },
+			restartRequired,
+			searchPath: snapshot.searchPath,
+			probedAt: snapshot.probedAt
+		});
 		return;
 	}
 
