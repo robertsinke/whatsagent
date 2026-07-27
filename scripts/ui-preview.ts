@@ -33,7 +33,9 @@ import { upsertMessage, upsertMessageReaction } from '../server/store/messages.j
 import { upsertDraft } from '../server/store/drafts.js';
 import { linkContactIdentity } from '../server/store/contacts.js';
 import { linkIdentityAndMergeChats } from '../server/store/identity.js';
+import { setSetting } from '../server/store/settings.js';
 import type { DraftProvider, DraftResult } from '../server/providers/provider.js';
+import { createDefaultProviderDiscovery } from '../server/providers/discovery.js';
 import {
 	FIXTURE_PHONE_JID,
 	FIXTURE_SPLIT_LID_JID,
@@ -265,6 +267,14 @@ const fakeProvider: DraftProvider = {
 	draft: async (): Promise<DraftResult> => ({ kind: 'draft', text: 'Preview draft — no provider was called.' })
 };
 
+// OSS-P2.5 — seed agent settings so the Settings dropdowns have something to
+// show: a saved-but-undetected model (warning line), and a saved provider that
+// differs from what this process "booted" with (restart-required banner).
+setSetting(db, 'provider', 'codex');
+setSetting(db, 'provider_model', 'claude-haiku-9-9-undetected');
+setSetting(db, 'memory', 'hindsight');
+
+const discovery = createDefaultProviderDiscovery();
 const app = createApp({
   db,
   dataDir,
@@ -273,7 +283,14 @@ const app = createApp({
   staticDir: join(process.cwd(), 'build'),
   // No `channel`: nothing here opens a WhatsApp socket.
   draftProvider: fakeProvider,
-  providerName: 'fake'
+  providerName: 'claude',
+  activeProvider: {
+    provider: 'claude',
+    coercedFrom: null,
+    drafting: true,
+    model: null
+  },
+  providerDiscovery: discovery
 });
 
 await app.start();
