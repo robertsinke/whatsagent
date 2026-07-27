@@ -727,6 +727,14 @@ async function handleApi(
 			error(res, 503, 'Draft generation unavailable');
 			return;
 		}
+		// History sync creates chat rows independently of message delivery, so a
+		// 1:1 chat with no messages is reachable. The drafter would return
+		// `not_needed` for it and emit nothing at all — a 202 followed by silence
+		// is exactly the silent no-op this unit is supposed to remove.
+		if (!getLastMessage(db, jid)) {
+			error(res, 409, 'No messages in this chat to draft from');
+			return;
+		}
 		const existing = getDraft(db, jid);
 		if (existing?.status === 'drafting') {
 			error(res, 409, 'A draft is already being generated', { status: existing.status });

@@ -31,6 +31,12 @@ const PAGE_SIZE = 60;
  */
 const RESYNC_DEBOUNCE_MS = 750;
 const RESYNC_MAX_WAIT_MS = 4_000;
+/**
+ * W4-U15 safety net only. An accepted generate is released by its first draft
+ * event; this bounds the wait so a run that emits nothing cannot leave the
+ * Generate button disabled indefinitely.
+ */
+const GENERATE_SETTLE_TIMEOUT_MS = 30_000;
 
 const EMPTY_SESSION: SessionView = {
 	status: 'initializing',
@@ -73,12 +79,18 @@ export class AppState {
 	refineError = $state<string | null>(null);
 	/**
 	 * W4-U15 — true while an owner-triggered "Generate draft" request is in
-	 * flight. Cleared as soon as the server accepts (202); the draft itself then
-	 * arrives as a `draft-updated` event and `DraftStatus` shows its own shimmer.
+	 * flight. "In flight" means *until the draft row appears*, matching how
+	 * `refining` covers a whole provider round-trip — not merely until the 202.
+	 * The server accepts before the scheduler runs, and at the concurrency limit
+	 * the chat can sit queued with no `drafting` row, which would otherwise leave
+	 * the card reading "No draft" with the button live and nothing happening.
 	 */
 	generating = $state(false);
 	/** Recoverable generation error, surfaced in the no-draft card. */
 	generateError = $state<string | null>(null);
+	/** Chat awaiting its first draft event, and the safety net that releases it. */
+	#generatingJid: string | null = null;
+	#generatingTimer: ReturnType<typeof setTimeout> | null = null;
 	/**
 	 * One "New" marker for the open chat. U4: derived from the persisted read
 	 * cursor (`last_read_msg_id`) when it is present, falling back to the
@@ -246,6 +258,11 @@ export class AppState {
 		// canceled by a UI reload, and its finally-block clears the flag.
 		if (chatChanged) this.refineError = null;
 		if (chatChanged) this.generateError = null;
+		// A generate awaiting its first event belongs to the chat it was asked
+		// for; leaving the flag set would disable the button in the new chat.
+		if (chatChanged && this.#generatingJid !== null) {
+			this.#settleGenerating(this.#generatingJid);
+		}
 		if (!options.preserveDeepenStatus) {
 			this.deepenStatus = { kind: 'idle', at: null };
 		}
@@ -477,6 +494,14 @@ export class AppState {
 		this.generateError = null;
 		try {
 			await api.generateDraft(jid);
+			// Accepted, not finished: hold the flag until the first draft event for
+			// this chat arrives. The timeout is only a safety net so a run that
+			// somehow emits nothing cannot strand the button disabled forever.
+			this.#generatingJid = jid;
+			this.#generatingTimer = setTimeout(
+				() => this.#settleGenerating(jid),
+				GENERATE_SETTLE_TIMEOUT_MS
+			);
 			return true;
 		} catch (err) {
 			if (this.selectedJid === jid) {
@@ -485,9 +510,19 @@ export class AppState {
 						? 'No draft provider is configured, so the agent cannot write a draft.'
 						: describeError(err);
 			}
+			this.#settleGenerating(jid);
 			return false;
-		} finally {
-			this.generating = false;
+		}
+	}
+
+	/** Release the in-flight flag for `jid`, if it is the chat still waiting. */
+	#settleGenerating(jid: string): void {
+		if (this.#generatingJid !== null && this.#generatingJid !== jid) return;
+		this.generating = false;
+		this.#generatingJid = null;
+		if (this.#generatingTimer !== null) {
+			clearTimeout(this.#generatingTimer);
+			this.#generatingTimer = null;
 		}
 	}
 
@@ -693,12 +728,16 @@ export class AppState {
 				this.messages = replaceMessage(this.messages, event.message);
 				return;
 			case 'draft-updated':
+				// The run this owner asked for has produced a row — the card owns the
+				// progress display from here (it shimmers on 'drafting').
+				this.#settleGenerating(event.draft.chat_jid);
 				if (event.draft.chat_jid === this.selectedJid) this.draft = event.draft;
 				this.chats = this.chats.map((c) =>
 					c.jid === event.draft.chat_jid ? { ...c, draft_status: event.draft.status } : c
 				);
 				return;
 			case 'draft-removed':
+				this.#settleGenerating(event.chat_jid);
 				if (event.chat_jid === this.selectedJid) this.draft = null;
 				this.chats = this.chats.map((c) =>
 					c.jid === event.chat_jid ? { ...c, draft_status: null } : c

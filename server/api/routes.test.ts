@@ -913,6 +913,31 @@ describe('drafts', () => {
 			expect((await generate('nobody@s.whatsapp.net')).status).toBe(404);
 		});
 
+		/**
+		 * History sync creates chat rows independently of message delivery. The
+		 * drafter returns `not_needed` for an empty chat and emits nothing, so a
+		 * 202 here would leave the owner pressing a button that does nothing at
+		 * all — the exact silent no-op this unit exists to remove.
+		 */
+		it('409s for a 1:1 chat with no messages rather than accepting a run that emits nothing', async () => {
+			const draft = vi.fn(async () => ({ kind: 'draft' as const, text: 'Never' }));
+			await startTestApp(new EventBus(), undefined, { draft });
+			seedNeedsReplyFixture(db!);
+			upsertChat(db!, {
+				jid: 'empty@s.whatsapp.net',
+				name: 'Empty',
+				kind: '1:1',
+				last_msg_at: 0,
+				unread: 0
+			});
+
+			const response = await generate('empty@s.whatsapp.net');
+
+			expect(response.status).toBe(409);
+			expect(draft).not.toHaveBeenCalled();
+			expect(outboxCount()).toBe(0);
+		});
+
 		it('503s when no provider is configured', async () => {
 			await startTestApp();
 			seedNeedsReplyFixture(db!);
