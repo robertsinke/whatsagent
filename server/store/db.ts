@@ -32,10 +32,9 @@ export function getDefaultDataDir(): string {
  *
  * The live data dir holds the WhatsApp auth credentials. Opening it from a
  * worktree starts a second Baileys socket on the owner's personal account —
- * an account-level hazard, which is why `.slayzone/worker.md` tells workers
- * never to start the real backend. This makes that structural instead of
- * remembered: a rule a worker has to recall is a rule that eventually gets
- * missed, and the cost of missing this one is paid on a real account.
+ * an account-level hazard. This guard makes that refusal structural: a rule
+ * that has to be remembered is a rule that eventually gets missed, and the
+ * cost of missing this one is paid on a real account.
  *
  * Scope is deliberately narrow. Only the *default* data dir is guarded, so
  * everything that passes an explicit `dataDir` — the test suite, the UI preview
@@ -44,9 +43,9 @@ export function getDefaultDataDir(): string {
  * Detection: in a linked worktree `.git` is a FILE containing a `gitdir:`
  * pointer; in the main checkout it is a directory.
  *
- * `WHATSAGENT_ALLOW_WORKTREE_LIVE_DB=1` overrides, for the rare case where the
- * owner deliberately wants it. Escape hatches belong in the owner's hands, not
- * in a worker's judgement.
+ * Override: set `WHATSAGENT_ALLOW_WORKTREE_LIVE_DB=1` for the rare case where
+ * the owner deliberately wants the live DB from a worktree. Escape hatches
+ * belong in the owner's hands, not in a worker's judgement.
  */
 function assertNotLiveDbFromWorktree(): void {
 	if (process.env.WHATSAGENT_ALLOW_WORKTREE_LIVE_DB === '1') return;
@@ -70,7 +69,8 @@ function assertNotLiveDbFromWorktree(): void {
 			'  * Verifying UI work?  Use `npm run preview:ui` — a throwaway database\n' +
 			'    with no WhatsApp connection.\n' +
 			'  * Writing a script?   Pass an explicit `dataDir` (see scripts/ui-preview.ts).\n' +
-			'  * Really need the live app?  Run it from the main checkout, not a worktree.\n'
+			'  * Really need the live app?  Run it from the main checkout, not a worktree.\n' +
+			'  * Deliberate override?  WHATSAGENT_ALLOW_WORKTREE_LIVE_DB=1\n'
 	);
 }
 

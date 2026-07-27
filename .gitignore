@@ -10,7 +10,9 @@ node_modules/
 !.env.example
 
 # Contributor-local editor / agent settings (must live in-repo; a global
-# ignore only covers the owner machine).
+# ignore only covers the owner machine). Owner-machine Claude Code hooks and
+# permissions stay on disk in settings.json but are not published.
+.claude/settings.json
 .claude/settings.local.json
 .vscode/
 .idea/
