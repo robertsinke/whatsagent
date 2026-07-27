@@ -32,7 +32,16 @@ server/
   agent/                # scheduler → classifier → drafter; memory/ (Hindsight + NullMemory)
   providers/            # DraftProvider impls: claude, codex, ollama
   outbox/pacer.ts        # sole path through which WhatsApp sends happen
+shared/                 # pure predicates imported by BOTH server and client
 ```
+
+`shared/` exists because the server must not import from `src/lib/client/`: that
+inverts the layering and makes "client" a lie. Anything both sides need — rules
+where a server-side view builder and a client-side renderer would otherwise
+drift apart — goes there, dependency-free (no Node built-ins, nothing from
+`$lib`) so it bundles for the browser. Its tests need their own entry in
+`vite.config.ts`'s `test.include`; they belong to neither side and would
+otherwise run nowhere.
 
 ### Key architectural decisions (do not relitigate without cause — see plan for rationale)
 
