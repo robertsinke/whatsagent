@@ -3,7 +3,10 @@ import { CodexProvider, type CodexProviderOptions } from './codex.js';
 import { OllamaProvider, type OllamaProviderOptions } from './ollama.js';
 import { ProviderError, type DraftProvider } from './provider.js';
 
-export type DraftProviderName = 'claude' | 'codex' | 'ollama';
+// Re-exported from shared/ so server validation and the client dropdown share
+// one definition. The local union used to live here; server/index.ts imports
+// DraftProviderName from this module, so the re-export keeps that import working.
+export type { DraftProviderName } from '../../shared/providers.js';
 
 export interface ProviderFactoryOptions {
 	claude?: ClaudeProviderOptions;
