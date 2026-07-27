@@ -65,6 +65,12 @@ export type AttachIngestOptions = {
 	onSyncProgress?: (progress: SyncProgress) => void;
 	onMessageIngested?: (message: Message) => void;
 	onMessageUpdated?: (message: Message) => void;
+	/**
+	 * Called when a handler (or one of its consumer callbacks) threw and was
+	 * contained. The throw is always logged; this is the opt-in seam for a caller
+	 * that wants to surface it somewhere else too.
+	 */
+	onHandlerError?: (context: { event: string; error: unknown }) => void;
 };
 
 type ContactPatch = Partial<Contact> & Pick<Contact, 'id'>;
@@ -551,12 +557,51 @@ export function handleContactsUpdate(db: AppDatabase, contacts: ContactPatch[]):
 	apply();
 }
 
-/** Bind Baileys socket events → SQLite upserts. */
+/**
+ * Bind Baileys socket events → SQLite upserts.
+ *
+ * Every handler registered here is wrapped in {@link contain}. Baileys re-emits
+ * a consolidated event map inside one loop (`Utils/event-buffer.js`:
+ * `ev.on('event', map => { for (const event in map) ev.emit(event, map[event]) })`),
+ * so a handler that throws aborts that loop and every *later* key in the same
+ * flush is dropped with no trace. The map is ordered — history set, chats, then
+ * messages — so one constraint error on an early key silently swallows the
+ * messages behind it. Nothing below may throw into Baileys.
+ */
 export function attachIngest(
 	ev: IngestListener,
 	db: AppDatabase,
 	options: AttachIngestOptions = {}
 ): () => void {
+	/**
+	 * Run `fn`, absorbing any throw. Loud on purpose: this failure mode is
+	 * invisible by construction, so the log is the only thing that makes a
+	 * dropped event findable after the fact.
+	 */
+	const contain = <A extends unknown[]>(event: string, fn: (...args: A) => void) => {
+		return (...args: A): void => {
+			try {
+				fn(...args);
+			} catch (error) {
+				console.error(`[ingest] ${event} handler failed; event dropped`, error);
+				try {
+					options.onHandlerError?.({ event, error });
+				} catch (hookError) {
+					console.error('[ingest] onHandlerError itself threw', hookError);
+				}
+			}
+		};
+	};
+
+	/**
+	 * Same containment one level down: these handlers fan a committed batch out
+	 * over consumer callbacks in a loop, and a throw on the first message would
+	 * drop the notifications for every message behind it. The consumers are real
+	 * throw candidates — `toMessageView`/`chatViewFor`, `cancelStaleDraftOutbox`
+	 * and `scheduler.onMessage` all run synchronously off these.
+	 */
+	const notify = (event: string, fn: () => void) => contain(event, fn)();
+
 	const onHistory = (payload: HistorySetPayload) => {
 		const progress = handleHistorySet(db, payload);
 		options.onSyncProgress?.(progress);
@@ -579,14 +624,18 @@ export function attachIngest(
 			const id = incoming.key?.id;
 			if (!id || existingIds.has(id) || classifyMessageType(incoming) === 'reaction') continue;
 			const stored = getMessage(db, id);
-			if (stored) options.onMessageIngested?.(stored);
+			if (stored) {
+				notify('messages.upsert → onMessageIngested', () => options.onMessageIngested?.(stored));
+			}
 		}
 		publishUpdated([...reactionTargetIds]);
 	};
 	const publishUpdated = (ids: string[]) => {
 		for (const id of ids) {
 			const stored = getMessage(db, id);
-			if (stored) options.onMessageUpdated?.(stored);
+			if (stored) {
+				notify('onMessageUpdated', () => options.onMessageUpdated?.(stored));
+			}
 		}
 	};
 	const onMessageUpdates = (updates: MessagesUpdatePayload) => {
@@ -601,27 +650,27 @@ export function attachIngest(
 	const onContactUpdates = (contacts: ContactPatch[]) => handleContactsUpdate(db, contacts);
 	const onLidMapping = (mapping: LIDMapping) => handleLidMappingUpdate(db, mapping);
 
-	ev.on('messaging-history.set', onHistory);
-	ev.on('messages.upsert', onMessages);
-	ev.on('messages.update', onMessageUpdates);
-	ev.on('messages.reaction', onMessageReactions);
-	ev.on('chats.upsert', onChats);
-	ev.on('chats.update', onChatUpdates);
-	ev.on('contacts.upsert', onContacts);
-	ev.on('contacts.update', onContactUpdates);
-	ev.on('lid-mapping.update', onLidMapping);
+	// Registered as [event, contained handler] pairs so nothing can be bound to
+	// Baileys unwrapped, and so detach removes the identical function object.
+	const bindings: Array<[string, (...args: any[]) => void]> = (
+		[
+			['messaging-history.set', onHistory],
+			['messages.upsert', onMessages],
+			['messages.update', onMessageUpdates],
+			['messages.reaction', onMessageReactions],
+			['chats.upsert', onChats],
+			['chats.update', onChatUpdates],
+			['contacts.upsert', onContacts],
+			['contacts.update', onContactUpdates],
+			['lid-mapping.update', onLidMapping]
+		] as Array<[string, (...args: any[]) => void]>
+	).map(([event, handler]) => [event, contain(event, handler)]);
+
+	for (const [event, handler] of bindings) ev.on(event, handler);
 
 	return () => {
 		// Baileys EventEmitter has .off; FakeSocket in tests may not — best-effort.
 		const off = (ev as { off?: (event: string, handler: (...args: any[]) => void) => void }).off;
-		off?.('messaging-history.set', onHistory);
-		off?.('messages.upsert', onMessages);
-		off?.('messages.update', onMessageUpdates);
-		off?.('messages.reaction', onMessageReactions);
-		off?.('chats.upsert', onChats);
-		off?.('chats.update', onChatUpdates);
-		off?.('contacts.upsert', onContacts);
-		off?.('contacts.update', onContactUpdates);
-		off?.('lid-mapping.update', onLidMapping);
+		for (const [event, handler] of bindings) off?.(event, handler);
 	};
 }

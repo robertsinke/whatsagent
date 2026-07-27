@@ -87,8 +87,9 @@ export const api = {
 	/**
 	 * Owner-triggered on-demand history deepen. Asks the phone for older
 	 * messages via Baileys `fetchMessageHistory` (server route POST
-	 * `/api/chats/:jid/history/deepen`). Returns 202 on acceptance; ingestion
-	 * arrives over WS as normal `message-new`/`sync-progress` events. Read-only
+	 * `/api/chats/:jid/history/deepen`). Returns 202 on acceptance; the rows are
+	 * ingested later from a `messaging-history.set` batch, which announces itself
+	 * over WS as `sync-progress` only — never `message-new`. Read-only
 	 * for the client — this never sends anything to WhatsApp recipients and is
 	 * gated to disconnected/eligible states on the server.
 	 */
