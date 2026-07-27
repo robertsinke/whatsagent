@@ -11,6 +11,7 @@ import { getDraft } from './store/drafts.js';
 import { getMessage, upsertMessage } from './store/messages.js';
 import { enqueueDraftOutbox, enqueueManualOutbox, enqueueReactionOutbox, getOutbox } from './store/outbox.js';
 import {
+	assertSupportedPlatform,
 	createApp,
 	HISTORY_SYNC_COMPLETE_SETTING,
 	resolveOutboxDryRun,
@@ -377,5 +378,17 @@ describe('restart recovery', () => {
 		channel.emit({ type: 'connection', state: 'connected' });
 
 		expect(sessionStatuses.at(-1)).toBe('ready');
+	});
+});
+
+describe('assertSupportedPlatform', () => {
+	it('allows darwin', () => {
+		expect(() => assertSupportedPlatform('darwin')).not.toThrow();
+	});
+
+	it('rejects linux and win32 with a macOS-required message', () => {
+		for (const platform of ['linux', 'win32'] as const) {
+			expect(() => assertSupportedPlatform(platform)).toThrow(/requires macOS/i);
+		}
 	});
 });

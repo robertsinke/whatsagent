@@ -442,7 +442,7 @@ async function main(): Promise<void> {
 	const sampleSize = parseFlag(args, '--samples');
 	const sourceDbPath = parseFlag(args, '--db');
 	const outPath = parseFlag(args, '--out');
-	const providerModel = parseFlag(args, '--model') ?? 'deepseek-v4-flash:cloud';
+	const providerModel = parseFlag(args, '--model') ?? 'gemma3:4b';
 	const baseUrl = parseFlag(args, '--base-url') ?? 'http://127.0.0.1:11434';
 
 	const copy = openDatabaseCopy({
