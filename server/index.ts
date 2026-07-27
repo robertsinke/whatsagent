@@ -126,8 +126,11 @@ export { resolveOutboxDryRun } from './store/settings.js';
 
 function defaultStaticDir(): string {
 	const here = dirname(fileURLToPath(import.meta.url));
-	// server/ → repo root → build/ (adapter-static)
-	return join(here, '..', 'build');
+	// Source (server/index.ts): here is server/ → repo root → build/ (adapter-static).
+	// Compiled (dist/server/server/index.js): here is dist/server/server/ → repo root
+	// → build/ (the SPA sits at the top of build/, the compiled server under dist/server/).
+	const compiled = import.meta.url.endsWith('.js');
+	return compiled ? join(here, '..', '..', 'build') : join(here, '..', 'build');
 }
 
 export function createApp(options: CreateAppOptions = {}): App {

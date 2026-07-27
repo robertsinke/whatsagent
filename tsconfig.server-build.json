@@ -1,0 +1,21 @@
+{
+	"compilerOptions": {
+		"noEmit": false,
+		"declaration": false,
+		"outDir": "dist/server",
+		"rootDir": ".",
+		"strict": true,
+		"module": "nodenext",
+		"moduleResolution": "nodenext",
+		"target": "es2023",
+		"skipLibCheck": true,
+		"types": ["node"],
+		"esModuleInterop": true,
+		"forceConsistentCasingInFileNames": true,
+		"resolveJsonModule": true,
+		"sourceMap": false,
+		"removeComments": false
+	},
+	"include": ["server/**/*.ts", "shared/**/*.ts"],
+	"exclude": ["server/**/*.test.ts"]
+}

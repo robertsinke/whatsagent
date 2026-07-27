@@ -1,8 +1,9 @@
 import Database from 'better-sqlite3';
-import { chmodSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { chmodSync, mkdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { MIGRATIONS } from './migrations.generated.js';
 
 export type AppDatabase = Database.Database;
 
@@ -14,7 +15,6 @@ export type OpenDatabaseOptions = {
 };
 
 const DB_FILENAME = 'whatsagent.db';
-const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
 
 /** Platform app-data directory for whatsagent (never the repo). */
 export function getDefaultDataDir(): string {
@@ -113,9 +113,9 @@ export function migrate(db: AppDatabase): void {
 		(db.prepare('SELECT MAX(version) AS v FROM schema_version').get() as { v: number | null })
 			.v ?? 0;
 
-	const files = readdirSync(MIGRATIONS_DIR)
-		.filter((name) => /^\d+.*\.sql$/.test(name))
-		.sort();
+	const pending = MIGRATIONS.filter((m) => m.version > current).sort((a, b) =>
+		a.version < b.version ? -1 : 1
+	);
 
 	const apply = db.transaction((version: number, sql: string) => {
 		db.exec(sql);
@@ -125,10 +125,7 @@ export function migrate(db: AppDatabase): void {
 		);
 	});
 
-	for (const file of files) {
-		const version = Number.parseInt(file, 10);
-		if (!Number.isFinite(version) || version <= current) continue;
-		const sql = readFileSync(join(MIGRATIONS_DIR, file), 'utf8');
-		apply(version, sql);
+	for (const migration of pending) {
+		apply(migration.version, migration.sql);
 	}
 }

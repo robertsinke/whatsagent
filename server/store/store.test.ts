@@ -1,17 +1,16 @@
-import { chmodSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-/** Migrations on disk — the expected schema_version row count after a boot. */
-function migrationFileCount(): number {
-	const dir = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
-	return readdirSync(dir).filter((name) => /^\d+.*\.sql$/.test(name)).length;
+/** Embedded migrations — the expected schema_version row count after a boot. */
+function migrationCount(): number {
+	return MIGRATIONS.length;
 }
 import { listChats, markChatRead, upsertChat, getLastReadMsgId } from './chats.js';
 import { upsertContact, getContact } from './contacts.js';
 import { openDatabase, type AppDatabase } from './db.js';
+import { MIGRATIONS } from './migrations.generated.js';
 import { getDraft, upsertDraft } from './drafts.js';
 import {
 	countMessages,
@@ -90,7 +89,7 @@ describe('migrations', () => {
 		expect(versionAfter).toBe(versionBefore);
 		// Derived, not hardcoded — every unit that adds a migration would otherwise
 		// have to edit this assertion.
-		expect(versionRows).toBe(migrationFileCount());
+		expect(versionRows).toBe(migrationCount());
 	});
 
 	it('creates the DB file under the app-data dir with 0600 permissions', () => {
