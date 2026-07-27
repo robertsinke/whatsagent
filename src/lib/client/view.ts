@@ -272,6 +272,35 @@ export type SessionBanner = {
 };
 
 /**
+ * OSS-P3.4 — is this a first run?
+ *
+ * There is no first-run flag anywhere in this app, and this predicate is
+ * deliberately not one: nothing is persisted, so wiping the data directory (or
+ * launching the desktop build, which keeps its own) is genuinely a first run
+ * again, and no stale flag can claim otherwise.
+ *
+ * First run means: the app has never received a chat, and WhatsApp is not
+ * linked. `initializing` counts — a fresh app sits there for its first seconds
+ * before a QR exists, and the welcome flow has to be right in that window too,
+ * not only once the QR arrives.
+ *
+ * `hydrated` is what keeps this from flashing on every launch: before the first
+ * `/api/session` + `/api/chats` pair lands, an already-paired app looks
+ * identical to an empty one (`initializing`, zero chats). So the answer is "no"
+ * until the client has actually heard from the server.
+ */
+export function isFirstRun(input: {
+	session: SessionView;
+	chatCount: number;
+	hydrated: boolean;
+}): boolean {
+	if (!input.hydrated) return false;
+	if (input.chatCount > 0) return false;
+	if (input.session.status === 'initializing') return true;
+	return sessionBanner(input.session).blocking;
+}
+
+/**
  * D5 — the pairing/connection surface. `disconnected` auto-reconnects;
  * `logged_out` is terminal and re-pairing is itself a ban signal, so it is
  * labelled distinctly and loudly.

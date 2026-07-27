@@ -14,6 +14,7 @@ import {
 	formatBytes,
 	formatDayDivider,
 	formatMessageTime,
+	isFirstRun,
 	isVisibleDraftStatus,
 	mediaAffordance,
 	mergeMessages,
@@ -239,6 +240,40 @@ describe('session banner (D5)', () => {
 	it('offers regeneration only once the QR has expired', () => {
 		expect(sessionBanner(session({ status: 'qr_pending', qr: 'x' })).canRepair).toBe(false);
 		expect(sessionBanner(session({ status: 'qr_expired' })).canRepair).toBe(true);
+	});
+});
+
+describe('first run (OSS-P3.4)', () => {
+	it('is an empty, unlinked app — including while it is still initializing', () => {
+		expect(
+			isFirstRun({ session: session({ status: 'initializing' }), chatCount: 0, hydrated: true })
+		).toBe(true);
+		expect(
+			isFirstRun({ session: session({ status: 'qr_pending', qr: 'x' }), chatCount: 0, hydrated: true })
+		).toBe(true);
+	});
+
+	it('is never true before the first refresh, so it cannot flash on a paired launch', () => {
+		// A paired app looks exactly like a new one until /api/session answers.
+		expect(
+			isFirstRun({ session: session({ status: 'initializing' }), chatCount: 0, hydrated: false })
+		).toBe(false);
+	});
+
+	it('is not a re-pair: an unlinked app that already has history keeps the plain pairing screen', () => {
+		expect(
+			isFirstRun({ session: session({ status: 'logged_out' }), chatCount: 42, hydrated: true })
+		).toBe(false);
+		// ...but a logged-out app with nothing in it has never been set up.
+		expect(
+			isFirstRun({ session: session({ status: 'logged_out' }), chatCount: 0, hydrated: true })
+		).toBe(true);
+	});
+
+	it('ends as soon as the session is usable, even with no chats yet', () => {
+		for (const status of ['syncing', 'ready', 'disconnected'] as const) {
+			expect(isFirstRun({ session: session({ status }), chatCount: 0, hydrated: true })).toBe(false);
+		}
 	});
 });
 

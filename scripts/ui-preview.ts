@@ -10,9 +10,22 @@
  * and would put a second Baileys socket on their personal account. This gives
  * them a safe thing to screenshot instead.
  *
- * It is safe by construction: a throwaway SQLite database under a temp dir, no
- * `channel` passed to `createApp` (so no WhatsApp socket is ever opened), and a
- * fake draft provider (so no LLM is called). Nothing here can reach WhatsApp.
+ * It is safe by construction: a throwaway SQLite database under a temp dir, a
+ * fake draft provider (so no LLM is called), and either no `channel` at all or
+ * the fake one from `preview-channel.ts` (which opens no socket and holds no
+ * credentials). Nothing here can reach WhatsApp.
+ *
+ * ENV VARS
+ *
+ *   PREVIEW_SESSION=initializing|qr_pending|qr_expired|logged_out|syncing|ready
+ *     Attaches the fake channel and drives the real session state machine to
+ *     that state. Without it there is no channel and the session stays at
+ *     `initializing` with a populated chat list — the pre-OSS-P3.4 behaviour.
+ *   PREVIEW_PROVIDERS=real|all|none|ollama-down
+ *     Stubs provider discovery. `none` is the first-run case that matters:
+ *     nothing detected, three install links, pairing still reachable.
+ *   PREVIEW_SPLIT_IDENTITY=1
+ *     Seeds the pre-merge LID/phone duplicate pair (W4-U13).
  *
  * It also covers what live data cannot. The owner's real database holds four
  * quoted messages — all of them plain text — and zero reactions, because
@@ -36,6 +49,11 @@ import { linkIdentityAndMergeChats } from '../server/store/identity.js';
 import { setSetting } from '../server/store/settings.js';
 import type { DraftProvider, DraftResult } from '../server/providers/provider.js';
 import { createDefaultProviderDiscovery } from '../server/providers/discovery.js';
+import { createPreviewChannel, isPreviewSessionMode } from './preview-channel.js';
+import {
+	createPreviewProviderDiscovery,
+	isPreviewProvidersMode
+} from './preview-providers.js';
 import {
 	FIXTURE_PHONE_JID,
 	FIXTURE_SPLIT_LID_JID,
@@ -267,21 +285,76 @@ const fakeProvider: DraftProvider = {
 	draft: async (): Promise<DraftResult> => ({ kind: 'draft', text: 'Preview draft — no provider was called.' })
 };
 
+/**
+ * OSS-P3.4 — session mode. Unset means "no channel", the original behaviour:
+ * the state machine never leaves `initializing` and the chat shell renders.
+ */
+const rawSession = process.env.PREVIEW_SESSION;
+if (rawSession !== undefined && !isPreviewSessionMode(rawSession)) {
+	throw new Error(
+		`PREVIEW_SESSION=${rawSession} is not a mode. Use initializing|qr_pending|qr_expired|logged_out|syncing|ready.`
+	);
+}
+const sessionMode = isPreviewSessionMode(rawSession) ? rawSession : null;
+
+const rawProviders = process.env.PREVIEW_PROVIDERS;
+if (rawProviders !== undefined && !isPreviewProvidersMode(rawProviders)) {
+	throw new Error(
+		`PREVIEW_PROVIDERS=${rawProviders} is not a mode. Use real|all|none|ollama-down.`
+	);
+}
+const providersMode = isPreviewProvidersMode(rawProviders) ? rawProviders : 'real';
+
+/**
+ * A session mode is a first-run inspection, and first-run is defined by an
+ * empty app: no chats have ever arrived. The fixtures above exist for the chat
+ * shell, and a seeded chat list would hide the very screens these modes are for
+ * — so drop them. Safe by construction: this database is a throwaway temp file
+ * and is discarded when the harness exits.
+ *
+ * `settings` and the (empty) `wa_auth_*` tables survive; everything else goes.
+ */
+if (sessionMode) {
+	const tables = db
+		.prepare(
+			`SELECT name FROM sqlite_master
+			 WHERE type = 'table'
+			   AND name NOT LIKE 'sqlite_%'
+			   AND name NOT LIKE 'wa_auth_%'
+			   AND name NOT IN ('settings', 'schema_version')`
+		)
+		.all() as { name: string }[];
+	db.pragma('foreign_keys = OFF');
+	for (const { name } of tables) db.exec(`DELETE FROM "${name}"`);
+	db.pragma('foreign_keys = ON');
+}
+
 // OSS-P2.5 — seed agent settings so the Settings dropdowns have something to
 // show: a saved-but-undetected model (warning line), and a saved provider that
 // differs from what this process "booted" with (restart-required banner).
-setSetting(db, 'provider', 'codex');
-setSetting(db, 'provider_model', 'claude-haiku-9-9-undetected');
+//
+// Skipped in a first-run session mode: a genuinely fresh app has none of this,
+// and seeding it would put a restart-required banner on a screen that has never
+// been configured.
+if (!sessionMode) {
+	setSetting(db, 'provider', 'codex');
+	setSetting(db, 'provider_model', 'claude-haiku-9-9-undetected');
+}
 setSetting(db, 'memory', 'hindsight');
 
-const discovery = createDefaultProviderDiscovery();
+const discovery =
+	providersMode === 'real'
+		? createDefaultProviderDiscovery()
+		: createPreviewProviderDiscovery(providersMode);
 const app = createApp({
   db,
   dataDir,
   port: Number(process.env.PORT ?? 8799),
   host: '127.0.0.1',
   staticDir: join(process.cwd(), 'build'),
-  // No `channel`: nothing here opens a WhatsApp socket.
+  // Either no channel, or the fake one — neither opens a WhatsApp socket and
+  // neither touches the owner's stored credentials.
+  channel: sessionMode ? createPreviewChannel(sessionMode) : undefined,
   draftProvider: fakeProvider,
   providerName: 'claude',
   activeProvider: {
@@ -299,9 +372,33 @@ UI preview ready — safe to screenshot.
 
   URL       http://127.0.0.1:${app.port}
   database  ${dataDir}  (throwaway)
-  whatsapp  not connected — no channel was started
+  whatsapp  ${
+		sessionMode
+			? `fake channel → session "${sessionMode}" — no socket, synthetic QR`
+			: 'not connected — no channel was started'
+	}
+  discovery ${providersMode === 'real' ? 'real probe of this machine' : `stubbed → ${providersMode}`}
   provider  fake — no LLM is called
+${
+	sessionMode === 'qr_expired'
+		? `
+The QR renders immediately and flips to qr_expired 60s later (QR_TTL_MS) —
+wait a minute before capturing, then use "Generate a new code" to go back.
+`
+		: ''
+}${
+	sessionMode
+		? `
+The QR payload is synthetic: it encodes into a real QR image, but the string is
+not a WhatsApp pairing code. Scanning it with a phone does nothing.
 
+First-run screens to look at:
+  PREVIEW_SESSION=qr_pending  PREVIEW_PROVIDERS=none        the case this exists for
+  PREVIEW_SESSION=qr_pending  PREVIEW_PROVIDERS=all         all three detected
+  PREVIEW_SESSION=qr_pending  PREVIEW_PROVIDERS=ollama-down installed but not running
+`
+		: ''
+}
 Open "Quote Gallery" for every quote subtype, the reaction chips, and the
 unread boundary. "Group Sandbox" covers group sender attribution.
 "Felix De Groene" is the W4-U16 masked-name case — the chat list must show
