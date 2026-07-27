@@ -7,7 +7,7 @@ import {
 	type MediaState,
 	type Message
 } from '../store/messages.js';
-import { usableName } from '../../src/lib/client/names.js';
+import { usableName } from '../../shared/names.js';
 
 export type IdentityView = {
 	/** Stable stored identity; `me` represents the linked owner account. */

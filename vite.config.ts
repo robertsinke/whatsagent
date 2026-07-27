@@ -45,7 +45,14 @@ export default defineConfig({
 		// (`message-runs.ts`, `scroll-anchor.ts`). Rendering itself stays untested —
 		// no jsdom, no component harness — so the split is deliberate: anything worth
 		// asserting lives in a `.ts` next to the component.
-		include: ['server/**/*.test.ts', 'src/lib/**/*.test.ts', 'scripts/**/*.test.ts'],
+		include: [
+			'server/**/*.test.ts',
+			'src/lib/**/*.test.ts',
+			'scripts/**/*.test.ts',
+			// `shared/` is imported by both the server and the client bundle, so its
+			// tests belong to neither side and would otherwise run nowhere.
+			'shared/**/*.test.ts'
+		],
 		environment: 'node'
 	}
 });

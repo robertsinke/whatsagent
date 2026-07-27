@@ -9,7 +9,7 @@ import type {
 	SessionStatus,
 	SessionView
 } from './types.js';
-import { usableName } from './names.js';
+import { usableName } from '../../../shared/names.js';
 
 export type ChatTab = 'all' | 'needs-reply' | 'groups';
 

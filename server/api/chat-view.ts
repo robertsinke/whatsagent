@@ -4,7 +4,7 @@ import { resolveContact } from '../store/contacts.js';
 import { getDraft } from '../store/drafts.js';
 import { getLastMessage } from '../store/messages.js';
 import { isMediaType } from './message-view.js';
-import { usableName } from '../../src/lib/client/names.js';
+import { usableName } from '../../shared/names.js';
 
 /**
  * Chat row as the SPA consumes it. Everything the list needs is decided here:

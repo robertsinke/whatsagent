@@ -27,7 +27,7 @@ import {
 	upsertMessageReaction,
 	type Message
 } from '../../store/messages.js';
-import { isPhoneShapedLabel, usableName } from '../../../src/lib/client/names.js';
+import { isPhoneShapedLabel, usableName } from '../../../shared/names.js';
 
 export type HistorySetPayload = {
 	chats: Chat[];
