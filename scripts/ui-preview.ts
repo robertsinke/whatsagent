@@ -200,6 +200,16 @@ if (process.env.PREVIEW_SPLIT_IDENTITY === '1') {
 	});
 }
 
+/**
+ * W4-U15 — a 1:1 chat the deterministic classifier declines: the owner sent the
+ * last message and then skipped the chat. No draft row exists, so this is where
+ * the "Generate draft" affordance has to be visible.
+ */
+const OWNER_LAST = '31612345678@s.whatsapp.net';
+upsertChat(db, { jid: OWNER_LAST, name: 'Nadia Bakker', kind: '1:1', last_msg_at: at(), unread: 0, agent_state: 'skipped' });
+upsertMessage(db, { id: 'o-1', chat_jid: OWNER_LAST, from_me: false, ts: at(), type: 'text', text: 'Heb je de cijfers van vorige maand nog ergens?' });
+upsertMessage(db, { id: 'o-2', chat_jid: OWNER_LAST, from_me: true, ts: at(), type: 'text', text: 'Ja, ik zoek ze even op — kom er zo op terug.' });
+
 const fakeProvider: DraftProvider = {
 	draft: async (): Promise<DraftResult> => ({ kind: 'draft', text: 'Preview draft — no provider was called.' })
 };
