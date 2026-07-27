@@ -16,6 +16,13 @@ import {
 	type SocketFactory,
 	type WhatsAppSocket
 } from './connection.js';
+import {
+	FIXTURE_OWNER_LID,
+	FIXTURE_OWNER_LID_JID,
+	FIXTURE_OWNER_NAME,
+	FIXTURE_OWNER_PHONE,
+	FIXTURE_OWNER_PHONE_JID
+} from '../../../shared/test-fixtures.js';
 
 class FakeSocket implements WhatsAppSocket {
 	readonly handlers = new Map<string, ((...args: any[]) => void)[]>();
@@ -239,12 +246,12 @@ describe('WhatsApp connection', () => {
 		const authStore = createSqliteAuthStore(database, Buffer.alloc(32, 4));
 		await authStore.state.keys.set({
 			'lid-mapping': {
-				'203663104602149_reverse': '31683799485'
+				[`${FIXTURE_OWNER_LID}_reverse`]: FIXTURE_OWNER_PHONE
 			}
 		});
 		upsertContact(database, {
-			jid: '31683799485@s.whatsapp.net',
-			name: 'Robert'
+			jid: FIXTURE_OWNER_PHONE_JID,
+			name: FIXTURE_OWNER_NAME
 		});
 		const fake = fakeSocketFactory();
 		const connection = new WhatsAppConnection(database, {
@@ -255,10 +262,10 @@ describe('WhatsApp connection', () => {
 
 		await connection.start();
 
-		expect(getContact(database, '203663104602149@lid')).toMatchObject({
-			name: 'Robert',
-			lid_jid: '203663104602149@lid',
-			phone_jid: '31683799485@s.whatsapp.net'
+		expect(getContact(database, FIXTURE_OWNER_LID_JID)).toMatchObject({
+			name: FIXTURE_OWNER_NAME,
+			lid_jid: FIXTURE_OWNER_LID_JID,
+			phone_jid: FIXTURE_OWNER_PHONE_JID
 		});
 		expect(fake.sockets).toHaveLength(1);
 	});

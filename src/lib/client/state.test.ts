@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppState } from './state.svelte.js';
 import type { Chat, Draft, Message } from './types.js';
 import { deriveUnreadBoundaryFromCursor } from './view.js';
+import { FIXTURE_SPLIT_LID_JID } from '../../../shared/test-fixtures.js';
 
 function jsonResponse(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), {
@@ -1071,7 +1072,7 @@ describe('AppState owner-triggered draft generation', () => {
 describe('AppState chat identity merge', () => {
 	afterEach(() => vi.restoreAllMocks());
 
-	const LID = '27599493410860@lid';
+	const LID = FIXTURE_SPLIT_LID_JID;
 
 	it('drops the merged-away chat and follows the selection into the survivor', async () => {
 		const state = new AppState();

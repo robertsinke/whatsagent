@@ -27,6 +27,7 @@ import { createWhatsAppSendTransport } from './channels/whatsapp/send.js';
 import type { ServerEvent } from './api/events.js';
 import type { Memory } from './agent/memory/memory.js';
 import { getSetting, setSetting } from './store/settings.js';
+import { FIXTURE_CHAT_LID_JID, FIXTURE_GROUP_JID } from '../shared/test-fixtures.js';
 
 class FakeChannel implements Channel {
 	readonly listeners = new Set<ChannelEventListener>();
@@ -176,7 +177,7 @@ describe('owner-sent messages reach the conversation live', () => {
 	}
 
 	it('emits exactly one message-new for a text the owner sent', async () => {
-		const chatJid = '110573949866107@lid';
+		const chatJid = FIXTURE_CHAT_LID_JID;
 		const { socket, events, outboxId } = await startSendingApp(chatJid, (database) =>
 			enqueueManualOutbox(database, {
 				chatJid,
@@ -208,7 +209,7 @@ describe('owner-sent messages reach the conversation live', () => {
 	});
 
 	it('keeps an owner reaction on the message-updated path with no message-new', async () => {
-		const chatJid = '31653244557-1532101770@g.us';
+		const chatJid = FIXTURE_GROUP_JID;
 		const { events, outboxId } = await startSendingApp(chatJid, (database) =>
 			enqueueReactionOutbox(database, {
 				chatJid,

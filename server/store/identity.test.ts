@@ -9,9 +9,15 @@ import { getDraft, upsertDraft } from './drafts.js';
 import { canonicalChatJid, linkIdentityAndMergeChats, mergeChats } from './identity.js';
 import { listMessages, upsertMessage, upsertMessageReaction } from './messages.js';
 import { enqueueOutbox, listOutbox } from './outbox.js';
+import {
+	FIXTURE_SPLIT_LID_JID,
+	FIXTURE_SPLIT_NAME,
+	FIXTURE_SPLIT_NAME_SHORT,
+	FIXTURE_SPLIT_PHONE_JID
+} from '../../shared/test-fixtures.js';
 
-const LID = '27599493410860@lid';
-const PHONE = '31618155142@s.whatsapp.net';
+const LID = FIXTURE_SPLIT_LID_JID;
+const PHONE = FIXTURE_SPLIT_PHONE_JID;
 
 let dataDir: string | undefined;
 let db: AppDatabase | undefined;
@@ -75,7 +81,7 @@ describe('mergeChats', () => {
 		upsertChat(database, {
 			jid: PHONE,
 			kind: '1:1',
-			name: 'Quinten Muller',
+			name: FIXTURE_SPLIT_NAME,
 			last_msg_at: 3_000,
 			unread: 1,
 			archived: false,
@@ -125,7 +131,7 @@ describe('mergeChats', () => {
 
 		expect(getChat(database, LID)).toBeUndefined();
 		expect(getChat(database, PHONE)).toMatchObject({
-			name: 'Quinten Muller',
+			name: FIXTURE_SPLIT_NAME,
 			kind: '1:1',
 			last_msg_at: 3_000,
 			// Both counts are genuinely unread.
@@ -172,13 +178,13 @@ describe('mergeChats', () => {
 
 	it('renames a LID chat that has no phone twin', () => {
 		const database = openTempDb();
-		upsertChat(database, { jid: LID, kind: '1:1', name: 'Quinten', last_msg_at: 7, unread: 4 });
+		upsertChat(database, { jid: LID, kind: '1:1', name: FIXTURE_SPLIT_NAME_SHORT, last_msg_at: 7, unread: 4 });
 		seedMessage(database, { id: 'lid-1', chatJid: LID, ts: 7 });
 
 		mergeChats(database, LID, PHONE);
 
 		expect(listChats(database).map((c) => c.jid)).toEqual([PHONE]);
-		expect(getChat(database, PHONE)).toMatchObject({ name: 'Quinten', unread: 4, kind: '1:1' });
+		expect(getChat(database, PHONE)).toMatchObject({ name: FIXTURE_SPLIT_NAME_SHORT, unread: 4, kind: '1:1' });
 		expect(listMessages(database, PHONE).map((m) => m.id)).toEqual(['lid-1']);
 	});
 });
@@ -222,7 +228,7 @@ describe('migration 011', () => {
 
 	it('merges a duplicated pair carrying drafts and outbox rows, losing nothing', () => {
 		const database = openTempDb();
-		linkContactIdentity(database, { lidJid: LID, phoneJid: PHONE, name: 'Quinten Muller' });
+		linkContactIdentity(database, { lidJid: LID, phoneJid: PHONE, name: FIXTURE_SPLIT_NAME });
 
 		upsertChat(database, { jid: PHONE, kind: '1:1', last_msg_at: 3_000, unread: 1 });
 		upsertChat(database, { jid: LID, kind: '1:1', last_msg_at: 4_000, unread: 2, archived: true });

@@ -34,6 +34,12 @@ import { upsertDraft } from '../server/store/drafts.js';
 import { linkContactIdentity } from '../server/store/contacts.js';
 import { linkIdentityAndMergeChats } from '../server/store/identity.js';
 import type { DraftProvider, DraftResult } from '../server/providers/provider.js';
+import {
+	FIXTURE_PHONE_JID,
+	FIXTURE_SPLIT_LID_JID,
+	FIXTURE_SPLIT_NAME,
+	FIXTURE_SPLIT_PHONE_JID
+} from '../shared/test-fixtures.js';
 
 const dataDir = mkdtempSync(join(tmpdir(), 'whatsagent-ui-preview-'));
 
@@ -202,7 +208,7 @@ upsertMessage(db, { id: 'g-3', chat_jid: GROUP, from_me: true, ts: at(), type: '
  * masks and the chat list shows the contact name. This seed is the case the
  * next worker inherits.
  */
-const MASKED = '31612345678@s.whatsapp.net';
+const MASKED = FIXTURE_PHONE_JID;
 upsertChat(db, {
 	jid: MASKED,
 	// The exact WhatsApp privacy mask shape, with U+2219 dot characters.
@@ -215,16 +221,16 @@ upsertContact(db, { jid: MASKED, name: 'Felix De Groene' });
 upsertMessage(db, { id: 'masked-1', chat_jid: MASKED, from_me: false, sender: MASKED, ts: at(), type: 'text', text: 'Heb je de notities nog?' });
 
 /**
- * W4-U13 — a contact WhatsApp has migrated to LID addressing. The owner's real
- * data now contains four of these; the preview carries one so the chat list can
- * be looked at on both sides of the merge.
+ * W4-U13 — a contact WhatsApp has migrated to LID addressing. The preview
+ * carries one synthetic pair so the chat list can be looked at on both sides
+ * of the merge.
  *
- * `PREVIEW_SPLIT_IDENTITY=1` seeds the pair and stops there — the duplicate the
- * owner actually saw. Without it, the same seed goes through the production
- * convergence path and the list shows the single canonical chat.
+ * `PREVIEW_SPLIT_IDENTITY=1` seeds the pair and stops there — the pre-merge
+ * duplicate. Without it, the same seed goes through the production convergence
+ * path and the list shows the single canonical chat.
  */
-const SPLIT_LID = '27599493410860@lid';
-const SPLIT_PHONE = '31618155142@s.whatsapp.net';
+const SPLIT_LID = FIXTURE_SPLIT_LID_JID;
+const SPLIT_PHONE = FIXTURE_SPLIT_PHONE_JID;
 upsertChat(db, { jid: SPLIT_PHONE, kind: '1:1', last_msg_at: at(), unread: 0 });
 upsertMessage(db, { id: 's-1', chat_jid: SPLIT_PHONE, from_me: false, ts: at(), type: 'text', text: 'Zullen we het zo even doornemen?' });
 upsertMessage(db, { id: 's-2', chat_jid: SPLIT_PHONE, from_me: true, ts: at(), type: 'text', text: 'Ja prima — ik stuur je zo de opzet door.' });
@@ -235,13 +241,13 @@ if (process.env.PREVIEW_SPLIT_IDENTITY === '1') {
 	linkContactIdentity(db, {
 		lidJid: SPLIT_LID,
 		phoneJid: SPLIT_PHONE,
-		name: 'Quinten Muller'
+		name: FIXTURE_SPLIT_NAME
 	});
 } else {
 	linkIdentityAndMergeChats(db, {
 		lidJid: SPLIT_LID,
 		phoneJid: SPLIT_PHONE,
-		name: 'Quinten Muller'
+		name: FIXTURE_SPLIT_NAME
 	});
 }
 
@@ -250,7 +256,7 @@ if (process.env.PREVIEW_SPLIT_IDENTITY === '1') {
  * last message and then skipped the chat. No draft row exists, so this is where
  * the "Generate draft" affordance has to be visible.
  */
-const OWNER_LAST = '31612345678@s.whatsapp.net';
+const OWNER_LAST = FIXTURE_PHONE_JID;
 upsertChat(db, { jid: OWNER_LAST, name: 'Nadia Bakker', kind: '1:1', last_msg_at: at(), unread: 0, agent_state: 'skipped' });
 upsertMessage(db, { id: 'o-1', chat_jid: OWNER_LAST, from_me: false, ts: at(), type: 'text', text: 'Heb je de cijfers van vorige maand nog ergens?' });
 upsertMessage(db, { id: 'o-2', chat_jid: OWNER_LAST, from_me: true, ts: at(), type: 'text', text: 'Ja, ik zoek ze even op — kom er zo op terug.' });

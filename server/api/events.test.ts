@@ -6,6 +6,7 @@ import { getChat, upsertChat } from '../store/chats.js';
 import { openDatabase, type AppDatabase } from '../store/db.js';
 import { upsertMessage } from '../store/messages.js';
 import { EventBus, createIngestEventHooks, type ServerEvent } from './events.js';
+import { FIXTURE_EVENTS_PHONE } from '../../shared/test-fixtures.js';
 
 let dataDir: string | undefined;
 let db: AppDatabase | undefined;
@@ -32,15 +33,16 @@ describe('chat-updated events', () => {
 	 */
 	it('carry the full client-facing view, never the raw store row', () => {
 		const database = openTempDb();
+		const jid = `${FIXTURE_EVENTS_PHONE}@s.whatsapp.net`;
 		upsertChat(database, {
-			jid: '31600000000@s.whatsapp.net',
+			jid,
 			name: null,
 			kind: '1:1',
 			last_msg_at: 1_700_000_000
 		});
 		upsertMessage(database, {
 			id: 'inbound-1',
-			chat_jid: '31600000000@s.whatsapp.net',
+			chat_jid: jid,
 			from_me: false,
 			ts: 1_700_000_000,
 			text: 'hoi'
@@ -50,16 +52,14 @@ describe('chat-updated events', () => {
 		const bus = new EventBus();
 		bus.subscribe((event) => events.push(event));
 
-		createIngestEventHooks(bus, database).onChatUpdated(
-			getChat(database, '31600000000@s.whatsapp.net')!
-		);
+		createIngestEventHooks(bus, database).onChatUpdated(getChat(database, jid)!);
 
 		expect(events).toHaveLength(1);
 		const event = events[0]!;
 		expect(event.type).toBe('chat-updated');
 		if (event.type !== 'chat-updated') throw new Error('unreachable');
 		// Every field the chat list renders must be present.
-		expect(event.chat.display_jid).toBe('31600000000@s.whatsapp.net');
+		expect(event.chat.display_jid).toBe(jid);
 		expect(event.chat.preview).toBe('hoi');
 		expect(event.chat.preview_from_me).toBe(false);
 		expect(event.chat.needs_reply).toBe(true);

@@ -28,6 +28,15 @@ import {
 	toChatRow,
 	unreadBoundaryLabel
 } from './view.js';
+import {
+	FIXTURE_CONTACT_LID,
+	FIXTURE_CONTACT_LID_JID,
+	FIXTURE_CONTACT_PHONE,
+	FIXTURE_CONTACT_PHONE_JID,
+	FIXTURE_OWNER_LID_JID,
+	FIXTURE_OWNER_PHONE,
+	FIXTURE_OWNER_PHONE_JID
+} from '../../../shared/test-fixtures.js';
 
 function chat(overrides: Partial<Chat> = {}): Chat {
 	return {
@@ -95,12 +104,12 @@ describe('chat row', () => {
 	it('uses the phone alias instead of rendering an opaque LID as a number', () => {
 		const row = toChatRow(
 			chat({
-				jid: '203663104602149@lid',
-				display_jid: '31683799485@s.whatsapp.net',
+				jid: FIXTURE_OWNER_LID_JID,
+				display_jid: FIXTURE_OWNER_PHONE_JID,
 				name: null
 			})
 		);
-		expect(row.name).toBe('+31683799485');
+		expect(row.name).toBe(`+${FIXTURE_OWNER_PHONE}`);
 	});
 
 	it('renders relative times: today, yesterday, this week, older', () => {
@@ -769,20 +778,29 @@ describe('no-autonomous-send invariant (R9)', () => {
 
 describe('jidDigits — phone-number search (W4 follow-up)', () => {
 	it('collects digits from the jid', () => {
-		expect(jidDigits({ jid: '31620135489@s.whatsapp.net', display_jid: '31620135489@s.whatsapp.net' }))
-			.toBe('31620135489');
+		expect(
+			jidDigits({ jid: FIXTURE_CONTACT_PHONE_JID, display_jid: FIXTURE_CONTACT_PHONE_JID })
+		).toBe(FIXTURE_CONTACT_PHONE);
 	});
 
 	it('includes both sides of a LID/phone pair so either number matches', () => {
-		const digits = jidDigits({ jid: '107777976484081@lid', display_jid: '31620135489@s.whatsapp.net' });
-		expect(digits).toContain('31620135489');
-		expect(digits).toContain('107777976484081');
+		const digits = jidDigits({
+			jid: FIXTURE_CONTACT_LID_JID,
+			display_jid: FIXTURE_CONTACT_PHONE_JID
+		});
+		expect(digits).toContain(FIXTURE_CONTACT_PHONE);
+		expect(digits).toContain(FIXTURE_CONTACT_LID);
 	});
 
 	it('does not run the two jids together into a false match', () => {
-		// '4890107' would be a substring if the two jids were concatenated bare.
-		const digits = jidDigits({ jid: '107777976484081@lid', display_jid: '31620135489@s.whatsapp.net' });
-		expect(digits.includes('4890107')).toBe(false);
+		// jidDigits joins with a space. Without it, the last digits of the phone
+		// and the first digits of the LID would form a spanning substring.
+		const digits = jidDigits({
+			jid: FIXTURE_CONTACT_LID_JID,
+			display_jid: FIXTURE_CONTACT_PHONE_JID
+		});
+		const spanning = FIXTURE_CONTACT_PHONE.slice(-3) + FIXTURE_CONTACT_LID.slice(0, 4);
+		expect(digits.includes(spanning)).toBe(false);
 	});
 });
 
@@ -792,17 +810,17 @@ describe('jidDigits — phone-number search (W4 follow-up)', () => {
  * froze the chat list (stale selection, dead chat switching).
  */
 describe('rendering a chat that is missing display_jid never throws', () => {
-	const partial = { jid: '31620135489@s.whatsapp.net', name: null } as unknown as Chat;
+	const partial = { jid: FIXTURE_CONTACT_PHONE_JID, name: null } as unknown as Chat;
 
 	it('displayName falls back to the routing jid', () => {
-		expect(displayName(partial)).toBe('+31620135489');
+		expect(displayName(partial)).toBe(`+${FIXTURE_CONTACT_PHONE}`);
 	});
 
 	it('jidDigits still yields searchable digits', () => {
-		expect(jidDigits(partial)).toContain('31620135489');
+		expect(jidDigits(partial)).toContain(FIXTURE_CONTACT_PHONE);
 	});
 
 	it('toChatRow renders the row', () => {
-		expect(toChatRow(partial).name).toBe('+31620135489');
+		expect(toChatRow(partial).name).toBe(`+${FIXTURE_CONTACT_PHONE}`);
 	});
 });

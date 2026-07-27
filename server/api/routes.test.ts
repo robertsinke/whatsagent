@@ -16,6 +16,11 @@ import type { Memory } from '../agent/memory/memory.js';
 import type { DraftProvider } from '../providers/provider.js';
 import type { WhatsAppSendTransport } from '../channels/whatsapp/send.js';
 import { handleHistorySet, type HistorySetPayload } from '../channels/whatsapp/ingest.js';
+import {
+	FIXTURE_OWNER_LID_JID,
+	FIXTURE_OWNER_NAME,
+	FIXTURE_OWNER_PHONE_JID
+} from '../../shared/test-fixtures.js';
 
 let dataDir: string | undefined;
 let app: App | undefined;
@@ -191,17 +196,17 @@ describe('GET /api/chats', () => {
 	it('projects saved contact names and phone aliases without changing the routing jid', async () => {
 		await startTestApp();
 		upsertChat(db!, {
-			jid: '203663104602149@lid',
+			jid: FIXTURE_OWNER_LID_JID,
 			kind: '1:1',
 			last_msg_at: 100
 		});
 		upsertContact(db!, {
-			jid: '31683799485@s.whatsapp.net',
-			name: 'Robert'
+			jid: FIXTURE_OWNER_PHONE_JID,
+			name: FIXTURE_OWNER_NAME
 		});
 		linkContactIdentity(db!, {
-			lidJid: '203663104602149@lid',
-			phoneJid: '31683799485@s.whatsapp.net'
+			lidJid: FIXTURE_OWNER_LID_JID,
+			phoneJid: FIXTURE_OWNER_PHONE_JID
 		});
 
 		const response = await api('/api/chats');
@@ -210,9 +215,9 @@ describe('GET /api/chats', () => {
 		};
 
 		expect(body.items[0]).toMatchObject({
-			jid: '203663104602149@lid',
-			display_jid: '31683799485@s.whatsapp.net',
-			name: 'Robert'
+			jid: FIXTURE_OWNER_LID_JID,
+			display_jid: FIXTURE_OWNER_PHONE_JID,
+			name: FIXTURE_OWNER_NAME
 		});
 	});
 });
