@@ -9,7 +9,7 @@
  */
 
 import type { Message } from '$lib/client/types.js';
-import { senderLabel, type UnreadBoundary } from '$lib/client/view.js';
+import { epochMilliseconds, senderLabel, type UnreadBoundary } from '$lib/client/view.js';
 
 export type StreamRow = {
 	message: Message;
@@ -39,7 +39,10 @@ function sameSender(a: Message, b: Message): boolean {
 
 function isNewDay(previous: Message | undefined, current: Message): boolean {
 	if (!previous) return true;
-	return new Date(previous.ts).toDateString() !== new Date(current.ts).toDateString();
+	return (
+		new Date(epochMilliseconds(previous.ts)).toDateString() !==
+		new Date(epochMilliseconds(current.ts)).toDateString()
+	);
 }
 
 export function buildStreamRows(messages: Message[], options: StreamRowOptions): StreamRow[] {

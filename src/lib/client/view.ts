@@ -27,7 +27,8 @@ export type ChatRowView = {
 
 const DAY_MS = 86_400_000;
 
-function epochMilliseconds(ts: number): number {
+/** WhatsApp stores timestamps in seconds; tolerate either unit. */
+export function epochMilliseconds(ts: number): number {
 	return ts > 0 && ts < 1_000_000_000_000 ? ts * 1000 : ts;
 }
 
@@ -86,6 +87,31 @@ export function formatMessageTime(ts: number): string {
 		hour: '2-digit',
 		minute: '2-digit'
 	});
+}
+
+/**
+ * Conversation day-divider label. Same relative ladder as {@link formatChatTime}
+ * (today / yesterday / this week / older), but worded for a readable chip rather
+ * than a compact list stamp — and carries the year once the date leaves the
+ * current calendar year.
+ */
+export function formatDayDivider(ts: number, now: number = Date.now()): string {
+	const normalizedTs = epochMilliseconds(ts);
+	const then = new Date(normalizedTs);
+	const today = new Date(now);
+	const sameDay =
+		then.getFullYear() === today.getFullYear() &&
+		then.getMonth() === today.getMonth() &&
+		then.getDate() === today.getDate();
+	if (sameDay) return 'Today';
+	if (now - normalizedTs < 2 * DAY_MS) return 'Yesterday';
+	if (now - normalizedTs < 7 * DAY_MS) {
+		return then.toLocaleDateString(undefined, { weekday: 'long' });
+	}
+	if (then.getFullYear() === today.getFullYear()) {
+		return then.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+	}
+	return then.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 export function toChatRow(chat: Chat, now: number = Date.now()): ChatRowView {

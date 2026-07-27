@@ -9,7 +9,7 @@
 	import MessageBubble from './MessageBubble.svelte';
 	import { buildStreamRows } from './message-runs.js';
 	import type { ChatKind, Message } from '$lib/client/types.js';
-	import { unreadBoundaryLabel, type UnreadBoundary } from '$lib/client/view.js';
+	import { formatDayDivider, unreadBoundaryLabel, type UnreadBoundary } from '$lib/client/view.js';
 
 	let {
 		chatJid,
@@ -147,11 +147,7 @@
 	}
 
 	function dayLabel(ts: number): string {
-		return new Date(ts).toLocaleDateString(undefined, {
-			weekday: 'long',
-			day: 'numeric',
-			month: 'short'
-		});
+		return formatDayDivider(ts);
 	}
 
 	/** U5 — the stream container, for `querySelector` on a jump target. */

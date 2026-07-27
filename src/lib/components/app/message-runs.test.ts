@@ -3,8 +3,10 @@ import { buildStreamRows } from './message-runs.js';
 import type { IdentityView, Message } from '$lib/client/types.js';
 
 const GROUP = 'crew@g.us';
-const DAY = 86_400_000;
-const BASE = Date.UTC(2026, 6, 20, 12, 0, 0);
+/** One calendar day in WhatsApp's stored unit (seconds). */
+const DAY = 86_400;
+/** 2026-07-20 12:00:00 UTC, as the database stores it. */
+const BASE = Math.floor(Date.UTC(2026, 6, 20, 12, 0, 0) / 1000);
 
 function who(jid: string, name?: string): IdentityView {
 	return { jid, display_jid: jid, name: name ?? jid };
@@ -33,10 +35,10 @@ describe('group sender runs', () => {
 		const rows = buildStreamRows(
 			[
 				msg('a', { ts: BASE }),
-				msg('b', { ts: BASE + 1000 }),
-				msg('c', { ts: BASE + 2000, sender: sam }),
-				msg('d', { ts: BASE + 3000, sender: sam }),
-				msg('e', { ts: BASE + 4000 })
+				msg('b', { ts: BASE + 1 }),
+				msg('c', { ts: BASE + 2, sender: sam }),
+				msg('d', { ts: BASE + 3, sender: sam }),
+				msg('e', { ts: BASE + 4 })
 			],
 			{ isGroup: true }
 		);
@@ -47,8 +49,8 @@ describe('group sender runs', () => {
 		const rows = buildStreamRows(
 			[
 				msg('a', { ts: BASE }),
-				msg('b', { ts: BASE + 1000, from_me: true, sender: null }),
-				msg('c', { ts: BASE + 2000 })
+				msg('b', { ts: BASE + 1, from_me: true, sender: null }),
+				msg('c', { ts: BASE + 2 })
 			],
 			{ isGroup: true }
 		);
@@ -57,7 +59,7 @@ describe('group sender runs', () => {
 	});
 
 	it('leaves 1:1 conversations unlabelled', () => {
-		const rows = buildStreamRows([msg('a'), msg('b', { ts: BASE + 1000 })], { isGroup: false });
+		const rows = buildStreamRows([msg('a'), msg('b', { ts: BASE + 1 })], { isGroup: false });
 		expect(rows.every((r) => !r.showSender && r.senderLabel === null)).toBe(true);
 	});
 
@@ -71,7 +73,7 @@ describe('group sender runs', () => {
 		const messages = [
 			msg('a', { ts: BASE }),
 			msg('b', { ts: BASE + DAY }),
-			msg('c', { ts: BASE + DAY + 1000 })
+			msg('c', { ts: BASE + DAY + 1 })
 		];
 		const rows = buildStreamRows(messages, {
 			isGroup: true,
@@ -84,12 +86,34 @@ describe('group sender runs', () => {
 	});
 
 	it('renders at most one unread marker and none without a boundary', () => {
-		const messages = [msg('a'), msg('b', { ts: BASE + 1000 })];
+		const messages = [msg('a'), msg('b', { ts: BASE + 1 })];
 		expect(buildStreamRows(messages, { isGroup: true }).some((r) => r.unreadMarker)).toBe(false);
 		const marked = buildStreamRows(messages, {
 			isGroup: true,
 			unreadBoundary: { firstUnreadId: 'b', count: 1, exact: true }
 		});
 		expect(marked.filter((r) => r.unreadMarker)).toHaveLength(1);
+	});
+});
+
+describe('day dividers (second-precision timestamps)', () => {
+	it('marks a new day for each of three calendar days', () => {
+		const rows = buildStreamRows(
+			[
+				msg('d0', { ts: BASE }),
+				msg('d1', { ts: BASE + DAY }),
+				msg('d2', { ts: BASE + 2 * DAY })
+			],
+			{ isGroup: false }
+		);
+		expect(rows.map((r) => r.newDay)).toEqual([true, true, true]);
+	});
+
+	it('keeps one divider when two messages are minutes apart on the same day', () => {
+		const rows = buildStreamRows(
+			[msg('a', { ts: BASE }), msg('b', { ts: BASE + 5 * 60 })],
+			{ isGroup: false }
+		);
+		expect(rows.map((r) => r.newDay)).toEqual([true, false]);
 	});
 });
