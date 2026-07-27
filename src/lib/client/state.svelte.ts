@@ -226,7 +226,12 @@ export class AppState {
 		this.selectedJid = jid;
 		if (chatChanged) this.replyTarget = null;
 		if (chatChanged) this.jumpTarget = null;
-		this.loadingMessages = true;
+		// W4-U14: a same-chat reopen that already has a loaded window must not
+		// flip `loadingMessages` — ConversationPane unmounts the stream while
+		// loading is true, which would yank the owner's scroll position even
+		// when the message array is preserved below.
+		const preserveWindow = !chatChanged && this.messages.length > 0;
+		if (!preserveWindow) this.loadingMessages = true;
 		this.stalePrompt = null;
 		// Refinement error is chat-scoped: a new selection (or same-chat reload)
 		// clears it. `refining` is left untouched — an in-flight request is not
@@ -238,14 +243,31 @@ export class AppState {
 		try {
 			const messages = await api.messages(jid, { limit: PAGE_SIZE });
 			if (epoch !== this.#conversationEpoch || this.selectedJid !== jid) return;
-			this.messages = mergeMessages([], messages);
-			this.hasMoreMessages = messages.length >= PAGE_SIZE;
+			if (preserveWindow) {
+				// Re-merge the fresh newest page into the existing array. One
+				// request regardless of how deep the reader has paged — never
+				// refetch every loaded page. Messages the newest page no longer
+				// contains stay on screen: history sync only adds rows, and a
+				// deletion (rare) would arrive via `message-updated` / a later
+				// explicit navigation, not via this coalesced resync.
+				this.messages = mergeMessages(this.messages, messages);
+				// Do not touch hasMoreMessages: that flag is about the OLDEST
+				// edge of the window. A newest-page fetch cannot speak for it,
+				// and recomputing from a full newest page would falsely revive
+				// "load earlier" after loadOlder had cleared it.
+			} else {
+				this.messages = mergeMessages([], messages);
+				this.hasMoreMessages = messages.length >= PAGE_SIZE;
+			}
 			if (resnapshotUnread) {
 				this.#unreadAtOpen = unreadBeforeOpen;
 				this.#cursorAtOpen = cursorBeforeOpen;
 				// U4: prefer the persisted cursor. Fall back to the count-based
 				// placement for chats that have never been opened locally since
 				// migration 010 — the boundary never regresses.
+				// When preserving the window, resnapshotUnread is false on the
+				// resync path (markRead: false) so the boundary stays put; a
+				// chat switch still derives against the fresh page below.
 				this.unreadBoundary = cursorBeforeOpen
 					? deriveUnreadBoundaryFromCursor(messages, cursorBeforeOpen, unreadBeforeOpen)
 					: deriveUnreadBoundary(messages, unreadBeforeOpen);
