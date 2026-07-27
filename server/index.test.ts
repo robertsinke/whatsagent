@@ -2,19 +2,29 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { WAMessage, WAMessageKey } from 'baileys';
 import type { Channel, ChannelEvent, ChannelEventListener } from './channels/channel.js';
 import type { DraftProvider } from './providers/provider.js';
 import { upsertChat } from './store/chats.js';
 import { openDatabase, type AppDatabase } from './store/db.js';
 import { getDraft } from './store/drafts.js';
 import { getMessage, upsertMessage } from './store/messages.js';
-import { enqueueDraftOutbox, getOutbox } from './store/outbox.js';
+import { enqueueDraftOutbox, enqueueManualOutbox, enqueueReactionOutbox, getOutbox } from './store/outbox.js';
 import {
 	createApp,
 	HISTORY_SYNC_COMPLETE_SETTING,
 	resolveOutboxDryRun,
 	type App
 } from './index.js';
+import { createSqliteAuthStore } from './channels/whatsapp/auth-store.js';
+import {
+	WA_WEB_VERSION_FALLBACK,
+	WhatsAppConnection,
+	type SocketFactory,
+	type WhatsAppSocket
+} from './channels/whatsapp/connection.js';
+import { createWhatsAppSendTransport } from './channels/whatsapp/send.js';
+import type { ServerEvent } from './api/events.js';
 import type { Memory } from './agent/memory/memory.js';
 import { getSetting, setSetting } from './store/settings.js';
 
@@ -30,6 +40,64 @@ class FakeChannel implements Channel {
 
 	emit(event: ChannelEvent): void {
 		for (const listener of this.listeners) listener(event);
+	}
+}
+
+/**
+ * A Baileys socket stand-in that reproduces `emitOwnEvents`: every successful
+ * `sendMessage` re-emits the sent envelope back on `ev` as a
+ * `messages.upsert` of type `append`, exactly as `Socket/messages-send.js`
+ * does on `process.nextTick` after `relayMessage` resolves. Sends never leave
+ * the process — this is how an outbound message is reproduced without putting
+ * a second socket on the owner's live account.
+ */
+class FakeWaSocket implements WhatsAppSocket {
+	readonly handlers = new Map<string, ((...args: any[]) => void)[]>();
+	readonly sent: WAMessage[] = [];
+	readonly end = vi.fn();
+	readonly ev = {
+		on: (event: string, handler: (...args: any[]) => void) => {
+			const list = this.handlers.get(event) ?? [];
+			list.push(handler);
+			this.handlers.set(event, list);
+		}
+	};
+
+	readonly sendPresenceUpdate = vi.fn(async () => undefined);
+	readonly readMessages = vi.fn(async () => undefined);
+
+	readonly sendMessage = vi.fn(
+		async (
+			jid: string,
+			content: { text: string } | { react: { text: string; key: WAMessageKey } },
+			options?: { messageId: string; quoted?: WAMessage }
+		) => {
+			const fullMsg = {
+				key: { remoteJid: jid, fromMe: true, id: options?.messageId ?? 'WA-GENERATED-ID' },
+				message:
+					'react' in content
+						? {
+								reactionMessage: {
+									key: content.react.key,
+									text: content.react.text,
+									senderTimestampMs: 1_700_000_100_000
+								}
+							}
+						: {
+								extendedTextMessage: { text: content.text },
+								messageContextInfo: { messageSecret: 'c2VjcmV0' }
+							},
+				messageTimestamp: 1_700_000_100,
+				status: 'PENDING'
+			} as unknown as WAMessage;
+			this.sent.push(fullMsg);
+			this.emit('messages.upsert', { messages: [fullMsg], type: 'append' });
+			return fullMsg;
+		}
+	);
+
+	emit(event: string, payload: unknown): void {
+		for (const handler of this.handlers.get(event) ?? []) handler(payload);
 	}
 }
 
@@ -49,6 +117,121 @@ afterEach(async () => {
 	}
 	if (dataDir) rmSync(dataDir, { recursive: true, force: true });
 	dataDir = undefined;
+});
+
+describe('owner-sent messages reach the conversation live', () => {
+	async function startSendingApp(chatJid: string, enqueue: (db: AppDatabase) => number) {
+		dataDir = mkdtempSync(join(tmpdir(), 'whatsagent-live-send-'));
+		db = openDatabase({ dataDir });
+		upsertChat(db, { jid: chatJid, kind: '1:1', last_msg_at: 10 });
+		upsertMessage(db, {
+			id: 'INBOUND-1',
+			chat_jid: chatJid,
+			from_me: false,
+			ts: 10,
+			text: 'their message',
+			raw: JSON.stringify({
+				key: { remoteJid: chatJid, fromMe: false, id: 'INBOUND-1' },
+				message: { conversation: 'their message' },
+				messageTimestamp: 10
+			})
+		});
+
+		const sockets: FakeWaSocket[] = [];
+		const socketFactory: SocketFactory = () => {
+			const socket = new FakeWaSocket();
+			sockets.push(socket);
+			return socket;
+		};
+		const channel = new WhatsAppConnection(db, {
+			authStore: createSqliteAuthStore(db, Buffer.alloc(32, 7)),
+			socketFactory,
+			waVersion: WA_WEB_VERSION_FALLBACK,
+			reconnectDelayMs: 10_000
+		});
+		app = createApp({
+			db,
+			channel,
+			port: 0,
+			staticDir: null,
+			outboxTransport: createWhatsAppSendTransport(() => channel.getSendSocket()),
+			// The transport is a local fake; nothing leaves the process.
+			outboxPacer: {
+				dryRun: false,
+				manualPresenceMs: 0,
+				minDraftDelayMs: 0,
+				maxDraftDelayMs: 0,
+				// The pacer drains once at start(), before the socket reports
+				// `connected`; that first attempt fails fast and retries.
+				retryDelayMs: 10
+			}
+		});
+		// Queued before start so the `connected` transition is the pacer's wake.
+		const outboxId = enqueue(db);
+		const events: ServerEvent[] = [];
+		app.events.subscribe((event) => events.push(event));
+		await app.start();
+		sockets[0]!.emit('connection.update', { connection: 'open' });
+		return { chatJid, socket: sockets[0]!, events, outboxId };
+	}
+
+	it('emits exactly one message-new for a text the owner sent', async () => {
+		const chatJid = '110573949866107@lid';
+		const { socket, events, outboxId } = await startSendingApp(chatJid, (database) =>
+			enqueueManualOutbox(database, {
+				chatJid,
+				text: 'So should I or you send it?',
+				now: Date.now()
+			})
+		);
+		const messageId = getOutbox(db!, outboxId)!.message_id!;
+
+		await vi.waitFor(() => expect(getOutbox(db!, outboxId)?.status).toBe('sent'));
+		await vi.waitFor(() =>
+			expect(events.filter((e) => e.type === 'message-new')).toHaveLength(1)
+		);
+
+		const newEvents = events.filter(
+			(e): e is Extract<ServerEvent, { type: 'message-new' }> => e.type === 'message-new'
+		);
+		expect(newEvents[0]!.message).toMatchObject({
+			id: messageId,
+			chat_jid: chatJid,
+			from_me: true,
+			text: 'So should I or you send it?'
+		});
+
+		// The server ack replays the same append upsert; the conversation must not
+		// grow a second copy of the message.
+		socket.emit('messages.upsert', { messages: socket.sent, type: 'append' });
+		expect(events.filter((e) => e.type === 'message-new')).toHaveLength(1);
+	});
+
+	it('keeps an owner reaction on the message-updated path with no message-new', async () => {
+		const chatJid = '31653244557-1532101770@g.us';
+		const { events, outboxId } = await startSendingApp(chatJid, (database) =>
+			enqueueReactionOutbox(database, {
+				chatJid,
+				targetMsgId: 'INBOUND-1',
+				emoji: '❤️',
+				now: Date.now()
+			})
+		);
+
+		await vi.waitFor(() => expect(getOutbox(db!, outboxId)?.status).toBe('sent'));
+		await vi.waitFor(() =>
+			expect(events.filter((e) => e.type === 'message-updated')).toHaveLength(1)
+		);
+		expect(events.filter((e) => e.type === 'message-new')).toHaveLength(0);
+
+		const updated = events.find(
+			(e): e is Extract<ServerEvent, { type: 'message-updated' }> => e.type === 'message-updated'
+		)!;
+		expect(updated.message.id).toBe('INBOUND-1');
+		expect(updated.message.reactions).toEqual([
+			expect.objectContaining({ emoji: '❤️', count: 1 })
+		]);
+	});
 });
 
 describe('outbox dry-run safety default', () => {

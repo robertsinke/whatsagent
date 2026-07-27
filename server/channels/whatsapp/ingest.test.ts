@@ -1,4 +1,4 @@
-import { BufferJSON } from 'baileys';
+import { BufferJSON, generateWAMessage, makeEventBuffer } from 'baileys';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,6 +15,7 @@ import {
 import { deepenChatHistory } from './history.js';
 import {
 	attachIngest,
+	classifyMessageType,
 	handleLidMappingUpdate,
 	handleHistorySet,
 	handleMessagesReaction,
@@ -658,6 +659,124 @@ describe('attachIngest + mute/archive updates', () => {
 		expect(onMessageUpdated).toHaveBeenCalledWith(
 			expect.objectContaining({ id: 'live-once' })
 		);
+	});
+});
+
+/**
+ * W4-U11. An owner-sent message reaches the ingest layer the same way an
+ * inbound one does: Baileys' `emitOwnEvents` re-emits the envelope it just
+ * relayed as a `messages.upsert` of type `append`, carrying the stable message
+ * id the pacer generated. The envelope here is the genuine article — built by
+ * `generateWAMessage` — and it is driven through the genuine
+ * `makeEventBuffer`, because the buffer is what consolidates and defers the
+ * event in production and it is the only Baileys machinery between the send
+ * and `attachIngest`.
+ */
+describe('owner-sent messages through the real Baileys event buffer', () => {
+	const quietLogger: any = {
+		info() {},
+		warn() {},
+		error() {},
+		debug() {},
+		trace() {},
+		child() {
+			return quietLogger;
+		}
+	};
+
+	async function ownSendEnvelope(chatJid: string, text: string, messageId: string) {
+		// `upload` is only reached for media; a text send never calls it.
+		return generateWAMessage(chatJid, { text }, {
+			userJid: '31612345678:12@s.whatsapp.net',
+			messageId,
+			logger: quietLogger
+		} as any);
+	}
+
+	function bufferedUpsert(ev: any) {
+		// Verbatim shape of `Socket/chats.js`'s `upsertMessage`.
+		return ev.createBufferedFunction(async (msg: any, type: string) => {
+			ev.emit('messages.upsert', { messages: [msg], type });
+		});
+	}
+
+	it('publishes a from_me append exactly once, and not again on replay', async () => {
+		const database = openTempDb();
+		const ev: any = makeEventBuffer(quietLogger);
+		const onMessageIngested = vi.fn();
+		const onMessageUpdated = vi.fn();
+		attachIngest(ev, database, { onMessageIngested, onMessageUpdated });
+		const upsertMessage = bufferedUpsert(ev);
+
+		const chatJid = '110573949866107@lid';
+		const sent = await ownSendEnvelope(chatJid, 'So should I or you send it?', 'OWNSEND0001');
+		// The stored type must be `text`, not the `system` a defaulted
+		// protobuf `messageStubType` would produce.
+		expect(classifyMessageType(sent)).toBe('text');
+
+		await upsertMessage(sent, 'append');
+		await vi.waitFor(() => expect(onMessageIngested).toHaveBeenCalledOnce());
+		expect(onMessageIngested).toHaveBeenCalledWith(
+			expect.objectContaining({
+				id: 'OWNSEND0001',
+				chat_jid: chatJid,
+				from_me: true,
+				text: 'So should I or you send it?'
+			})
+		);
+
+		// The server ack can replay the same append. One copy on screen, always.
+		await upsertMessage(sent, 'append');
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		expect(onMessageIngested).toHaveBeenCalledOnce();
+		expect(countMessages(database)).toBe(1);
+	});
+
+	it('leaves an owner reaction on the message-updated path', async () => {
+		const database = openTempDb();
+		const chatJid = '31653244557-1532101770@g.us';
+		handleMessagesUpsert(database, {
+			type: 'notify',
+			messages: [
+				{
+					key: { id: 'REACT-TARGET', remoteJid: chatJid, fromMe: false },
+					messageTimestamp: 100,
+					message: { conversation: 'their message' }
+				}
+			]
+		});
+
+		const ev: any = makeEventBuffer(quietLogger);
+		const onMessageIngested = vi.fn();
+		const onMessageUpdated = vi.fn();
+		attachIngest(ev, database, { onMessageIngested, onMessageUpdated });
+		const upsertMessage = bufferedUpsert(ev);
+
+		await upsertMessage(
+			{
+				key: { id: 'OWNREACT0001', remoteJid: chatJid, fromMe: true },
+				messageTimestamp: 200,
+				message: {
+					reactionMessage: {
+						key: { id: 'REACT-TARGET', remoteJid: chatJid, fromMe: false },
+						text: '❤️',
+						senderTimestampMs: 200_000
+					}
+				}
+			},
+			'append'
+		);
+
+		await vi.waitFor(() => expect(onMessageUpdated).toHaveBeenCalledOnce());
+		expect(onMessageIngested).not.toHaveBeenCalled();
+		expect(onMessageUpdated).toHaveBeenCalledWith(
+			expect.objectContaining({ id: 'REACT-TARGET' })
+		);
+		// The reaction is not a message row of its own.
+		expect(getMessage(database, 'OWNREACT0001')).toBeUndefined();
+		expect(listMessageReactions(database, chatJid, 'REACT-TARGET')).toEqual([
+			expect.objectContaining({ emoji: '❤️' })
+		]);
 	});
 });
 
