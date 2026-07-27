@@ -69,11 +69,16 @@ EXCLUDE_PATHS="
 .slayzone
 .githooks
 .claude
+scripts/publish-oss.sh
 docs/solutions/2026-07-26-capturing-visual-evidence.md
 docs/plans/2026-07-27-001-oss-readiness-plan.md
 "
 # - .slayzone / .githooks / .claude — task-orchestration rails. They assume a
 #   binary and a task database that exist on one machine.
+# - this script itself — it is a tool for *maintaining* the publication, useless
+#   in the published tree, and it necessarily names the private rails and paths
+#   it strips. Its own gates flagged it on the first dry run, which is the gate
+#   working: anything describing what must not ship must not ship either.
 # - capturing-visual-evidence.md — a worker procedure, not a contributor doc.
 # - the OSS-readiness plan — meta-documentation *about* publishing this repo. It
 #   names what the private history contains, the worktree paths, and the rails.
