@@ -209,6 +209,33 @@ want. Note that neither one protects a packaged desktop app, which is not a git
 checkout at all — the desktop build therefore defaults to its own
 `whatsagent-desktop` directory rather than the one in the table.
 
+## Desktop app (development)
+
+The Node backend *is* the Electron main process — there is no sidecar, and
+`npm run dev` is unchanged for contributors who never touch Electron.
+
+```bash
+npm run electron:start   # dev: runs the built app in Electron
+npm run electron:pack    # builds and packages a .app into release/
+```
+
+**A fresh clone cannot run these until you install Electron's binary.** This
+repo blocks package install scripts by policy, and Electron downloads its
+~250 MB binary in a `postinstall` — so after `npm install` you get a
+`node_modules/electron` with no `dist/` and every Electron command fails with a
+confusing error. Fix it without touching the manifest:
+
+```bash
+node node_modules/electron/install.js
+```
+
+`npm approve-scripts electron` also works, but it writes an `allowScripts` block
+into `package.json` that is local-machine state and should not be committed.
+
+The packaged app deliberately uses its own `whatsagent-desktop` data directory
+rather than the one `npm start` uses, so a double-click cannot open credentials
+belonging to a dev run. It therefore starts unpaired, with no chat history.
+
 ## Troubleshooting
 
 | Symptom | What to check |
