@@ -50,13 +50,23 @@ export function getDefaultDataDir(): string {
 function assertNotLiveDbFromWorktree(): void {
 	if (process.env.WHATSAGENT_ALLOW_WORKTREE_LIVE_DB === '1') return;
 
-	// server/store/db.ts -> repo root is three levels up.
-	const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+	// Search upward for `.git` rather than assuming a fixed depth. This module is
+	// loaded from two different depths — `server/store/` in source and
+	// `dist/server/server/store/` compiled — and the fixed-depth version silently
+	// disarmed itself for the compiled one: it looked for `.git` inside `dist/`,
+	// found nothing, and took the "installed copy" exit. A worker running the
+	// compiled server from a worktree got no guard at all.
 	let stat;
-	try {
-		stat = statSync(join(repoRoot, '.git'));
-	} catch {
-		return; // Not a git checkout at all (installed copy) — nothing to guard.
+	let dir = dirname(fileURLToPath(import.meta.url));
+	for (;;) {
+		try {
+			stat = statSync(join(dir, '.git'));
+			break;
+		} catch {
+			const parent = dirname(dir);
+			if (parent === dir) return; // No checkout above us (installed copy) — nothing to guard.
+			dir = parent;
+		}
 	}
 	if (stat.isDirectory()) return; // Main checkout.
 
