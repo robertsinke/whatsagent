@@ -34,13 +34,55 @@ files:
 asarUnpack:
   - '**/node_modules/better-sqlite3/**'
 
+# Where electron-updater reads its feed from, and the source of the
+# `app-update.yml` baked into the bundle. Without this block electron-updater
+# throws at runtime with "provider not specified" — the config is mandatory even
+# though releases are published by the workflow rather than by electron-builder.
+#
+# The slug is a *prediction*: the public repo does not exist until OSS-P1.6
+# publishes it. If that task picks a different name, this and `scripts/install.sh`
+# both need updating.
+publish:
+  provider: github
+  owner: robertsinke
+  repo: whatsagent
+
 mac:
   category: public.app-category.social-networking
-  # Directory target only. Distribution (ad-hoc signing, tarball, install
-  # script, auto-update) is OSS-P3.3's unit — and the plan explicitly rejected a
-  # DMG, because a browser-downloaded DMG sets the quarantine attribute that
-  # cannot be cleared without notarization.
+
+  # Ad-hoc signing, explicitly. There is no Apple Developer account and none is
+  # wanted (see docs/plans/2026-07-27-003-p3-3-distribution-spec.md).
+  #
+  # This line is load-bearing and was NOT the default: without it electron-builder
+  # logs "skipped macOS application code signing" and ships the Electron binary's
+  # *linker-signed* stub, which still carries `Identifier=Electron`, and which
+  # `codesign --verify` rejects with "code has no resources but signature
+  # indicates they must be present". It launches on arm64 anyway, so the breakage
+  # is invisible until something actually validates the bundle. `identity: '-'`
+  # makes @electron/osx-sign run a real ad-hoc `codesign` over the whole bundle.
+  identity: '-'
+  # Notarization is impossible without a paid identity, and is not needed: it is
+  # only ever consulted for files carrying `com.apple.quarantine`, and the
+  # install script's `curl` never sets that attribute. Stated explicitly so the
+  # absence reads as a decision rather than an omission.
+  notarize: false
+
+  # No DMG, deliberately: a browser-downloaded DMG *does* get quarantined, and
+  # that is the one channel that cannot work without notarization.
+  #
+  #   tar.gz — what humans download, via `scripts/install.sh` and `curl`.
+  #   zip    — what electron-updater downloads. macOS updates only work from a
+  #            zip, and `latest-mac.yml` is not emitted without one.
+  #
+  # arm64 only. Each arch must be built on its own runner (an `npm install` on
+  # arm64 fetches only better-sqlite3's arm64 prebuild, so a cross-build packages
+  # the wrong .node), and two runners each emit their own `latest-mac.yml`, the
+  # second overwriting the first and leaving one arch unable to update. Shipping
+  # one arch keeps the update feed correct; Intel Macs build from source.
   target:
-    - dir
+    - target: tar.gz
+      arch: [arm64]
+    - target: zip
+      arch: [arm64]
   # macOS is the supported platform; assertSupportedPlatform() fails elsewhere.
   artifactName: ${productName}-${version}-${arch}.${ext}

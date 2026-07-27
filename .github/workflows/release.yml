@@ -1,0 +1,127 @@
+# Build and publish a macOS release.
+#
+# ## Why this must run here and not on a laptop
+#
+# whatsagent is ad-hoc signed and cannot be notarized — there is no Apple
+# Developer account. What code signing normally buys is *tamper evidence*: proof
+# the binary you downloaded is the one the maintainer built. Ad-hoc signatures
+# carry no identity and buy none of that, so the guarantee has to come from
+# somewhere else.
+#
+# That somewhere is **build provenance**. `actions/attest-build-provenance`
+# cryptographically links each asset to the exact source commit and workflow run
+# that produced it, and anyone can check it with:
+#
+#   gh attestation verify whatsagent-desktop-*.tar.gz --repo <owner>/<repo>
+#
+# For an open-source app that is a stronger guarantee than notarization, which
+# only attests that Apple scanned the binary and knows who paid the membership
+# fee — never that the binary matches the published source. A release built on a
+# laptop cannot be attested at all, which is the whole reason this file exists.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and publish'
+        required: true
+
+permissions:
+  # Create the release and upload assets.
+  contents: write
+  # Mint the provenance attestation. Missing `id-token` is the single most common
+  # reason attest-build-provenance fails, and it fails at the end of a long build.
+  id-token: write
+  attestations: write
+
+jobs:
+  macos:
+    # arm64 runner, and the artifact is arm64-only. Cross-building is not an
+    # option: `npm ci` fetches only the host arch's better-sqlite3 prebuild, so an
+    # x64 bundle built here would ship an arm64 .node and crash at launch. Adding
+    # a second (macos-13/x64) job would give each job its own latest-mac.yml, and
+    # whichever uploaded second would leave the other architecture unable to
+    # update. See electron-builder.yml.
+    runs-on: macos-14
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # npm 11 declines to run dependency install scripts unless they are
+      # approved, and this repo deliberately keeps that default rather than
+      # committing an `allowScripts` block. Both of these are therefore skipped by
+      # `npm ci` and have to be invoked by hand:
+      #
+      #   patch-baileys      — `npm run check` runs it with `--check` and fails
+      #                        without it, so a missing line here goes red on a
+      #                        step that has nothing to do with packaging.
+      #   electron/install   — downloads Electron's ~250 MB binary. Without it,
+      #                        electron-builder has no Electron to package.
+      - name: Run the install steps npm skipped
+        run: |
+          node scripts/patch-baileys.mjs
+          node node_modules/electron/install.js
+
+      # The release gate is the same gate contributors run. A tag is a bad place
+      # to discover a type error.
+      - run: npm run check
+      - run: npm test
+      - run: npm run smoke:compiled
+
+      # Ad-hoc signs (electron-builder.yml sets `identity: '-'`), emits the
+      # tar.gz humans download, the zip the in-app updater downloads,
+      # latest-mac.yml, and SHA256SUMS.
+      - name: Build, sign and package
+        run: npm run dist:mac
+
+      # Proof the signature survived packaging. Ad-hoc signing is silently
+      # skippable — electron-builder logs a warning and ships an unsigned bundle —
+      # and an unsigned arm64 app will not launch at all.
+      - name: Assert the bundle is ad-hoc signed
+        run: |
+          codesign -dv --verbose=4 release/mac-arm64/whatsagent-desktop.app 2>&1 | tee /tmp/codesign.txt
+          grep -q 'Signature=adhoc' /tmp/codesign.txt || {
+            echo "::error::bundle is not ad-hoc signed; refusing to publish"
+            exit 1
+          }
+          codesign --verify --deep --strict --verbose=2 release/mac-arm64/whatsagent-desktop.app
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            release/*.tar.gz
+            release/*.zip
+            release/SHA256SUMS
+
+      # `gh` is preinstalled on the runner. Used in preference to a third-party
+      # release action so the release path pulls in no dependency that could
+      # itself substitute an asset — which is exactly what the attestation above
+      # exists to make detectable.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          gh release create "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$tag" \
+            --generate-notes \
+            --verify-tag \
+            release/*.tar.gz \
+            release/*.zip \
+            release/latest-mac.yml \
+            release/SHA256SUMS
