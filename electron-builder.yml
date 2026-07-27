@@ -1,0 +1,46 @@
+appId: com.whatsagent.desktop
+# Deliberately NOT "whatsagent". macOS filesystems are case-insensitive by
+# default, so any casing of that name resolves to the data directory `npm start`
+# uses — the owner's real WhatsApp credentials. A distinct product name keeps a
+# plain double-click of the packaged app off the live account by construction.
+# `electron/main.js` sets userData explicitly to match; this is belt and braces.
+productName: whatsagent-desktop
+
+directories:
+  output: release
+  buildResources: build-resources
+
+# Only what the app actually runs. Production `dependencies` are added by
+# electron-builder automatically; devDependencies (including tsx, vite and
+# electron itself) are not, which is the point of P3.1 compiling the server.
+files:
+  - build/**/*
+  - dist/server/**/*
+  - electron/**/*
+  - package.json
+  - '!**/*.map'
+
+# A .node inside an asar archive cannot be dlopen'd. better-sqlite3 serves its
+# binary from prebuilds/, NOT build/Release — the whole package is unpacked so
+# the loader in lib/binding.js finds it either way.
+#
+# Note: no electron-rebuild step. better-sqlite3 v13 builds with NAPI_VERSION=10
+# (see its binding.gyp), and N-API is ABI-stable across Node and Electron, so
+# the same prebuild loads in both. Verified by loading it in an Electron main
+# process against the stock prebuild. Its binding.gyp also refuses to build when
+# a prebuild exists unless force_build=1, so `electron-rebuild` here reports
+# "Rebuild Complete" while emitting nothing at all — a rebuild step would have
+# been silent decoration.
+asarUnpack:
+  - '**/node_modules/better-sqlite3/**'
+
+mac:
+  category: public.app-category.social-networking
+  # Directory target only. Distribution (ad-hoc signing, tarball, install
+  # script, auto-update) is OSS-P3.3's unit — and the plan explicitly rejected a
+  # DMG, because a browser-downloaded DMG sets the quarantine attribute that
+  # cannot be cleared without notarization.
+  target:
+    - dir
+  # macOS is the supported platform; assertSupportedPlatform() fails elsewhere.
+  artifactName: ${productName}-${version}-${arch}.${ext}

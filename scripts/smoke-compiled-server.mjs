@@ -17,6 +17,7 @@
 import { createApp } from '../dist/server/server/index.js';
 import { MIGRATIONS } from '../dist/server/server/store/migrations.generated.js';
 import { openDatabase } from '../dist/server/server/store/db.js';
+import { resolveDataDirOverride } from '../dist/server/server/data-dir.js';
 
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -64,6 +65,25 @@ try {
 	if (count !== MIGRATIONS.length) {
 		throw new Error(`Migration count mismatch: ${count} !== ${MIGRATIONS.length}`);
 	}
+
+	// 4. The data-dir override survives compilation.
+	//
+	// The Electron main process imports this exact compiled module *before*
+	// app.whenReady() to decide which database to open. If it ever stops being
+	// emitted — a tsconfig `include` change, a bundler step — the packaged app
+	// falls back to the platform default, which on the owner's machine is their
+	// live WhatsApp credentials. That failure would be silent, so assert the
+	// compiled module here rather than trusting the source-level unit test.
+	const overrideDir = mkdtempSync(join(tmpdir(), 'whatsagent-override-'));
+	const resolved = resolveDataDirOverride({ WHATSAGENT_DATA_DIR: overrideDir }, []);
+	console.log(`smoke: resolveDataDirOverride -> ${resolved}`);
+	if (resolved !== overrideDir) {
+		throw new Error(`Override not honored by the compiled module: ${resolved} !== ${overrideDir}`);
+	}
+	if (resolveDataDirOverride({}, []) !== undefined) {
+		throw new Error('Override must be undefined when nothing sets it');
+	}
+	rmSync(overrideDir, { recursive: true, force: true });
 
 	console.log('smoke: PASS — compiled server serves API + SPA, migrations applied on fresh DB');
 } catch (err) {

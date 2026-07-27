@@ -184,6 +184,31 @@ App data lives **outside the repo**:
 - WhatsApp auth/signal blobs are encrypted at rest with a key stored in the macOS login keychain (`whatsagent.whatsapp-auth`)
 - Treat the DB and keychain entry as account-hijack credentials — do not copy them into the repo, chat logs, or backups without encryption
 
+### Pointing the app at a different data directory
+
+`WHATSAGENT_DATA_DIR` (or `--data-dir <path>`, which wins over the env var)
+overrides the table above for `npm start`, `npm run dev:server`, and the desktop
+app. Use it to run the full app against a throwaway directory:
+
+```bash
+WHATSAGENT_DATA_DIR=/tmp/whatsagent-scratch npm start
+```
+
+The process logs the directory it opened at startup, so you can confirm which
+database is live before pairing anything.
+
+This is the **only** safe way to run a second copy of the app. Two processes on
+the same data directory means two Baileys sockets on one WhatsApp account, which
+is the primary account-ban risk — a fresh directory pairs as its own device
+instead.
+
+`WHATSAGENT_ALLOW_WORKTREE_LIVE_DB=1` is a different, narrower escape hatch: it
+disarms the guard that refuses to open the **default** directory from a git
+worktree. The two are unrelated, and the override above is almost always what you
+want. Note that neither one protects a packaged desktop app, which is not a git
+checkout at all — the desktop build therefore defaults to its own
+`whatsagent-desktop` directory rather than the one in the table.
+
 ## Troubleshooting
 
 | Symptom | What to check |

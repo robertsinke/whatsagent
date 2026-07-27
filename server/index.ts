@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveDataDirOverride } from './data-dir.js';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { Channel } from './channels/channel.js';
 import { WhatsAppConnection } from './channels/whatsapp/connection.js';
@@ -124,6 +125,13 @@ export type App = {
  * polarity.
  */
 export { resolveOutboxDryRun } from './store/settings.js';
+
+/**
+ * Re-exported so callers keep a single import site for boot-time resolution.
+ * The implementation lives in `data-dir.ts` because the Electron main process
+ * needs it before `app.whenReady()`, without loading this module's graph.
+ */
+export { resolveDataDirOverride } from './data-dir.js';
 
 /**
  * Locate the adapter-static SPA output, whichever layout this module was loaded
@@ -530,9 +538,28 @@ export function resolveBootProvider(
 	return { name, coercedFrom: raw };
 }
 
-async function main(): Promise<void> {
+export type StartServerOptions = {
+	/**
+	 * Explicit app-data directory. Electron passes `app.getPath('userData')`
+	 * here. When omitted, the env/argv override applies, and failing that the
+	 * platform default — which is the only branch the worktree guard protects.
+	 */
+	dataDir?: string;
+	/** Explicit SPA directory. Preferred over `defaultStaticDir()`'s search. */
+	staticDir?: string;
+	port?: number;
+	host?: string;
+};
+
+/**
+ * Build and start the full runtime: database, WhatsApp channel, provider,
+ * memory, outbox. Exported so the Electron main process can start the exact
+ * same server in-process rather than maintaining a second wiring of it.
+ */
+export async function startServer(options: StartServerOptions = {}): Promise<App> {
 	assertSupportedPlatform();
-	const db = openDatabase();
+	const dataDir = options.dataDir ?? resolveDataDirOverride();
+	const db = openDatabase(dataDir === undefined ? {} : { dataDir });
 	const settings = listSettings(db);
 	const channel = new WhatsAppConnection(db);
 	const { name: providerName, coercedFrom } = resolveBootProvider(settings);
@@ -564,10 +591,16 @@ async function main(): Promise<void> {
 		);
 	}
 
-	const memory = createRuntimeMemory(settings, { dataDir: getDefaultDataDir() });
+	// Memory (voice mirror files) must follow the same override, or a throwaway
+	// run writes into the live data dir while the database sits elsewhere.
+	const memory = createRuntimeMemory(settings, { dataDir: dataDir ?? getDefaultDataDir() });
 	const dryRunSetting = getSetting(db, OUTBOX_DRY_RUN_SETTING);
 	const app = createApp({
 		db,
+		dataDir: dataDir ?? getDefaultDataDir(),
+		staticDir: options.staticDir,
+		port: options.port,
+		host: options.host,
 		channel,
 		draftProvider,
 		providerName,
@@ -585,8 +618,15 @@ async function main(): Promise<void> {
 		}
 	});
 	await app.start();
+	// Log the data dir, not just the URL: when an override is in play this line
+	// is the only visible proof of *which* database the process actually opened.
+	console.log(`whatsagent data dir: ${dataDir ?? getDefaultDataDir()}${dataDir ? ' (override)' : ''}`);
 	console.log(`whatsagent listening on ${app.url} (loopback only)`);
+	return app;
+}
 
+async function main(): Promise<void> {
+	const app = await startServer();
 	const shutdown = async () => {
 		console.log('shutting down…');
 		await app.close();

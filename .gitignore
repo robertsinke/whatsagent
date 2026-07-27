@@ -4,6 +4,8 @@ node_modules/
 /build
 /.svelte-kit
 /dist
+# electron-builder output (a ~250 MB .app bundle per build)
+/release
 *.log
 .env
 .env.*

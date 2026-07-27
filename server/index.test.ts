@@ -15,6 +15,7 @@ import {
 	createApp,
 	HISTORY_SYNC_COMPLETE_SETTING,
 	resolveBootProvider,
+	resolveDataDirOverride,
 	resolveOutboxDryRun,
 	type App
 } from './index.js';
@@ -419,5 +420,76 @@ describe('resolveBootProvider', () => {
 			name: 'ollama',
 			coercedFrom: null
 		});
+	});
+});
+
+describe('resolveDataDirOverride', () => {
+	const home = () => '/Users/example';
+
+	it('returns undefined when neither env nor argv supplies one', () => {
+		expect(resolveDataDirOverride({}, ['node', 'server/index.js'], home)).toBeUndefined();
+	});
+
+	it('reads WHATSAGENT_DATA_DIR', () => {
+		expect(
+			resolveDataDirOverride({ WHATSAGENT_DATA_DIR: '/tmp/throwaway' }, ['node'], home)
+		).toBe('/tmp/throwaway');
+	});
+
+	it('reads --data-dir=<path> and --data-dir <path>', () => {
+		expect(resolveDataDirOverride({}, ['node', '--data-dir=/tmp/a'], home)).toBe('/tmp/a');
+		expect(resolveDataDirOverride({}, ['node', '--data-dir', '/tmp/b'], home)).toBe('/tmp/b');
+	});
+
+	it('lets argv win over the environment', () => {
+		expect(
+			resolveDataDirOverride({ WHATSAGENT_DATA_DIR: '/tmp/env' }, ['node', '--data-dir=/tmp/argv'], home)
+		).toBe('/tmp/argv');
+	});
+
+	// A blank value must not resolve to the process cwd: an empty env var is a
+	// launcher mistake, and silently rooting the live database in whatever
+	// directory the app happened to start from is worse than ignoring it.
+	it('treats blank values as absent', () => {
+		expect(resolveDataDirOverride({ WHATSAGENT_DATA_DIR: '   ' }, ['node'], home)).toBeUndefined();
+		expect(
+			resolveDataDirOverride({ WHATSAGENT_DATA_DIR: '/tmp/env' }, ['node', '--data-dir='], home)
+		).toBe('/tmp/env');
+	});
+
+	it('expands ~ and resolves relative paths to absolute', () => {
+		expect(resolveDataDirOverride({ WHATSAGENT_DATA_DIR: '~/wa' }, ['node'], home)).toBe(
+			'/Users/example/wa'
+		);
+		expect(resolveDataDirOverride({ WHATSAGENT_DATA_DIR: '~' }, ['node'], home)).toBe(
+			'/Users/example'
+		);
+		const relative = resolveDataDirOverride({ WHATSAGENT_DATA_DIR: 'rel/dir' }, ['node'], home);
+		expect(relative).toBe(join(process.cwd(), 'rel', 'dir'));
+	});
+
+	// The override is what makes the packaged app safe to run at all: an app
+	// bundle is not a git checkout, so `assertNotLiveDbFromWorktree` takes its
+	// "installed copy" exit and the live database opens without complaint.
+	// Proving the *effect* (a DB where we pointed it) is the point, not the
+	// string handling above.
+	it('opens the database under the overridden directory', () => {
+		const dir = mkdtempSync(join(tmpdir(), 'whatsagent-override-'));
+		try {
+			const resolved = resolveDataDirOverride({ WHATSAGENT_DATA_DIR: dir }, ['node'], home);
+			expect(resolved).toBe(dir);
+			const db = openDatabase({ dataDir: resolved! });
+			try {
+				expect(db.name).toBe(join(dir, 'whatsagent.db'));
+				const applied = db.prepare('SELECT COUNT(*) AS c FROM schema_version').get() as {
+					c: number;
+				};
+				expect(applied.c).toBeGreaterThan(0);
+			} finally {
+				db.close();
+			}
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
