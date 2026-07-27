@@ -57,3 +57,30 @@ export function toChatView(
 		draft_status: draft?.status ?? null
 	};
 }
+
+/**
+ * Deterministic needs-reply (mirrors U8 classifier floor, without draft pipeline):
+ * 1:1 + last message inbound + not muted/archived + not skipped since last inbound.
+ */
+export function chatNeedsReply(db: AppDatabase, chat: Chat): boolean {
+	if (chat.kind !== '1:1') return false;
+	if (chat.muted || chat.archived) return false;
+	// 'skipped' = owner opted out; 'quiet' = agent returned no_reply_needed (D3).
+	if (chat.agent_state === 'skipped' || chat.agent_state === 'quiet') return false;
+	const last = getLastMessage(db, chat.jid);
+	if (!last || last.from_me) return false;
+	return true;
+}
+
+/**
+ * The only form any event emitter should use. A store `Chat` is NOT what the SPA
+ * consumes: it has no `display_jid`, `preview`, `needs_reply` or `draft_status`,
+ * and the client's `displayName()` dereferences `display_jid` unconditionally.
+ * Pushing a raw row over the WebSocket replaced a complete chat in client state
+ * with a partial one, and the resulting TypeError was thrown *inside Svelte's
+ * effect flush* — which stops the whole reactive graph, so the chat list froze
+ * (stale `selected` rows) and reopening a chat did nothing.
+ */
+export function chatViewFor(db: AppDatabase, chat: Chat): ChatView {
+	return toChatView(db, chat, (c) => chatNeedsReply(db, c));
+}

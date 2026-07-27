@@ -31,9 +31,16 @@ function epochMilliseconds(ts: number): number {
 	return ts > 0 && ts < 1_000_000_000_000 ? ts * 1000 : ts;
 }
 
+/**
+ * `display_jid` is server-supplied and always present in a `ChatView` — but this
+ * runs inside Svelte effects, where a throw kills the *entire* reactive graph
+ * (frozen chat list, dead selection), not just one row. So a chat that arrives
+ * without it degrades to its routing jid instead of taking the app down.
+ */
 export function displayName(chat: Pick<Chat, 'jid' | 'display_jid' | 'name'>): string {
 	if (chat.name && chat.name.trim()) return chat.name.trim();
-	const local = chat.display_jid.split('@')[0] ?? chat.display_jid;
+	const jid = chat.display_jid || chat.jid || '';
+	const local = jid.split('@')[0] || jid;
 	return local.startsWith('+') ? local : `+${local}`;
 }
 
@@ -43,8 +50,10 @@ export function displayName(chat: Pick<Chat, 'jid' | 'display_jid' | 'name'>): s
  * while the number the owner remembers lives on `display_jid` (or the reverse).
  */
 export function jidDigits(chat: Pick<Chat, 'jid' | 'display_jid'>): string {
-	const jids = chat.display_jid === chat.jid ? [chat.jid] : [chat.display_jid, chat.jid];
-	return jids.map((jid) => (jid.split('@')[0] ?? '').replace(/\D/g, '')).join(' ');
+	const jids =
+		chat.display_jid === chat.jid ? [chat.jid] : [chat.display_jid, chat.jid];
+	// Same reasoning as `displayName`: never throw inside a render.
+	return jids.map((jid) => (jid?.split('@')[0] ?? '').replace(/\D/g, '')).join(' ');
 }
 
 export function initialsFor(name: string): string {

@@ -4,7 +4,7 @@ import type { Draft } from '../store/drafts.js';
 import type { AppDatabase } from '../store/db.js';
 import type { Message } from '../store/messages.js';
 import type { OutboxRow } from '../store/outbox.js';
-import type { ChatView } from './chat-view.js';
+import { chatViewFor, type ChatView } from './chat-view.js';
 import { toMessageView, type MessageView } from './message-view.js';
 import type { SessionView } from './session.js';
 
@@ -18,7 +18,12 @@ export type ServerEvent =
 	/** Carries the client-facing view (no `raw` envelope) — see message-view.ts. */
 	| { type: 'message-new'; message: MessageView }
 	| { type: 'message-updated'; message: MessageView }
-	| { type: 'chat-updated'; chat: Chat | ChatView }
+	/**
+	 * Always the client-facing view, never a store `Chat` — the SPA requires
+	 * `display_jid`/`preview`/`needs_reply`/`draft_status` and breaks hard
+	 * without them. `chatViewFor` is the only correct way to build this.
+	 */
+	| { type: 'chat-updated'; chat: ChatView }
 	| { type: 'draft-updated'; draft: Draft }
 	| { type: 'draft-removed'; chat_jid: string }
 	| { type: 'outbox-updated'; outbox: OutboxRow }
@@ -94,7 +99,7 @@ export function createIngestEventHooks(bus: EventBus, db: AppDatabase): IngestEv
 			bus.emit({ type: 'message-updated', message: toMessageView(db, message) });
 		},
 		onChatUpdated(chat) {
-			bus.emit({ type: 'chat-updated', chat });
+			bus.emit({ type: 'chat-updated', chat: chatViewFor(db, chat) });
 		},
 		onSyncProgress(progress) {
 			bus.emit({ type: 'sync-progress', ...progress });
