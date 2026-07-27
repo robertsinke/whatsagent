@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isPhoneShapedLabel, usableName } from './names.js';
+import { FIXTURE_OWNER_PHONE } from './test-fixtures.js';
 
 describe('isPhoneShapedLabel', () => {
 	it('rejects a WhatsApp privacy mask of any of the three dot characters', () => {
@@ -14,7 +15,7 @@ describe('isPhoneShapedLabel', () => {
 	it('accepts a bare number with separators and a leading plus', () => {
 		expect(isPhoneShapedLabel('+31 6 1234 5678')).toBe(true);
 		expect(isPhoneShapedLabel('(020) 555-1234')).toBe(true);
-		expect(isPhoneShapedLabel('+31683799485')).toBe(true);
+		expect(isPhoneShapedLabel(`+${FIXTURE_OWNER_PHONE}`)).toBe(true);
 		expect(isPhoneShapedLabel('020-555-1234')).toBe(true);
 	});
 
@@ -48,7 +49,7 @@ describe('usableName', () => {
 
 	it('returns null for a mask, so callers fall through to the next source', () => {
 		expect(usableName('+31 \u2219\u2219\u2219\u2219 85')).toBeNull();
-		expect(usableName('+31683799485')).toBeNull();
+		expect(usableName(`+${FIXTURE_OWNER_PHONE}`)).toBeNull();
 	});
 
 	it('returns null for null/undefined/empty/whitespace', () => {

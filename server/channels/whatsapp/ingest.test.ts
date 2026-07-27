@@ -28,6 +28,19 @@ import {
 	type HistorySetPayload
 } from './ingest.js';
 import { downloadAndCacheMedia } from './media.js';
+import {
+	FIXTURE_ALT_PHONE_JID,
+	FIXTURE_CHAT_LID_JID,
+	FIXTURE_GROUP_JID,
+	FIXTURE_OWNER_LID_JID,
+	FIXTURE_OWNER_NAME,
+	FIXTURE_OWNER_PHONE,
+	FIXTURE_OWNER_PHONE_JID,
+	FIXTURE_SPLIT_LID_JID,
+	FIXTURE_SPLIT_NAME,
+	FIXTURE_SPLIT_NAME_SHORT,
+	FIXTURE_SPLIT_PHONE_JID
+} from '../../../shared/test-fixtures.js';
 
 let dataDir: string | undefined;
 let db: AppDatabase | undefined;
@@ -63,33 +76,31 @@ describe('ingest helpers', () => {
 			chats: [],
 			contacts: [
 				{
-					id: '203663104602149@lid',
-					lid: '203663104602149@lid',
-					phoneNumber: '31683799485@s.whatsapp.net',
-					name: 'Robert'
+					id: FIXTURE_OWNER_LID_JID,
+					lid: FIXTURE_OWNER_LID_JID,
+					phoneNumber: FIXTURE_OWNER_PHONE_JID,
+					name: FIXTURE_OWNER_NAME
 				}
 			],
 			messages: []
 		});
 
-		expect(getContact(database, '203663104602149@lid')).toMatchObject({
-			name: 'Robert',
-			lid_jid: '203663104602149@lid',
-			phone_jid: '31683799485@s.whatsapp.net'
+		expect(getContact(database, FIXTURE_OWNER_LID_JID)).toMatchObject({
+			name: FIXTURE_OWNER_NAME,
+			lid_jid: FIXTURE_OWNER_LID_JID,
+			phone_jid: FIXTURE_OWNER_PHONE_JID
 		});
-		expect(getContact(database, '31683799485@s.whatsapp.net')).toMatchObject({
-			name: 'Robert',
-			lid_jid: '203663104602149@lid',
-			phone_jid: '31683799485@s.whatsapp.net'
+		expect(getContact(database, FIXTURE_OWNER_PHONE_JID)).toMatchObject({
+			name: FIXTURE_OWNER_NAME,
+			lid_jid: FIXTURE_OWNER_LID_JID,
+			phone_jid: FIXTURE_OWNER_PHONE_JID
 		});
 
 		handleLidMappingUpdate(database, {
 			lid: '999@lid',
-			pn: '31123456789@s.whatsapp.net'
+			pn: FIXTURE_ALT_PHONE_JID
 		});
-		expect(getContact(database, '999@lid')?.phone_jid).toBe(
-			'31123456789@s.whatsapp.net'
-		);
+		expect(getContact(database, '999@lid')?.phone_jid).toBe(FIXTURE_ALT_PHONE_JID);
 	});
 });
 
@@ -711,7 +722,7 @@ describe('owner-sent messages through the real Baileys event buffer', () => {
 		attachIngest(ev, database, { onMessageIngested, onMessageUpdated });
 		const upsertMessage = bufferedUpsert(ev);
 
-		const chatJid = '110573949866107@lid';
+		const chatJid = FIXTURE_CHAT_LID_JID;
 		const sent = await ownSendEnvelope(chatJid, 'So should I or you send it?', 'OWNSEND0001');
 		// The stored type must be `text`, not the `system` a defaulted
 		// protobuf `messageStubType` would produce.
@@ -737,7 +748,7 @@ describe('owner-sent messages through the real Baileys event buffer', () => {
 
 	it('leaves an owner reaction on the message-updated path', async () => {
 		const database = openTempDb();
-		const chatJid = '31653244557-1532101770@g.us';
+		const chatJid = FIXTURE_GROUP_JID;
 		handleMessagesUpsert(database, {
 			type: 'notify',
 			messages: [
@@ -974,19 +985,19 @@ describe('history deepen + media download', () => {
 
 /**
  * W4-U13. WhatsApp is migrating contacts to LID addressing, so the same person
- * starts arriving under a second identifier mid-conversation. Reproduces the
- * live split exactly: the owner's approved reply went to the phone chat holding
- * sixteen messages of history, and Quinten's answer 100 seconds later arrived
- * keyed by LID and opened an empty second chat.
+ * starts arriving under a second identifier mid-conversation. Reproduces a
+ * live split: the owner's approved reply went to the phone chat holding
+ * history, and the contact's answer later arrived keyed by LID and opened an
+ * empty second chat.
  */
 describe('canonical chat identity across LID and phone aliases', () => {
-	const LID = '27599493410860@lid';
-	const PHONE = '31618155142@s.whatsapp.net';
+	const LID = FIXTURE_SPLIT_LID_JID;
+	const PHONE = FIXTURE_SPLIT_PHONE_JID;
 
 	function seedPhoneChatWithHistory(database: AppDatabase): void {
 		handleHistorySet(database, {
-			chats: [{ id: PHONE, name: 'Quinten Muller', conversationTimestamp: 100, unreadCount: 0 }],
-			contacts: [{ id: PHONE, name: 'Quinten Muller' }],
+			chats: [{ id: PHONE, name: FIXTURE_SPLIT_NAME, conversationTimestamp: 100, unreadCount: 0 }],
+			contacts: [{ id: PHONE, name: FIXTURE_SPLIT_NAME }],
 			messages: [
 				{
 					key: { id: 'history-1', remoteJid: PHONE, fromMe: false },
@@ -1088,7 +1099,7 @@ describe('canonical chat identity across LID and phone aliases', () => {
 		seedPhoneChatWithHistory(database);
 		handleLidMappingUpdate(database, { lid: LID, pn: PHONE });
 
-		handleChatsUpsert(database, [{ id: LID, name: 'Quinten', conversationTimestamp: 300 }]);
+		handleChatsUpsert(database, [{ id: LID, name: FIXTURE_SPLIT_NAME_SHORT, conversationTimestamp: 300 }]);
 		handleChatsUpdate(database, [{ id: LID, unreadCount: 4 }]);
 
 		expect(listChats(database).map((chat) => chat.jid)).toEqual([PHONE]);
@@ -1150,7 +1161,7 @@ describe('W4-U16: stop rendering people as phone numbers', () => {
 			chats: [
 				{
 					id: '31612345678@s.whatsapp.net',
-					name: '+31683799485',
+					name: `+${FIXTURE_OWNER_PHONE}`,
 					conversationTimestamp: 100
 				}
 			],

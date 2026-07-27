@@ -29,7 +29,7 @@
 		const needle = query.trim().toLowerCase();
 		if (!needle) return filtered;
 		// A digits-only query is a phone-number search: match against the jid with
-		// separators stripped, so "+31 6 2013 5489", "31620135489" and "0620135489"
+		// separators stripped, so "+31 6 0000 0002", "31600000002" and "0600000002"
 		// all find the same chat. Name search stays the common path and is
 		// unaffected — this only adds a second way in for the contacts WhatsApp
 		// never gave us a name for.
