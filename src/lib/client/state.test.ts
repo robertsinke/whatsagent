@@ -191,6 +191,132 @@ describe('AppState history-sync resync', () => {
 	});
 });
 
+/**
+ * W4-U14. A same-chat resync (refresh / sync-progress coalesced refetch) must
+ * not collapse a reader who has paged back through older messages. openChat
+ * used to hard-reset with mergeMessages([], newestPage); that threw away every
+ * prepended page. Switching chats still resets to one page.
+ */
+describe('AppState scroll window across same-chat resync', () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+		vi.useRealTimers();
+	});
+
+	/** Full newest page (PAGE_SIZE) so hasMore starts true. */
+	const newestPage = Array.from({ length: 60 }, (_, i) =>
+		inbound(`n${i + 1}`, 1000 + i)
+	);
+	/** Short older page — clears hasMore after loadOlder. */
+	const olderPage = [inbound('o1', 10), inbound('o2', 20)];
+	const newestIds = newestPage.map((m) => m.id);
+	const windowIds = ['o1', 'o2', ...newestIds];
+
+	function mockPagedConversation(options: { delayNewestMs?: number } = {}) {
+		const calls = { messages: 0, newestOnly: 0, older: 0 };
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.includes('/messages?') && url.includes('beforeId=')) {
+				calls.older += 1;
+				calls.messages += 1;
+				return jsonResponse({ items: olderPage });
+			}
+			if (url.includes('/messages')) {
+				calls.newestOnly += 1;
+				calls.messages += 1;
+				if (options.delayNewestMs) {
+					await new Promise((r) => setTimeout(r, options.delayNewestMs));
+				}
+				return jsonResponse({ items: newestPage });
+			}
+			if (url.endsWith('/draft')) return jsonResponse({ error: 'Not found' }, 404);
+			if (url.endsWith('/read')) return jsonResponse(chatRow({ unread: 0 }));
+			if (url.includes('/chats?filter=')) return jsonResponse({ items: [chatRow()] });
+			if (url.endsWith('/session')) {
+				return jsonResponse({
+					status: 'ready',
+					qr: null,
+					qrExpiresAt: null,
+					sync: { chatsSynced: 0, messagesSynced: 0, complete: true }
+				});
+			}
+			if (url.endsWith('/outbox/send-mode')) return jsonResponse({ live: false, dry_run: true });
+			if (url.endsWith('/outbox')) return jsonResponse({ items: [] });
+			throw new Error(`Unexpected request: ${url}`);
+		});
+		return calls;
+	}
+
+	it('keeps prepended older pages after a same-chat resync', async () => {
+		const state = new AppState({ resyncDebounceMs: 5, resyncMaxWaitMs: 200 });
+		state.chats = [chatRow()];
+		const calls = mockPagedConversation();
+
+		await state.openChat(JID);
+		expect(state.messages.map((m) => m.id)).toEqual(newestIds);
+		expect(state.hasMoreMessages).toBe(true);
+
+		await state.loadOlder();
+		expect(state.messages.map((m) => m.id)).toEqual(windowIds);
+		// Short older page cleared the oldest-edge flag.
+		expect(state.hasMoreMessages).toBe(false);
+		const newestFetchesBeforeResync = calls.newestOnly;
+
+		// Machine-triggered resync — the path sync-progress takes after W4-U12.
+		state.applyEvent({
+			type: 'sync-progress',
+			phase: 'history',
+			chatsSynced: 1,
+			messagesSynced: 12,
+			complete: false
+		});
+		await vi.waitFor(() => expect(calls.newestOnly).toBeGreaterThan(newestFetchesBeforeResync));
+
+		// Older pages survive. One newest-page request; not one per loaded page.
+		expect(state.messages.map((m) => m.id)).toEqual(windowIds);
+		expect(calls.newestOnly - newestFetchesBeforeResync).toBe(1);
+		expect(calls.older).toBe(1); // only the explicit loadOlder
+		// hasMore is about the oldest edge — a full newest-page refetch must not
+		// revive it (would wrongly re-enable "load earlier").
+		expect(state.hasMoreMessages).toBe(false);
+	});
+
+	it('still resets to one page when switching to a different chat', async () => {
+		const state = new AppState();
+		state.chats = [
+			chatRow(),
+			chatRow({ jid: 'sam@s.whatsapp.net', display_jid: 'sam@s.whatsapp.net', name: 'Sam' })
+		];
+		mockPagedConversation();
+
+		await state.openChat(JID);
+		await state.loadOlder();
+		expect(state.messages.map((m) => m.id)).toEqual(windowIds);
+
+		await state.openChat('sam@s.whatsapp.net');
+		expect(state.messages.map((m) => m.id)).toEqual(newestIds);
+		expect(state.hasMoreMessages).toBe(true);
+	});
+
+	it('does not flash loadingMessages during a same-chat window-preserving resync', async () => {
+		const state = new AppState();
+		state.chats = [chatRow()];
+		mockPagedConversation({ delayNewestMs: 30 });
+
+		await state.openChat(JID);
+		await state.loadOlder();
+		expect(state.loadingMessages).toBe(false);
+
+		const refreshPromise = state.refresh({ preserveDeepenStatus: true });
+		// Mid-flight: ConversationPane unmounts the stream when loadingMessages
+		// is true, which would yank scroll even if the array were preserved.
+		await new Promise((r) => setTimeout(r, 5));
+		expect(state.loadingMessages).toBe(false);
+		await refreshPromise;
+		expect(state.messages.map((m) => m.id)).toEqual(windowIds);
+	});
+});
+
 describe('AppState unread boundary', () => {
 	afterEach(() => vi.restoreAllMocks());
 
