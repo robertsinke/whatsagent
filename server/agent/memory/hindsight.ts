@@ -3,96 +3,22 @@ import type { Chat } from '../../store/chats.js';
 import { NullMemory } from './null-memory.js';
 import type { EditDelta, Memory, VoiceObservation } from './memory.js';
 import { composeVoice, GLOBAL_VOICE_STEM, VoiceFiles, voiceFileStem } from './voice-files.js';
+import { looksLikeVoiceDocument } from '../../../shared/voice-document.js';
+
+/**
+ * P3.1: the two document predicates moved to `shared/voice-document.ts` so the Voice
+ * tab can warn with exactly the rule this module gates the mirror on. Re-exported here
+ * because every existing importer (and every existing test) reaches for them through
+ * this module.
+ */
+export { isTruncatedVoiceDocument, looksLikeVoiceDocument } from '../../../shared/voice-document.js';
 
 const DEFAULT_BANK_ID = 'whatsagent-owner-voice';
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8888';
 /** D1b: nightly UTC. Hindsight runs this server-side; the app schedules nothing. */
 const DEFAULT_REFRESH_CRON = '0 3 * * *';
 const VOICE_MODEL_PREFIX = 'voice-';
-/**
- * Hindsight parks this literal in `content` while a refresh is in flight. Mirroring it
- * would put "Generating content..." into the draft prompt as if it were the owner's
- * voice, and — worse — overwrite the last good document with it.
- */
-const REFRESH_IN_PROGRESS_CONTENT = 'Generating content...';
 const GLOBAL_MODEL_ID = `${VOICE_MODEL_PREFIX}${GLOBAL_VOICE_STEM}`;
-
-/**
- * Positive test for "is this a real voice document?", replacing the two-string blocklist
- * that could not anticipate what an LLM writes when it has nothing to say.
- *
- * The signal is *meaning*, not markup: quoted evidence attached to named habits. The
- * reflect model does not format consistently between runs — list items, bold labels with
- * blockquotes, and "Evidence:" sections with italic quotes have all appeared in the wild.
- * Coupling the filter to `^\s*[-*]\s+` silently froze voice when a good document arrived
- * as blockquotes instead (see docs/solutions/2026-07-26-voice-filter-rejects-valid-documents.md).
- *
- * Still rejects: empty, the in-flight placeholder, "no information" verdicts, mid-token
- * truncations (unclosed `**…`, heading cut at `/`), and bare prose with neither a habit
- * list nor labeled evidence.
- *
- * Exported for testing — do not call from outside the module.
- */
-export function looksLikeVoiceDocument(content: string): boolean {
-	const trimmed = content.trim();
-	if (!trimmed) return false;
-	if (trimmed === REFRESH_IN_PROGRESS_CONTENT) return false;
-	// A "no information" / "I don't have information" verdict — the failure mode the old
-	// blocklist missed. Match the common phrasings regardless of surrounding sentence.
-	const lower = trimmed.toLowerCase();
-	if (
-		lower.includes("don't have information") ||
-		lower.includes('do not have information') ||
-		lower.includes('no information about the owner') ||
-		lower.includes('not enough information') ||
-		lower.includes('no discernible') ||
-		lower.includes('unable to determine')
-	) {
-		return false;
-	}
-	if (isTruncatedVoiceDocument(trimmed)) return false;
-
-	// Shape A — markdown list of habits (classic). Require at least one substantive item.
-	const items = trimmed.split(/\r?\n/).filter((line) => /^\s*[-*]\s+\S/.test(line));
-	const substantive = items.filter((line) => {
-		const text = line.replace(/^\s*[-*]\s+/, '').toLowerCase();
-		return (
-			text.length > 0 &&
-			!text.startsWith('no information') &&
-			!text.startsWith("don't have") &&
-			!text.startsWith('do not have') &&
-			!text.startsWith('unable to')
-		);
-	});
-	if (substantive.length > 0) return true;
-
-	// Shape B — labeled habits with quoted evidence (bold labels + blockquotes, or
-	// headings + quote marks). No list items required.
-	const hasNamedHabit = /\*\*[^*]+\*\*/.test(trimmed) || /^#{1,3}\s+\S/m.test(trimmed);
-	const hasQuotedEvidence =
-		/^\s*>\s*\S/m.test(trimmed) || /["“”*][^"“”\n]+["“”*]/.test(trimmed);
-	return hasNamedHabit && hasQuotedEvidence;
-}
-
-/**
- * A document cut mid-generation (max_tokens ceiling) is not yet valid voice. The live
- * failure ended literally `**Supportive/` — unclosed bold, mid-heading slash. Length is
- * not a quality signal; truncation structure is.
- *
- * Exported for testing — do not call from outside the module.
- */
-export function isTruncatedVoiceDocument(content: string): boolean {
-	const trimmed = content.trim();
-	if (!trimmed) return false;
-	const boldMarkers = trimmed.match(/\*\*/g);
-	if (boldMarkers && boldMarkers.length % 2 !== 0) return true;
-	if (/[A-Za-z0-9]\/\s*$/.test(trimmed)) return true;
-	const lastLine = trimmed.split(/\r?\n/).pop()!.trim();
-	if (/^\*\*[^*]*$/.test(lastLine)) return true;
-	// Bare list marker with no item text — cut mid-bullet.
-	if (/^[-*]\s*$/.test(lastLine)) return true;
-	return false;
-}
 
 /**
  * Token ceiling for the global voice document. 1200 truncated mid-word in production;
@@ -497,12 +423,17 @@ export class HindsightMemory implements Memory {
 	 * `drain` skipped it. Uses the paginated list-with-content (no N+1 `getMentalModel`),
 	 * and updates `#lastMirroredAt` so the next `drain` does not re-fetch what this just
 	 * wrote.
+	 *
+	 * `writeMirror` may refuse (an owner edit is holding the document). A refused write
+	 * must not advance `#lastMirroredAt`, for the same reason a rejected document does
+	 * not at `#mirrorChanged` — the model is unmirrored, and caching it as seen would
+	 * skip the real content when the guard finally releases.
 	 */
 	async #mirrorAll(): Promise<void> {
 		for (const model of await this.#listVoiceModelsPaginated()) {
 			const content = (model.content ?? '').trim();
 			if (!looksLikeVoiceDocument(content)) continue;
-			this.#files.write(model.id.slice(VOICE_MODEL_PREFIX.length), content);
+			if (!this.#files.writeMirror(model.id.slice(VOICE_MODEL_PREFIX.length), content)) continue;
 			if (model.lastRefreshed) this.#lastMirroredAt.set(model.id, model.lastRefreshed);
 		}
 	}
@@ -528,7 +459,8 @@ export class HindsightMemory implements Memory {
 				// Leave the cache alone — reconsider on every tick until a valid write lands.
 				continue;
 			}
-			this.#files.write(model.id.slice(VOICE_MODEL_PREFIX.length), content);
+			// Same rule for a guarded document: refused is not mirrored, so do not cache it.
+			if (!this.#files.writeMirror(model.id.slice(VOICE_MODEL_PREFIX.length), content)) continue;
 			if (model.lastRefreshed) this.#lastMirroredAt.set(model.id, model.lastRefreshed);
 		}
 	}
