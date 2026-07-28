@@ -32,6 +32,11 @@ import { startUpdateChecks } from './updater.js';
  * credentials with the dev server. A distinct name makes a plain double-click
  * safe by construction rather than by remembering to pass a flag.
  *
+ * The product name IS now such a case-variant — it is `WhatsAgent` — so this
+ * constant is the only thing keeping the two apart. Keep it a hardcoded literal:
+ * deriving it from `app.getName()` or from productName reintroduces exactly the
+ * collision this comment describes.
+ *
  * Sharing a directory between the desktop app and `npm start` is exactly the
  * two-sockets-one-account hazard, so they should not converge on one without a
  * deliberate migration — see OSS-P3.4.

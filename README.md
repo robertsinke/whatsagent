@@ -318,7 +318,7 @@ curl -fsSL https://raw.githubusercontent.com/robertsinke/whatsagent/main/scripts
 That downloads the latest release tarball, checks it against the SHA-256
 published with the release, and unpacks it to `/Applications` — or to
 `~/Applications` if `/Applications` is not writable, so no admin account and no
-`sudo` is needed. Then open **whatsagent-desktop** as you would any other app.
+`sudo` is needed. Then open **WhatsAgent** as you would any other app.
 
 Releases are **arm64 only**. Each architecture has to be built on its own CI
 runner, and two runners would each publish an update manifest that overwrote the
@@ -342,8 +342,8 @@ channel that could not work without notarization.
 Verify what you got, if you want to:
 
 ```bash
-codesign -dv --verbose=4 /Applications/whatsagent-desktop.app   # Signature=adhoc
-xattr -lr /Applications/whatsagent-desktop.app | grep quarantine # no output
+codesign -dv --verbose=4 /Applications/WhatsAgent.app   # Signature=adhoc
+xattr -lr /Applications/WhatsAgent.app | grep quarantine # no output
 ```
 
 `spctl --assess` will report `rejected`. That is expected and is not a problem:
@@ -361,7 +361,7 @@ signed with a provenance attestation linking it to the exact commit and workflow
 run that produced it:
 
 ```bash
-gh attestation verify whatsagent-desktop-*.tar.gz --repo robertsinke/whatsagent
+gh attestation verify WhatsAgent-*.tar.gz --repo robertsinke/whatsagent
 ```
 
 Together with the published `SHA256SUMS`, that gives a verifiable chain from the

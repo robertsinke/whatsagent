@@ -1,10 +1,16 @@
 appId: com.whatsagent.desktop
-# Deliberately NOT "whatsagent". macOS filesystems are case-insensitive by
-# default, so any casing of that name resolves to the data directory `npm start`
-# uses — the owner's real WhatsApp credentials. A distinct product name keeps a
-# plain double-click of the packaged app off the live account by construction.
-# `electron/main.js` sets userData explicitly to match; this is belt and braces.
-productName: whatsagent-desktop
+# The bundle name and what macOS displays. Note that `WhatsAgent`
+# case-insensitively COLLIDES with the `whatsagent` directory `npm start` uses:
+# macOS filesystems are case-insensitive by default, so Electron's *default*
+# userData path for this product name would resolve straight onto the owner's
+# real WhatsApp credentials.
+#
+# That is safe only because `electron/main.js` sets userData explicitly, to a
+# hardcoded `whatsagent-desktop` that is deliberately NOT derived from this name.
+# That call is load-bearing, not belt and braces — delete it, or make it follow
+# productName, and a plain double-click puts the packaged app and the dev server
+# on one directory: two Baileys sockets on one account, the primary ban risk.
+productName: WhatsAgent
 
 directories:
   output: release
@@ -49,6 +55,13 @@ publish:
 
 mac:
   category: public.app-category.social-networking
+
+  # Stated explicitly rather than left to the `buildResources/icon.icns`
+  # convention: when the file is missing, electron-builder silently ships the
+  # default Electron icon instead of failing, which is how this app went out
+  # unbranded until 2026-07-28. `build-resources/icon.png` is the 1024px master
+  # the .icns was generated from — keep them in sync.
+  icon: build-resources/icon.icns
 
   # Ad-hoc signing, explicitly. There is no Apple Developer account and none is
   # wanted (see docs/plans/2026-07-27-003-p3-3-distribution-spec.md).

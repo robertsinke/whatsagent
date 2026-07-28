@@ -12,7 +12,7 @@
 # cryptographically links each asset to the exact source commit and workflow run
 # that produced it, and anyone can check it with:
 #
-#   gh attestation verify whatsagent-desktop-*.tar.gz --repo <owner>/<repo>
+#   gh attestation verify WhatsAgent-*.tar.gz --repo <owner>/<repo>
 #
 # For an open-source app that is a stronger guarantee than notarization, which
 # only attests that Apple scanned the binary and knows who paid the membership
@@ -92,12 +92,12 @@ jobs:
       # and an unsigned arm64 app will not launch at all.
       - name: Assert the bundle is ad-hoc signed
         run: |
-          codesign -dv --verbose=4 release/mac-arm64/whatsagent-desktop.app 2>&1 | tee /tmp/codesign.txt
+          codesign -dv --verbose=4 release/mac-arm64/WhatsAgent.app 2>&1 | tee /tmp/codesign.txt
           grep -q 'Signature=adhoc' /tmp/codesign.txt || {
             echo "::error::bundle is not ad-hoc signed; refusing to publish"
             exit 1
           }
-          codesign --verify --deep --strict --verbose=2 release/mac-arm64/whatsagent-desktop.app
+          codesign --verify --deep --strict --verbose=2 release/mac-arm64/WhatsAgent.app
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v4

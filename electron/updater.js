@@ -85,7 +85,7 @@ let updateInProgress = false;
  * writable — which is most of the point of that fallback.
  */
 function bundleRoot() {
-	// …/whatsagent-desktop.app/Contents/MacOS/whatsagent-desktop → …/whatsagent-desktop.app
+	// …/WhatsAgent.app/Contents/MacOS/WhatsAgent → …/WhatsAgent.app
 	const root = resolve(app.getPath('exe'), '..', '..', '..');
 	if (!root.endsWith('.app')) {
 		throw new Error(`Refusing to update: ${root} does not look like an app bundle.`);

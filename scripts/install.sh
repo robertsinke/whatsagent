@@ -31,7 +31,7 @@
 set -eu
 
 REPO="${WHATSAGENT_REPO:-robertsinke/whatsagent}"
-APP_NAME="whatsagent-desktop.app"
+APP_NAME="WhatsAgent.app"
 
 say() { printf '%s\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
