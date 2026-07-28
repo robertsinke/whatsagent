@@ -31,4 +31,17 @@ export interface Memory {
 	reflect(): Promise<void>;
 	/** The short-interval memory tick: retry the retain queue and mirror changed documents. No-op when offline. */
 	drain?(): Promise<void>;
+	/**
+	 * P3.2: D3 — an owner correction becomes a hard rule for reflect, not a file edit we
+	 * merge. Optional for the same reason `drain` is: `NullMemory` compiles untouched and
+	 * the route asks `typeof memory.recordVoiceCorrection === 'function'` instead of
+	 * consulting a capability flag that could disagree with reality.
+	 */
+	recordVoiceCorrection?(name: string, content: string, chatJid?: string): Promise<void>;
+	/**
+	 * P3.2: owner-triggered "refresh now". Asynchronous server-side — this submits the
+	 * refresh and returns the model ids it triggered; regenerated content lands on a
+	 * later mirror tick. Present only where a real memory service backs it.
+	 */
+	refreshVoiceModels?(): Promise<string[]>;
 }

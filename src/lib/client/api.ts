@@ -217,17 +217,62 @@ export const api = {
 		}),
 
 	/**
-	 * W4-U10: read-only inspector for the global voice document on disk — what
-	 * drafting actually reads (D2). Returns content null with byteLength 0 when
-	 * nothing has been learned yet. Read-only; the file is a Hindsight mirror
-	 * and any hand edit is overwritten at the next memory tick.
+	 * W4-U10 / P3.2: the global voice document on disk — what drafting actually
+	 * reads (D2). Returns content null with byteLength 0 when nothing has been
+	 * learned yet. `hash` is the `baseHash` for the next {@link saveVoice}, and
+	 * `mirrorGuard` is true while a previous hand edit is holding the Hindsight
+	 * mirror off this document.
 	 */
-	voiceGlobal: () =>
-		request<{
-			stem: string;
-			content: string | null;
-			byteLength: number;
-			modifiedAt: string | null;
-			path: string;
-		}>('/voice/global')
+	voiceGlobal: () => request<VoiceDocumentResponse>('/voice/global'),
+
+	/**
+	 * P3.2: save a hand edit. `baseHash` is the `hash` from the load; a mismatch
+	 * means the document moved underneath this editor and the server answers 409
+	 * with the current document rather than overwriting it — so callers must
+	 * handle a rejected request, not just a resolved one.
+	 *
+	 * The save arms the mirror guard, which is what makes the edit survive the
+	 * 60-second mirror tick. `looksLikeVoiceDocument: false` in the response is a
+	 * WARNING (the editor may have mangled the document's tables), never a sign
+	 * the save failed.
+	 */
+	saveVoice: (content: string, baseHash: string, note?: string) =>
+		request<VoiceSaveResponse>('/voice/global', {
+			method: 'PUT',
+			body: JSON.stringify(note === undefined ? { content, baseHash } : { content, baseHash, note })
+		}),
+
+	/**
+	 * P3.2: ask the memory service to regenerate the voice models now. Refresh is
+	 * asynchronous server-side — the regenerated document lands on a later mirror
+	 * tick, not in this response. `available: false` (still a 200) means no memory
+	 * service is wired; `error` non-null means one is and it did not answer.
+	 */
+	refreshVoice: () =>
+		request<{ available: boolean; refreshed: string[]; error: string | null }>(
+			'/voice/global/refresh',
+			{ method: 'POST' }
+		)
+};
+
+export type VoiceDocumentResponse = {
+	stem: string;
+	content: string | null;
+	byteLength: number;
+	modifiedAt: string | null;
+	path: string;
+	hash: string;
+	mirrorGuard: boolean;
+	memory: { available: boolean; mode: string };
+};
+
+export type VoiceSaveResponse = {
+	stem: string;
+	hash: string;
+	byteLength: number;
+	modifiedAt: string | null;
+	mirrorGuard: boolean;
+	looksLikeVoiceDocument: boolean;
+	/** `recorded` — Hindsight took the correction. `skipped` — no memory service. `failed` — it did not answer; the file is saved regardless. */
+	directive: 'recorded' | 'skipped' | 'failed';
 };

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Chat } from '../../store/chats.js';
 import { createRuntimeMemory, HindsightMemory, looksLikeVoiceDocument, type HindsightClientLike } from './hindsight.js';
 import { NullMemory } from './null-memory.js';
-import { composeVoice, voiceFileStem } from './voice-files.js';
+import { composeVoice, VoiceFiles, voiceFileStem } from './voice-files.js';
 
 const chat: Chat = {
 	jid: 'alice@s.whatsapp.net',
@@ -781,6 +781,178 @@ describe('change-driven voice mirror (W4-U6)', () => {
 		};
 		await memory.drain!();
 		expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toContain('Sure no problem');
+	});
+
+	/**
+	 * P3.2 — the owner-edit mirror guard, seen from the memory side.
+	 *
+	 * Every one of these starts from the same setup: the mirror has written a document,
+	 * the owner corrected it through `writeOwnerEdit`, and Hindsight has NOT yet produced
+	 * a document reflecting the correction. That is the whole risk window, and it is
+	 * measured in the 60 s between drain ticks.
+	 */
+	describe('owner-edit mirror guard (P3.2)', () => {
+		const MACHINE = '- Writes short, lowercase replies.';
+		const OWNER = '- Writes short replies, and never uses exclamation marks.';
+
+		function guarded(dataDir: string): void {
+			seedVoiceFiles(dataDir, { global: MACHINE });
+			new VoiceFiles(dataDir).writeOwnerEdit('global', OWNER);
+		}
+
+		it('drain() refuses to mirror a guarded document', async () => {
+			const dataDir = tempDataDir();
+			guarded(dataDir);
+			// A fresh timestamp — the 60 s tick that used to revert the edit.
+			const models: ModelRow[] = [
+				{ id: 'voice-global', content: MACHINE, last_refreshed_at: '2026-07-29T00:01:00Z' }
+			];
+			const memory = new HindsightMemory({
+				dataDir,
+				client: fakeClient({}, models),
+				fetchImpl: mirrorFetch(models),
+				log: { warn: vi.fn() }
+			});
+
+			await memory.drain!();
+			expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toBe(OWNER);
+		});
+
+		it('reflect() refuses too — the 6-hourly full mirror is unconditional by design', async () => {
+			const dataDir = tempDataDir();
+			guarded(dataDir);
+			const models: ModelRow[] = [
+				{ id: 'voice-global', content: MACHINE, last_refreshed_at: '2026-07-29T00:01:00Z' }
+			];
+			const memory = new HindsightMemory({
+				dataDir,
+				client: fakeClient({}, models),
+				fetchImpl: mirrorFetch(models),
+				log: { warn: vi.fn() }
+			});
+
+			await memory.reflect();
+			expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toBe(OWNER);
+		});
+
+		it('HOLDS while the model still returns pre-edit content, EVEN AFTER last_refreshed_at advances', async () => {
+			// This is the reason the guard is keyed on content and never on a timestamp.
+			// `refreshMentalModel` is a TRIGGER: it returns immediately, Hindsight
+			// regenerates in the background, and `refreshVoiceModels()` mirrors on the very
+			// next line — still carrying the pre-edit document. A timestamp-keyed guard
+			// would be released by the button labelled "make my correction take effect",
+			// and the pre-edit document would land straight back on top of the edit.
+			const dataDir = tempDataDir();
+			guarded(dataDir);
+			const models: ModelRow[] = [
+				{ id: 'voice-global', content: MACHINE, last_refreshed_at: '2026-07-29T00:00:00Z' }
+			];
+			const memory = new HindsightMemory({
+				dataDir,
+				client: fakeClient({}, models),
+				fetchImpl: mirrorFetch(models),
+				log: { warn: vi.fn() }
+			});
+
+			await memory.refreshVoiceModels();
+			expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toBe(OWNER);
+
+			// The timestamp advances (a refresh completed) but the content is unchanged —
+			// consolidation had nothing new to say. Still the pre-edit document. Still held.
+			models[0] = {
+				id: 'voice-global',
+				content: MACHINE,
+				last_refreshed_at: '2026-07-29T03:00:00Z'
+			};
+			await memory.drain!();
+			await memory.reflect();
+			expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toBe(OWNER);
+		});
+
+		it('releases as soon as the model returns genuinely new content', async () => {
+			const dataDir = tempDataDir();
+			guarded(dataDir);
+			const models: ModelRow[] = [
+				{ id: 'voice-global', content: MACHINE, last_refreshed_at: '2026-07-29T00:00:00Z' }
+			];
+			const memory = new HindsightMemory({
+				dataDir,
+				client: fakeClient({}, models),
+				fetchImpl: mirrorFetch(models),
+				log: { warn: vi.fn() }
+			});
+
+			await memory.drain!();
+			expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toBe(OWNER);
+
+			// Consolidation absorbed the correction. The guard steps aside — no TTL was
+			// needed and no button had to be pressed.
+			const absorbed = '- Writes short replies.\n- Never uses exclamation marks.';
+			models[0] = {
+				id: 'voice-global',
+				content: absorbed,
+				last_refreshed_at: '2026-07-29T03:00:00Z'
+			};
+			await memory.drain!();
+			expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toBe(absorbed);
+			expect(new VoiceFiles(dataDir).ownerEdit('global')).toBe(null);
+		});
+
+		it('does not advance #lastMirroredAt on a refused write', async () => {
+			// Observable consequence: refuse at T1, then let the model produce genuinely new
+			// content while `last_refreshed_at` STAYS at T1 (a background regeneration that
+			// finished under the same refresh). If the refused write had cached T1, the next
+			// drain would skip on the timestamp compare and the new content would never land.
+			const dataDir = tempDataDir();
+			guarded(dataDir);
+			const models: ModelRow[] = [
+				{ id: 'voice-global', content: MACHINE, last_refreshed_at: '2026-07-29T00:00:00Z' }
+			];
+			const memory = new HindsightMemory({
+				dataDir,
+				client: fakeClient({}, models),
+				fetchImpl: mirrorFetch(models),
+				log: { warn: vi.fn() }
+			});
+
+			await memory.drain!();
+			expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toBe(OWNER);
+
+			const absorbed = '- Writes short replies.\n- Never uses exclamation marks.';
+			models[0] = {
+				id: 'voice-global',
+				content: absorbed,
+				last_refreshed_at: '2026-07-29T00:00:00Z'
+			};
+			await memory.drain!();
+			expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toBe(absorbed);
+		});
+
+		it('protects an edit saved while Hindsight was down, once it comes back', async () => {
+			// "Hindsight is down" does NOT swap the instance for NullMemory — it sets
+			// #offlineUntil and mirroring resumes minutes later. So the guard is armed on
+			// every save regardless of whether the directive call succeeded; otherwise a
+			// save-during-outage is clobbered on reconnect.
+			const dataDir = tempDataDir();
+			seedVoiceFiles(dataDir, { global: MACHINE });
+			const models: ModelRow[] = [
+				{ id: 'voice-global', content: MACHINE, last_refreshed_at: '2026-07-29T00:00:00Z' }
+			];
+			const memory = new HindsightMemory({
+				dataDir,
+				client: fakeClient({ createDirective: async () => { throw new Error('ECONNREFUSED'); } }, models),
+				fetchImpl: mirrorFetch(models),
+				log: { warn: vi.fn() }
+			});
+
+			// The save path arms the guard first; the directive is best-effort and fails here.
+			new VoiceFiles(dataDir).writeOwnerEdit('global', OWNER);
+			await expect(memory.recordVoiceCorrection('correction', 'note')).rejects.toThrow();
+
+			// Docker comes back and the mirror resumes.
+			await memory.drain!();
+			expect(readFileSync(join(dataDir, 'voice', 'global.md'), 'utf8')).toBe(OWNER);
+		});
 	});
 
 	/**

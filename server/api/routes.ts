@@ -27,11 +27,12 @@ import {
 	getOutbox,
 	listOutbox
 } from '../store/outbox.js';
-import { getSetting, listEffectiveSettings, OUTBOX_DRY_RUN_SETTING, resolveOutboxDryRun, setSetting, validateSettingValue, PROVIDER_SETTING, PROVIDER_MODEL_SETTING } from '../store/settings.js';
+import { getSetting, listEffectiveSettings, MEMORY_SETTING, OUTBOX_DRY_RUN_SETTING, resolveOutboxDryRun, setSetting, validateSettingValue, PROVIDER_SETTING, PROVIDER_MODEL_SETTING } from '../store/settings.js';
 import type { Memory } from '../agent/memory/memory.js';
 import type { RefinementAttempt, RefineDraftRequest } from '../agent/refiner.js';
 import { retainDraftLearning } from '../agent/voice.js';
 import { GLOBAL_VOICE_STEM, VoiceFiles, VOICE_STEMS } from '../agent/memory/voice-files.js';
+import { looksLikeVoiceDocument } from '../../shared/voice-document.js';
 import { isRefinementIntent } from '../providers/provider.js';
 import type { ConnectionStatus, EventBus } from './events.js';
 import type { SessionView } from './session.js';
@@ -168,6 +169,13 @@ function json(res: ServerResponse, status: number, body: unknown): void {
 function error(res: ServerResponse, status: number, message: string, extra?: Record<string, unknown>): void {
 	json(res, status, { error: message, ...extra });
 }
+
+/**
+ * Ceiling for a hand-saved voice document. The real one is ~8 KB; 256 KB is generous
+ * enough that no legitimate edit hits it and small enough that a runaway client cannot
+ * park megabytes in the data dir.
+ */
+const MAX_VOICE_DOCUMENT_BYTES = 256 * 1024;
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
 	const chunks: Buffer[] = [];
@@ -468,6 +476,10 @@ async function handleApi(
 	 * a separate `/api/voice/contact/:jid` route that runs voiceFileStem()
 	 * server-side. The regex below is shaped so that case can grow without
 	 * restructuring, but today only the literal `global` segment resolves.
+	 *
+	 * P3.2 adds the WRITE path (`PUT`) and the refresh trigger below. The whitelist
+	 * matters MORE there, not less: a traversal stem on a write path does not leak
+	 * `auth/creds.json`, it overwrites it.
 	 */
 	const voiceGlobalMatch = /^\/api\/voice\/([^/]+)$/.exec(path);
 	if (voiceGlobalMatch && method === 'GET') {
@@ -487,8 +499,150 @@ async function handleApi(
 			content: view.content,
 			byteLength: view.byteLength,
 			modifiedAt: view.modifiedAt === null ? null : new Date(view.modifiedAt).toISOString(),
-			path: view.path
+			path: view.path,
+			// `hash` is what the client sends back as `baseHash` — without it there is no
+			// way to detect that the mirror moved the document under an open editor.
+			hash: view.hash,
+			mirrorGuard: view.mirrorGuard,
+			memory: {
+				// Method presence, not a flag: a capability flag can disagree with the object.
+				available: typeof deps.memory?.refreshVoiceModels === 'function',
+				mode: getSetting(db, MEMORY_SETTING) ?? 'hindsight'
+			}
 		});
+		return;
+	}
+
+	/**
+	 * P3.2: save a hand edit of a voice document.
+	 *
+	 * CSRF needs no code here — `security.ts` routes every non-GET/HEAD/OPTIONS request
+	 * through `validateOriginAndHost` before dispatch (see the `isMutatingMethod` gate in
+	 * `handleRequest`), so a cross-origin `PUT` is rejected with 403 before this runs.
+	 * There is a test asserting exactly that; it is the proof, not this comment.
+	 *
+	 * Ordering is load-bearing:
+	 *   1. whitelist / size / `baseHash` checks — all of which leave the file untouched;
+	 *   2. `writeOwnerEdit`, which arms the mirror guard and is NEVER rolled back;
+	 *   3. the Hindsight directive, which is best-effort.
+	 * A 409 must not reach step 2: arming the guard on a save that never happened would
+	 * hold the mirror off a document the owner never edited.
+	 */
+	if (voiceGlobalMatch && method === 'PUT') {
+		const stem = decodeURIComponent(voiceGlobalMatch[1]!);
+		if (!VOICE_STEMS.has(stem)) {
+			error(res, 404, 'Not found');
+			return;
+		}
+		const dataDir = deps.dataDir;
+		if (!dataDir) {
+			error(res, 503, 'Voice storage unavailable');
+			return;
+		}
+		const body = (await readJsonBody(req)) as
+			| { content?: unknown; baseHash?: unknown; note?: unknown }
+			| undefined;
+		if (typeof body?.content !== 'string' || typeof body.baseHash !== 'string') {
+			error(res, 400, 'Expected { content, baseHash }');
+			return;
+		}
+		// The real document is ~8 KB. The ceiling exists so a runaway client cannot park
+		// megabytes in the data dir, and it is checked in BYTES before anything is hashed.
+		if (Buffer.byteLength(body.content, 'utf8') > MAX_VOICE_DOCUMENT_BYTES) {
+			error(res, 400, 'Voice document too large', { maxBytes: MAX_VOICE_DOCUMENT_BYTES });
+			return;
+		}
+		const files = new VoiceFiles(dataDir);
+		const current = files.inspect(stem);
+		if (current.hash !== body.baseHash) {
+			// Someone (the mirror, another tab) moved the document since this editor loaded
+			// it. Return what is actually on disk and let the owner decide — silently
+			// overwriting is how an edit disappears without anyone noticing.
+			json(res, 409, {
+				stem,
+				conflict: true,
+				content: current.content,
+				hash: current.hash,
+				byteLength: current.byteLength,
+				modifiedAt:
+					current.modifiedAt === null ? null : new Date(current.modifiedAt).toISOString(),
+				mirrorGuard: current.mirrorGuard
+			});
+			return;
+		}
+
+		files.writeOwnerEdit(stem, body.content);
+
+		// The directive is D3's "correction becomes a hard rule for reflect". It is
+		// attempted after the write and can never undo it: an owner who saved and got a
+		// 500 back would have no way to tell whether their text survived. `skipped` means
+		// no memory service is wired at all; `failed` means one is and the call did not
+		// land — the guard is armed either way, which is the whole point of arming it
+		// unconditionally.
+		let directive: 'recorded' | 'skipped' | 'failed' = 'skipped';
+		if (typeof deps.memory?.recordVoiceCorrection === 'function') {
+			const note = typeof body.note === 'string' ? body.note.trim() : '';
+			try {
+				await deps.memory.recordVoiceCorrection(
+					`Owner voice correction (${stem})`,
+					note ||
+						'The owner hand-edited the voice document. Treat their edited version as ' +
+							'authoritative about how they write, over anything inferred from message history.',
+					undefined
+				);
+				directive = 'recorded';
+			} catch {
+				directive = 'failed';
+			}
+		}
+
+		const saved = files.inspect(stem);
+		json(res, 200, {
+			stem,
+			hash: saved.hash,
+			byteLength: saved.byteLength,
+			modifiedAt: saved.modifiedAt === null ? null : new Date(saved.modifiedAt).toISOString(),
+			mirrorGuard: saved.mirrorGuard,
+			// A WARNING, never a rejection (P3.1). Refusing a legitimate owner edit because a
+			// heuristic disagreed is worse than the Milkdown mangling it watches for.
+			looksLikeVoiceDocument: looksLikeVoiceDocument(body.content),
+			directive
+		});
+		return;
+	}
+
+	/**
+	 * P3.2: owner-triggered "refresh now" — the release valve for the mirror guard. It
+	 * does not clear the guard: `refreshMentalModel` is a trigger, and the mirror that
+	 * runs immediately after it still carries the PRE-EDIT document. The guard releases
+	 * itself when genuinely new content arrives, which is the only moment it is safe to.
+	 *
+	 * "No memory service" is a 200 with `available: false`, not an error status, so the
+	 * UI can explain the situation instead of alarming about it.
+	 */
+	const voiceRefreshMatch = /^\/api\/voice\/([^/]+)\/refresh$/.exec(path);
+	if (voiceRefreshMatch && method === 'POST') {
+		const stem = decodeURIComponent(voiceRefreshMatch[1]!);
+		if (!VOICE_STEMS.has(stem)) {
+			error(res, 404, 'Not found');
+			return;
+		}
+		if (typeof deps.memory?.refreshVoiceModels !== 'function') {
+			json(res, 200, { available: false, refreshed: [], error: null });
+			return;
+		}
+		try {
+			const refreshed = await deps.memory.refreshVoiceModels();
+			json(res, 200, { available: true, refreshed, error: null });
+		} catch (err) {
+			// Hindsight being down is an expected state, not a server fault — report it as
+			// data so the UI says "memory is offline" rather than "something broke".
+			json(res, 200, {
+				available: true,
+				refreshed: [],
+				error: err instanceof Error ? err.message : String(err)
+			});
+		}
 		return;
 	}
 

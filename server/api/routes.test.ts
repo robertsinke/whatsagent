@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -90,6 +90,21 @@ async function api(
 		headers.set('Origin', origin ?? originForApp());
 	}
 	return fetch(`${baseUrl()}${path}`, { ...rest, headers });
+}
+
+/**
+ * A `Memory` with only the required members. Spread it and add the optional ones the
+ * test cares about (`recordVoiceCorrection`, `refreshVoiceModels`) — the routes ask
+ * `typeof memory.x === 'function'`, so absence from the spread IS the "not supported"
+ * case, with no capability flag that could disagree.
+ */
+function stubMemory(): Memory {
+	return {
+		retainVoiceObservation: async () => undefined,
+		retainEditDelta: async () => undefined,
+		recallStyleFor: async () => null,
+		reflect: async () => undefined
+	};
 }
 
 function seedNeedsReplyFixture(database: AppDatabase): void {
@@ -1571,6 +1586,265 @@ describe('GET /api/voice/global (W4-U10 inspector)', () => {
 		await startTestApp();
 		const res = await api('/api/voice/global', { origin: null });
 		expect(res.status).toBe(200);
+	});
+
+	it('carries hash, mirrorGuard and memory availability so the editor can round-trip', async () => {
+		await startTestApp();
+		const res = await api('/api/voice/global');
+		const body = await res.json();
+		expect(typeof body.hash).toBe('string');
+		expect(body.mirrorGuard).toBe(false);
+		// No memory service wired in this app — method presence answers it, not a flag.
+		expect(body.memory).toEqual({ available: false, mode: 'hindsight' });
+	});
+});
+
+/**
+ * P3.2 — the voice SAVE path.
+ *
+ * `voice/global.md` is a mirror of a Hindsight mental model that is rewritten at boot,
+ * every 60 s, every 6 h and nightly. These tests cover the two things that make a hand
+ * edit survivable: the content-hash mirror guard armed by the save, and the optimistic
+ * `baseHash` check that refuses to overwrite a document that moved underneath the editor.
+ */
+describe('PUT /api/voice/global (P3.2 save path)', () => {
+	const DOC = '- Writes short, lowercase replies.\n- Signs off with "grtjs".';
+
+	async function loadHash(): Promise<string> {
+		const res = await api('/api/voice/global');
+		return (await res.json()).hash as string;
+	}
+
+	it('rejects a cross-origin PUT before it reaches the handler (the CSRF proof)', async () => {
+		// security.ts routes every non-GET/HEAD/OPTIONS request through
+		// validateOriginAndHost, so this needs no per-route code — but R9 depends on it,
+		// so it is asserted rather than assumed. A page on any other origin must not be
+		// able to rewrite the document that shapes every draft.
+		await startTestApp();
+		const baseHash = await loadHash();
+		const res = await api('/api/voice/global', {
+			method: 'PUT',
+			origin: null,
+			body: JSON.stringify({ content: DOC, baseHash })
+		});
+		expect(res.status).toBe(403);
+		// And nothing was written.
+		expect(existsSync(join(dataDir!, 'voice', 'global.md'))).toBe(false);
+
+		const foreign = await api('/api/voice/global', {
+			method: 'PUT',
+			origin: 'http://evil.example',
+			body: JSON.stringify({ content: DOC, baseHash })
+		});
+		expect(foreign.status).toBe(403);
+		expect(existsSync(join(dataDir!, 'voice', 'global.md'))).toBe(false);
+	});
+
+	it('refuses a traversal stem and leaves auth/creds.json byte-identical', async () => {
+		// On a read path a traversal stem leaks the Baileys auth blob. On a WRITE path it
+		// OVERWRITES it — an account-hijack credential destroyed by a stray request. So
+		// the whitelist matters more here, not less.
+		await startTestApp();
+		mkdirSync(join(dataDir!, 'auth'), { recursive: true });
+		const creds = '{"secret":"hijack"}';
+		writeFileSync(join(dataDir!, 'auth', 'creds.json'), creds, 'utf8');
+
+		const attempts = [
+			'/api/voice/..%2Fauth%2Fcreds',
+			'/api/voice/..%2fauth%2fcreds.json',
+			'/api/voice/global..%2Fauth%2Fcreds',
+			'/api/voice/contact',
+			'/api/voice/anything-else'
+		];
+		for (const path of attempts) {
+			const res = await api(path, {
+				method: 'PUT',
+				body: JSON.stringify({ content: 'pwned', baseHash: 'whatever' })
+			});
+			expect(res.status, `path ${path}`).toBe(404);
+		}
+		expect(readFileSync(join(dataDir!, 'auth', 'creds.json'), 'utf8')).toBe(creds);
+	});
+
+	it('saves, arms the mirror guard, and returns a hash that round-trips into the next save', async () => {
+		await startTestApp();
+		const res = await api('/api/voice/global', {
+			method: 'PUT',
+			body: JSON.stringify({ content: DOC, baseHash: await loadHash() })
+		});
+		expect(res.status).toBe(200);
+		const body = await res.json();
+		expect(body.mirrorGuard).toBe(true);
+		expect(body.looksLikeVoiceDocument).toBe(true);
+		expect(readFileSync(join(dataDir!, 'voice', 'global.md'), 'utf8')).toBe(DOC);
+		// Sidecar + backup landed beside the document.
+		expect(existsSync(join(dataDir!, 'voice', 'global.owner.json'))).toBe(true);
+		expect(readFileSync(join(dataDir!, 'voice', 'global.owner-backup.md'), 'utf8')).toBe(DOC);
+
+		// The returned hash is the next baseHash — a second save with it succeeds.
+		const second = `${DOC}\n- Answers in Dutch to Dutch messages.`;
+		const again = await api('/api/voice/global', {
+			method: 'PUT',
+			body: JSON.stringify({ content: second, baseHash: body.hash })
+		});
+		expect(again.status).toBe(200);
+		expect(readFileSync(join(dataDir!, 'voice', 'global.md'), 'utf8')).toBe(second);
+		// And a GET now reports the same hash the save returned.
+		expect(await loadHash()).toBe((await again.json()).hash);
+	});
+
+	it('409s on a stale baseHash and leaves the file BYTE-IDENTICAL', async () => {
+		await startTestApp();
+		mkdirSync(join(dataDir!, 'voice'), { recursive: true });
+		const onDisk = '- The mirror wrote this while the editor was open.';
+		writeFileSync(join(dataDir!, 'voice', 'global.md'), onDisk, 'utf8');
+
+		const res = await api('/api/voice/global', {
+			method: 'PUT',
+			body: JSON.stringify({ content: DOC, baseHash: 'sha256-of-a-document-that-moved' })
+		});
+		expect(res.status).toBe(409);
+		const body = await res.json();
+		expect(body.conflict).toBe(true);
+		// The response carries what is actually on disk so the UI can offer a real choice.
+		expect(body.content).toBe(onDisk);
+		expect(readFileSync(join(dataDir!, 'voice', 'global.md'), 'utf8')).toBe(onDisk);
+		// A save that never happened must not arm the guard — that would hold the mirror
+		// off a document the owner never edited.
+		expect(existsSync(join(dataDir!, 'voice', 'global.owner.json'))).toBe(false);
+		// The hash it hands back is usable directly as the retry's baseHash.
+		const retry = await api('/api/voice/global', {
+			method: 'PUT',
+			body: JSON.stringify({ content: DOC, baseHash: body.hash })
+		});
+		expect(retry.status).toBe(200);
+	});
+
+	it('returns directive "skipped" with no memory wired — and still writes the file', async () => {
+		await startTestApp();
+		const res = await api('/api/voice/global', {
+			method: 'PUT',
+			body: JSON.stringify({ content: DOC, baseHash: await loadHash() })
+		});
+		expect(res.status).toBe(200);
+		expect((await res.json()).directive).toBe('skipped');
+		expect(readFileSync(join(dataDir!, 'voice', 'global.md'), 'utf8')).toBe(DOC);
+	});
+
+	it('returns directive "recorded" when the memory service accepts the correction', async () => {
+		const recordVoiceCorrection = vi.fn(async (_name: string, _content: string) => {});
+		await startTestApp(new EventBus(), { ...stubMemory(), recordVoiceCorrection });
+		const res = await api('/api/voice/global', {
+			method: 'PUT',
+			body: JSON.stringify({ content: DOC, baseHash: await loadHash(), note: 'Stop using exclamation marks.' })
+		});
+		expect(res.status).toBe(200);
+		expect((await res.json()).directive).toBe('recorded');
+		// The owner's note is the directive when they gave one — D3's "hard rule for
+		// reflect", not the 8 KB document.
+		expect(recordVoiceCorrection.mock.calls[0]?.[1]).toBe('Stop using exclamation marks.');
+	});
+
+	it('a throwing recordVoiceCorrection returns 200 with directive "failed" — the file is STILL written', async () => {
+		// An owner who saved and got a 500 back has no way to tell whether their text
+		// survived. The write comes first and is never rolled back; the directive is
+		// best-effort, and the guard is armed either way (Hindsight being down does not
+		// stop mirroring — it resumes minutes later).
+		await startTestApp(new EventBus(), {
+			...stubMemory(),
+			recordVoiceCorrection: async () => {
+				throw new Error('ECONNREFUSED');
+			}
+		});
+		const res = await api('/api/voice/global', {
+			method: 'PUT',
+			body: JSON.stringify({ content: DOC, baseHash: await loadHash() })
+		});
+		expect(res.status).toBe(200);
+		const body = await res.json();
+		expect(body.directive).toBe('failed');
+		expect(body.mirrorGuard).toBe(true);
+		expect(readFileSync(join(dataDir!, 'voice', 'global.md'), 'utf8')).toBe(DOC);
+		expect(existsSync(join(dataDir!, 'voice', 'global.owner.json'))).toBe(true);
+	});
+
+	it('rejects a document over 256 KB without writing it', async () => {
+		await startTestApp();
+		const res = await api('/api/voice/global', {
+			method: 'PUT',
+			body: JSON.stringify({ content: 'x'.repeat(256 * 1024 + 1), baseHash: await loadHash() })
+		});
+		expect(res.status).toBe(400);
+		expect(existsSync(join(dataDir!, 'voice', 'global.md'))).toBe(false);
+	});
+
+	it('rejects a body with no baseHash rather than blind-writing', async () => {
+		await startTestApp();
+		const res = await api('/api/voice/global', {
+			method: 'PUT',
+			body: JSON.stringify({ content: DOC })
+		});
+		expect(res.status).toBe(400);
+		expect(existsSync(join(dataDir!, 'voice', 'global.md'))).toBe(false);
+	});
+
+	it('saves a document the heuristic dislikes, and reports it as a WARNING only', async () => {
+		// Rejecting a legitimate owner edit because a heuristic disagreed is worse than
+		// the Milkdown table-mangling the heuristic watches for.
+		await startTestApp();
+		const prose = 'Just write like me.';
+		const res = await api('/api/voice/global', {
+			method: 'PUT',
+			body: JSON.stringify({ content: prose, baseHash: await loadHash() })
+		});
+		expect(res.status).toBe(200);
+		expect((await res.json()).looksLikeVoiceDocument).toBe(false);
+		expect(readFileSync(join(dataDir!, 'voice', 'global.md'), 'utf8')).toBe(prose);
+	});
+});
+
+describe('POST /api/voice/global/refresh (P3.2)', () => {
+	it('answers 200 with available:false when no memory service is wired', async () => {
+		// Not an error status: the UI should explain "memory is off", not alarm.
+		await startTestApp();
+		const res = await api('/api/voice/global/refresh', { method: 'POST' });
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ available: false, refreshed: [], error: null });
+	});
+
+	it('triggers the refresh and returns the model ids', async () => {
+		const refreshVoiceModels = vi.fn(async () => ['voice-global']);
+		await startTestApp(new EventBus(), { ...stubMemory(), refreshVoiceModels });
+		const res = await api('/api/voice/global/refresh', { method: 'POST' });
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ available: true, refreshed: ['voice-global'], error: null });
+		expect(refreshVoiceModels).toHaveBeenCalledTimes(1);
+	});
+
+	it('reports a memory-service failure as data, not as a server fault', async () => {
+		await startTestApp(new EventBus(), {
+			...stubMemory(),
+			refreshVoiceModels: async () => {
+				throw new Error('Hindsight unreachable');
+			}
+		});
+		const res = await api('/api/voice/global/refresh', { method: 'POST' });
+		expect(res.status).toBe(200);
+		const body = await res.json();
+		expect(body).toMatchObject({ available: true, refreshed: [] });
+		expect(body.error).toContain('Hindsight unreachable');
+	});
+
+	it('requires Origin/Host validation like every mutating route', async () => {
+		await startTestApp();
+		const res = await api('/api/voice/global/refresh', { method: 'POST', origin: null });
+		expect(res.status).toBe(403);
+	});
+
+	it('refuses a non-whitelisted stem', async () => {
+		await startTestApp();
+		const res = await api('/api/voice/..%2Fauth%2Fcreds/refresh', { method: 'POST' });
+		expect(res.status).toBe(404);
 	});
 });
 
