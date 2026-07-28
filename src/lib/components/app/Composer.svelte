@@ -1,6 +1,7 @@
 <script lang="ts">
-	import PromptInput from '$lib/components/ai-elements/prompt-input.svelte';
-	import { X } from '@lucide/svelte';
+	import { CornerDownLeft, X } from '@lucide/svelte';
+	import * as InputGroup from '$lib/components/ui/input-group/index.js';
+	import { Spinner } from '$lib/components/ui/spinner/index.js';
 	import { senderLabel } from '$lib/client/view.js';
 	import type { Message } from '$lib/client/types.js';
 
@@ -47,8 +48,8 @@
 	 * R9: this hands text to the API, which enqueues an outbox row. There is no
 	 * path from the UI to WhatsApp's send function — the pacer is the only sender.
 	 */
-	async function submit({ text }: { text: string }) {
-		const trimmed = text.trim();
+	async function submit() {
+		const trimmed = value.trim();
 		if (!trimmed || disabled || busy) return;
 		busy = true;
 		try {
@@ -57,6 +58,18 @@
 		} finally {
 			busy = false;
 		}
+	}
+
+	function handleKeydown(e: KeyboardEvent) {
+		if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+		e.preventDefault();
+		if (disabled || busy) return;
+		(e.currentTarget as HTMLTextAreaElement).form?.requestSubmit();
+	}
+
+	async function handleSubmit(e: Event) {
+		e.preventDefault();
+		await submit();
 	}
 </script>
 
@@ -77,14 +90,35 @@
 			</button>
 		</div>
 	{/if}
-	<PromptInput
-		bind:value
-		{placeholder}
-		status={busy ? 'submitted' : 'ready'}
-		onsubmit={submit}
-		class="composer-input"
-	/>
-	<p class="hint">Typed sends go immediately through the outbox — nothing bypasses it.</p>
+	<form class="composer-input w-full" onsubmit={handleSubmit}>
+		<InputGroup.Root class="overflow-hidden has-[>textarea]:h-auto">
+			<div class="contents">
+				<InputGroup.Textarea
+					class="field-sizing-content max-h-48 min-h-16"
+					name="message"
+					{placeholder}
+					{disabled}
+					bind:value
+					onkeydown={handleKeydown}
+				/>
+			</div>
+			<InputGroup.Addon align="block-end" class="justify-end gap-1">
+				<InputGroup.Button
+					aria-label="Submit"
+					size="icon-sm"
+					type="submit"
+					variant="default"
+					{disabled}
+				>
+					{#if busy}
+						<Spinner />
+					{:else}
+						<CornerDownLeft class="size-4" />
+					{/if}
+				</InputGroup.Button>
+			</InputGroup.Addon>
+		</InputGroup.Root>
+	</form>
 </div>
 
 <style>
@@ -95,14 +129,8 @@
 		flex-direction: column;
 		gap: 0.25rem;
 	}
-	:global(.composer-input textarea) {
+	.composer-input :global(textarea) {
 		font-size: 0.88rem;
-	}
-	.hint {
-		margin: 0;
-		font-size: 0.66rem;
-		color: var(--ink-50);
-		padding-left: 0.2rem;
 	}
 	.reply-context {
 		display: flex;
@@ -147,13 +175,13 @@
 		color: var(--ink-90);
 	}
 	/* Short viewports: shrink the composer's resting height so the conversation
-	   keeps usable space. The outbox hint stays — it states an invariant, not a
-	   decoration — and the input still grows with content. */
+	   keeps usable space. The outbox invariant lives on OutboxTray's
+	   Sheet.Description — this input still grows with content. */
 	@media (max-height: 640px) {
 		.composer {
 			padding: 0.35rem 0.35rem 0.25rem;
 		}
-		:global(.composer-input textarea) {
+		.composer-input :global(textarea) {
 			min-height: 2.4rem;
 		}
 	}
