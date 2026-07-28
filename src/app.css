@@ -100,38 +100,61 @@ body::before {
 }
 
 :root {
-  /* Surfaces — warm off-white, layered. */
-  --bg: #f5f5f2;
-  --surface-raised: #fbfbf8;
-  --surface-sunken: #e7e7e3;
+  /* Cobalt ramp — declared once; only the semantic mappings flip per mode
+     (.dark overrides mappings, not the ramp). Hex from the app icon. */
+  --cobalt-50: #eaf4fb;
+  --cobalt-100: #d3e9f7;
+  --cobalt-200: #a9d4f0;
+  --cobalt-300: #74bde9;
+  --cobalt-400: #3f9edd;
+  --cobalt-500: #2280cf;
+  --cobalt-600: #1c66b8;
+  --cobalt-700: #17529b;
+  --cobalt-800: #103a79;
+  --cobalt-850: #0d2e68;
+  --cobalt-900: #0a2358;
+  --cobalt-950: #06163d;
 
-  /* Ink — single hex #262323 at opacity steps + solid #202020. */
-  --ink-solid: #202020;
-  --ink-90: #262323e6;
-  --ink-80: #262323cc;
-  --ink-70: #262323b3;
-  --ink-50: #26232380;
+  /* Semantic brand alias — per-mode; terracotta compat alias follows it. */
+  --cobalt: var(--cobalt-700);
 
-  /* Accents — terracotta primary, lime secondary. */
-  --terracotta: #a76451;
+  /* Surfaces — cool off-white, layered. */
+  --bg: #f5f6f8;
+  --surface-raised: #fbfbfd;
+  --surface-sunken: #e6e8ec;
+
+  /* Ink — single hex #1e2230 at opacity steps + solid. */
+  --ink-solid: #1e2230;
+  --ink-90: #1e2230e6;
+  --ink-80: #1e2230cc;
+  --ink-70: #1e2230b3;
+  --ink-60: #1e223099;
+  --ink-50: #1e223080;
+  --ink-10: #1e22301a;
+
+  /* Accents — cobalt primary (compat --terracotta alias), lime secondary. */
+  --terracotta: var(--cobalt);
   --lime: #bbf451;
 
   /* Hairline borders — always paired with shadows on interactive chrome. */
-  --hairline: #dee2de;
-  --hairline-soft: #e3e3e0;
+  --hairline: #d6d9df;
+  --hairline-soft: #e3e5ea;
 
-  /* Quoted-reply inset — a faint recess inside an already-raised bubble, so it
-     reads as context rather than as a second message. */
-  --quote-tint: #26232310;
+  /* Quoted-reply inset — a faint cool recess inside an already-raised bubble,
+     so it reads as context rather than as a second message. */
+  --quote-tint: color-mix(in srgb, var(--cobalt-900) 6%, transparent);
 
-  /* shadcn semantic mapping onto the neumorphic palette. */
+  /* Radii — full pill, declared once (mode-independent). */
+  --radius-full: 999px;
+
+  /* shadcn semantic mapping onto the cobalt palette. */
   --background: var(--bg);
   --foreground: var(--ink-90);
   --card: var(--surface-raised);
   --card-foreground: var(--ink-90);
   --popover: var(--surface-raised);
   --popover-foreground: var(--ink-90);
-  --primary: var(--terracotta);
+  --primary: var(--cobalt-700);
   --primary-foreground: var(--surface-raised);
   --secondary: var(--surface-sunken);
   --secondary-foreground: var(--ink-90);
@@ -142,44 +165,49 @@ body::before {
   --destructive: #b3261e;
   --border: var(--hairline);
   --input: var(--hairline-soft);
-  --ring: var(--terracotta);
-  --chart-1: var(--terracotta);
+  --ring: var(--cobalt-600);
+  --chart-1: var(--cobalt-600);
   --chart-2: #7a9e6f;
   --chart-3: #c9a14a;
-  --chart-4: #5b6b8c;
+  --chart-4: #7a5f8c;
   --chart-5: var(--ink-70);
   --radius: 10px;
 
   /* Sidebar (reserved channel rail) — slightly sunken vs main bg. */
   --sidebar: var(--surface-sunken);
   --sidebar-foreground: var(--ink-90);
-  --sidebar-primary: var(--terracotta);
+  --sidebar-primary: var(--primary);
   --sidebar-primary-foreground: var(--surface-raised);
   --sidebar-accent: var(--surface-raised);
   --sidebar-accent-foreground: var(--ink-90);
   --sidebar-border: var(--hairline);
-  --sidebar-ring: var(--terracotta);
+  --sidebar-ring: var(--ring);
 }
 
 .dark {
-  /* Dark neumorphic variant — same light-source geometry, inverted values. */
-  --bg: #1c1b1a;
-  --surface-raised: #242322;
-  --surface-sunken: #161515;
+  /* Dark neumorphic variant — same light-source geometry, inverted values.
+     Cool neutrals under cobalt brand (warm browns read as a second system). */
+  --cobalt: var(--cobalt-400);
 
-  --ink-solid: #f5f5f2;
-  --ink-90: #f5f5f2e6;
-  --ink-80: #f5f5f2cc;
-  --ink-70: #f5f5f2b3;
-  --ink-50: #f5f5f280;
+  --bg: #101418;
+  --surface-raised: #171c22;
+  --surface-sunken: #0b0e12;
 
-  --terracotta: #c07a66;
+  --ink-solid: #e8ecf2;
+  --ink-90: #e8ecf2e6;
+  --ink-80: #e8ecf2cc;
+  --ink-70: #e8ecf2b3;
+  --ink-60: #e8ecf299;
+  --ink-50: #e8ecf280;
+  --ink-10: #e8ecf21a;
+
+  --terracotta: var(--cobalt);
   --lime: #c5e86b;
 
-  --hairline: #343332;
-  --hairline-soft: #2a2928;
+  --hairline: #2a323b;
+  --hairline-soft: #1c232b;
 
-  --quote-tint: #f5f5f214;
+  --quote-tint: color-mix(in srgb, var(--cobalt-400) 8%, transparent);
 
   --background: var(--bg);
   --foreground: var(--ink-90);
@@ -187,7 +215,7 @@ body::before {
   --card-foreground: var(--ink-90);
   --popover: var(--surface-raised);
   --popover-foreground: var(--ink-90);
-  --primary: var(--terracotta);
+  --primary: var(--cobalt-400);
   --primary-foreground: var(--surface-raised);
   --secondary: var(--surface-sunken);
   --secondary-foreground: var(--ink-90);
@@ -198,16 +226,22 @@ body::before {
   --destructive: #ef4444;
   --border: var(--hairline);
   --input: var(--hairline-soft);
-  --ring: var(--terracotta);
+  --ring: #5ab0e6;
 
   --sidebar: var(--surface-sunken);
   --sidebar-foreground: var(--ink-90);
-  --sidebar-primary: var(--terracotta);
+  --sidebar-primary: var(--primary);
   --sidebar-primary-foreground: var(--surface-raised);
   --sidebar-accent: var(--surface-raised);
   --sidebar-accent-foreground: var(--ink-90);
   --sidebar-border: var(--hairline);
-  --sidebar-ring: var(--terracotta);
+  --sidebar-ring: var(--ring);
+
+  --chart-1: var(--primary);
+  --chart-2: #7a9e6f;
+  --chart-3: #c9a14a;
+  --chart-4: #7a5f8c;
+  --chart-5: var(--ink-70);
 
   --shadow-raised: inset 0 1px 0 #ffffff14, 0 1px 2px #00000066, 0 8px 20px #00000044, 0 20px 36px #00000022;
   --shadow-pressed: inset 1px 1px 4px #00000099, inset -2px -2px 3px #ffffff14;
