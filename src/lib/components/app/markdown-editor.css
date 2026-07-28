@@ -1,0 +1,391 @@
+/*
+ * Markdown document renderer — single source of truth for markdown typography
+ * across the editable (Milkdown) and read-only (rendered <pre>/react-markdown)
+ * paths in the Voice tab.
+ *
+ * Ported from SlayZone's `assets/main.css` §"Markdown document (.mk-doc)" —
+ * the structure that stops the two renderers from drifting. The SlayZone
+ * original maps `--mk-*` onto `--color-*` (shadcn HSL vars); this port maps onto
+ * the WhatsAgent neumorphic token palette (`--surface-raised`, `--primary`,
+ * `--border`, `--foreground`, `--muted`, …) so a single palette change
+ * (P1.1 cobalt) re-themes both renderers. No second palette is introduced.
+ *
+ * Architecture (one coupling to Milkdown's class name, by design):
+ *   .mk-doc            — root: tokens, theme, layout frame, font cascade
+ *     .mk-doc-scroll   — scroll layer (overflow-y: auto, no padding)
+ *       .milkdown >    — Milkdown's wrapper (editable path)
+ *         .ProseMirror — editable content (owns padding + max-width)
+ *       .mk-doc-body   — read-only content wrapper (read-only path)
+ *
+ * Typography rules target `.mk-doc <tag>` and cascade to both renderers.
+ * Only the two layout rules below alias the content element via
+ * `.mk-doc .mk-doc-body, .mk-doc .ProseMirror` — that alias is the one coupling.
+ */
+
+/* ---- Page variant (default) — Notion-like page feel ---- */
+.mk-doc {
+	/* Layout */
+	--mk-pad-x: 2rem;
+	--mk-pad-top: 3rem;
+	--mk-pad-bottom: 3rem;
+	/* Includes horizontal padding (2 × --mk-pad-x = 4rem), so the inner text
+	   column stays ~720px wide. */
+	--mk-content-max: calc(720px + 4rem);
+
+	/* Body */
+	--mk-body-size: 16px;
+	--mk-body-line: 1.6;
+
+	/* Headings */
+	--mk-h1-size: 2.25em;
+	--mk-h1-weight: 700;
+	--mk-h1-line: 1.2;
+	--mk-h1-track: -0.02em;
+	--mk-h1-mt: 1.4em;
+	--mk-h1-mb: 0.25em;
+
+	--mk-h2-size: 1.625em;
+	--mk-h2-weight: 600;
+	--mk-h2-line: 1.3;
+	--mk-h2-track: -0.01em;
+	--mk-h2-mt: 1.6em;
+	--mk-h2-mb: 0.2em;
+
+	--mk-h3-size: 1.25em;
+	--mk-h3-weight: 600;
+	--mk-h3-line: 1.35;
+	--mk-h3-mt: 1.4em;
+	--mk-h3-mb: 0.15em;
+
+	--mk-h-stacked-mt: 0.4em;
+
+	/* Paragraph */
+	--mk-p-mt: 1.25em;
+	--mk-p-mb: 1.25em;
+
+	/* Lists */
+	--mk-list-indent: 1.75em;
+	--mk-li-mt: 0.1em;
+	--mk-li-mb: 0.1em;
+	--mk-list-mt: 0.3em;
+	--mk-list-mb: 0.3em;
+
+	/* Blocks */
+	--mk-pre-mt: 0.75em;
+	--mk-pre-mb: 0.75em;
+	--mk-quote-mt: 0.8em;
+	--mk-quote-mb: 0.8em;
+	--mk-hr-mt: 1.6em;
+	--mk-hr-mb: 1.6em;
+
+	/* Colors — mapped onto the existing WhatsAgent token palette so a single
+	   palette change (P1.1 cobalt) re-themes the editor with no second palette. */
+	--mk-bg: transparent;
+	--mk-fg: var(--foreground);
+	--mk-heading: var(--foreground);
+	--mk-link: var(--primary);
+	--mk-code-fg: var(--primary);
+	--mk-code-bg: var(--muted);
+	--mk-quote-border: var(--border);
+	--mk-hr-color: var(--border);
+	--mk-table-border: var(--border);
+
+	/* Frame */
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	min-height: 0;
+	background: var(--mk-bg);
+	color: var(--mk-fg);
+	font-size: var(--mk-body-size);
+	line-height: var(--mk-body-line);
+	font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* ---- Readability — Y axis only (text density, vertical padding, vertical margins) ---- */
+.mk-doc[data-readability='compact'] {
+	--mk-pad-top: 0.5rem;
+	--mk-pad-bottom: 0.5rem;
+
+	--mk-body-size: 14px;
+	--mk-body-line: 1.5;
+
+	--mk-h1-size: 1.5em;
+	--mk-h1-mt: 0.5em;
+	--mk-h1-mb: 0.125em;
+	--mk-h2-size: 1.25em;
+	--mk-h2-mt: 0.4em;
+	--mk-h2-mb: 0.125em;
+	--mk-h3-size: 1.1em;
+	--mk-h3-mt: 0.35em;
+	--mk-h3-mb: 0.125em;
+
+	--mk-h-stacked-mt: 0.2em;
+
+	--mk-p-mt: 0.7em;
+	--mk-p-mb: 0.7em;
+	--mk-list-mt: 0.125em;
+	--mk-list-mb: 0.125em;
+	--mk-li-mt: 0;
+	--mk-li-mb: 0;
+}
+
+/* ---- Width — X axis only (column max-width, horizontal padding) ---- */
+/* narrow is the .mk-doc default — 720px column with 2rem pad-x */
+.mk-doc[data-width='wide'] {
+	--mk-pad-x: var(--mk-pad-top);
+	--mk-content-max: none;
+}
+
+/* ---- Variant: inline (constrained panels — tight chrome, page type) ---- */
+.mk-doc[data-variant='inline'] {
+	--mk-pad-x: 1rem;
+	--mk-pad-top: 1rem;
+	--mk-pad-bottom: 0.75rem;
+	--mk-content-max: none;
+}
+
+/* ---- Modifiers ---- */
+.mk-doc[data-font='mono'] {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+.mk-doc[data-themed='true'] {
+	border-radius: 0.375rem;
+}
+
+/* ---- Scroll layer: the overflow:auto container. Lives inside .mk-doc,
+   below any chrome. No padding — padding lives on the content element so it's
+   part of scroll content (avoids the Chromium padding-bottom bug on scroll
+   containers). */
+.mk-doc-scroll {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+}
+
+/* ---- Milkdown internal wrapper: fill the scroll layer ---- */
+.mk-doc .milkdown {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+}
+
+/* ---- Content element (renderer alias): centered column, owns padding ----
+   .ProseMirror   = Milkdown's editable element (class owned by Milkdown).
+   .mk-doc-body   = read-only content wrapper (our class).
+   Padding on this element so clicks anywhere in the padding focus the editor,
+   and so the padding is part of the scroll content rather than the scroll
+   container itself (Chromium bug). */
+.mk-doc .mk-doc-body,
+.mk-doc .ProseMirror {
+	flex: 1;
+	outline: none;
+	max-width: var(--mk-content-max);
+	width: 100%;
+	margin-inline: auto;
+	padding: var(--mk-pad-top) var(--mk-pad-x) var(--mk-pad-bottom);
+	box-sizing: border-box;
+}
+
+/* First block hugs top padding — no heading/paragraph double-gap. */
+.mk-doc .mk-doc-body > *:first-child,
+.mk-doc .ProseMirror > *:first-child {
+	margin-top: 0;
+}
+
+/* ---- Paragraph ---- */
+.mk-doc p {
+	margin-top: var(--mk-p-mt);
+	margin-bottom: var(--mk-p-mb);
+}
+
+/* ---- Headings ---- */
+.mk-doc h1 {
+	font-size: var(--mk-h1-size);
+	font-weight: var(--mk-h1-weight);
+	line-height: var(--mk-h1-line);
+	letter-spacing: var(--mk-h1-track);
+	margin-top: var(--mk-h1-mt);
+	margin-bottom: var(--mk-h1-mb);
+	color: var(--mk-heading);
+}
+.mk-doc h2 {
+	font-size: var(--mk-h2-size);
+	font-weight: var(--mk-h2-weight);
+	line-height: var(--mk-h2-line);
+	letter-spacing: var(--mk-h2-track);
+	margin-top: var(--mk-h2-mt);
+	margin-bottom: var(--mk-h2-mb);
+	color: var(--mk-heading);
+}
+.mk-doc h3 {
+	font-size: var(--mk-h3-size);
+	font-weight: var(--mk-h3-weight);
+	line-height: var(--mk-h3-line);
+	margin-top: var(--mk-h3-mt);
+	margin-bottom: var(--mk-h3-mb);
+	color: var(--mk-heading);
+}
+.mk-doc h4,
+.mk-doc h5,
+.mk-doc h6 {
+	font-size: 1em;
+	font-weight: 600;
+	margin-top: 1.2em;
+	margin-bottom: 0.1em;
+	color: var(--mk-heading);
+}
+
+/* Adjacent headings collapse to --mk-h-stacked-mt (Notion title/subtitle). */
+.mk-doc h1 + h2,
+.mk-doc h1 + h3,
+.mk-doc h2 + h3,
+.mk-doc h2 + h4,
+.mk-doc h3 + h4 {
+	margin-top: var(--mk-h-stacked-mt);
+}
+
+/* ---- Lists ---- */
+.mk-doc ul,
+.mk-doc ol {
+	margin-top: var(--mk-list-mt);
+	margin-bottom: var(--mk-list-mb);
+	padding-inline-start: var(--mk-list-indent);
+}
+.mk-doc ul {
+	list-style: disc;
+}
+.mk-doc ol {
+	list-style: none;
+	counter-reset: ol-counter;
+}
+.mk-doc ol > li {
+	counter-increment: ol-counter;
+	position: relative;
+}
+.mk-doc ol > li::before {
+	content: counter(ol-counter) '.';
+	position: absolute;
+	left: -1.6em;
+	width: 1.4em;
+	text-align: right;
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+}
+.mk-doc li {
+	margin-top: var(--mk-li-mt);
+	margin-bottom: var(--mk-li-mb);
+}
+.mk-doc li > p {
+	margin: 0;
+}
+
+/* ---- Inline marks ---- */
+.mk-doc strong {
+	font-weight: 700;
+	color: var(--mk-heading);
+}
+.mk-doc em {
+	font-style: italic;
+}
+.mk-doc a {
+	color: var(--mk-link);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+}
+.mk-doc code {
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 0.875em;
+	color: var(--mk-code-fg);
+	background: var(--mk-code-bg);
+	border-radius: 3px;
+	padding: 2px 5px;
+}
+
+/* ---- Code blocks ---- */
+.mk-doc pre {
+	background: var(--mk-code-bg);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 0.875em 1em;
+	margin-top: var(--mk-pre-mt);
+	margin-bottom: var(--mk-pre-mb);
+	overflow-x: auto;
+	font-size: 0.875em;
+}
+.mk-doc pre code {
+	background: none;
+	padding: 0;
+	border-radius: 0;
+	color: var(--mk-fg);
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	line-height: 1.6;
+}
+
+/* ---- Blockquote, hr ---- */
+.mk-doc blockquote {
+	margin-top: var(--mk-quote-mt);
+	margin-bottom: var(--mk-quote-mb);
+	padding-left: 1em;
+	border-left: 3px solid var(--mk-quote-border);
+	color: var(--mk-fg);
+	opacity: 0.85;
+}
+.mk-doc hr {
+	border: none;
+	border-top: 1px solid var(--mk-hr-color);
+	margin-top: var(--mk-hr-mt);
+	margin-bottom: var(--mk-hr-mb);
+}
+
+/* ---- Tables (GFM) ---- */
+.mk-doc table {
+	border: 1px solid var(--mk-table-border);
+	border-radius: 0.5rem;
+	overflow: hidden;
+	border-collapse: separate;
+	border-spacing: 0;
+	width: 100%;
+	max-width: 100%;
+	margin-top: 0.75em;
+	margin-bottom: 0.75em;
+}
+.mk-doc[data-readability='compact'] table {
+	width: auto;
+}
+.mk-doc th,
+.mk-doc td {
+	border-bottom: 1px solid var(--mk-table-border);
+	border-right: 1px solid var(--mk-table-border);
+	padding: 0.45rem 0.5rem;
+}
+.mk-doc th p,
+.mk-doc td p {
+	margin: 0;
+}
+.mk-doc th:last-child,
+.mk-doc td:last-child {
+	border-right: none;
+}
+.mk-doc tr:last-child td {
+	border-bottom: none;
+}
+
+/* ---- Milkdown: empty-editor placeholder pseudo ---- */
+.mk-doc .ProseMirror p.is-editor-empty:first-child::before {
+	content: attr(data-placeholder);
+	float: left;
+	color: var(--muted-foreground);
+	pointer-events: none;
+	height: 0;
+}
+
+/* ---- ProseMirror selection cursor + focus ring restraint ----
+   Milkdown sets outline:none via its own stylesheet; keep it off here too so
+   the .mk-doc border is the only chrome. */
+.mk-doc .ProseMirror:focus {
+	outline: none;
+}
