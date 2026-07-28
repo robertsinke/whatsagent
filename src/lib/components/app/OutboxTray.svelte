@@ -40,7 +40,8 @@
 		<Sheet.Header>
 			<Sheet.Title>Outbox</Sheet.Title>
 			<Sheet.Description>
-				Approved drafts are paced. Typed sends jump the queue but use the same sender.
+				Approved drafts are paced. Typed sends jump the queue immediately through the
+				same outbox — nothing bypasses it.
 			</Sheet.Description>
 		</Sheet.Header>
 
