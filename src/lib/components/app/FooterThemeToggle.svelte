@@ -5,7 +5,9 @@
 
 	/**
 	 * Theme cycle control in the chat-list footer. Fifth footer chip — same
-	 * shape as FooterSettings: icon-only at rest, label on hover/focus. One
+	 * shape as FooterSettings: icon-only; `.chip-label` stays in the DOM as the
+	 * accessible name but is permanently visually hidden (F10: hover reveal
+	 * widened chips and shifted neighbours — tooltip carries the word). One
 	 * click advances light → dark → system → light. The icon always shows the
 	 * CURRENT preference (not the next), and the tooltip names both the current
 	 * state and what the click will do.
@@ -78,9 +80,8 @@
 		padding: 0.2rem 0.5rem;
 		border-radius: 999px;
 		/* Transparent at rest so the control sits IN the recessed footer rather
-		   than floating on it as a pill. Hover lifts it to the raised surface,
-		   which doubles as the hover affordance now that the label reveal is the
-		   only other feedback. */
+		   than floating on it as a pill. Hover lifts it to the raised surface —
+		   that is the hover affordance (F10: the label no longer expands). */
 		border: 1px solid transparent;
 		background: transparent;
 		box-shadow: none;
@@ -105,18 +106,7 @@
 		margin: -1px;
 		overflow: hidden;
 		clip: rect(0, 0, 0, 0);
-		white-space: nowrap;
 		border: 0;
-	}
-	.chip:hover .chip-label,
-	.chip:focus-visible .chip-label,
-	.chip:focus-within .chip-label {
-		position: static;
-		width: auto;
-		height: auto;
-		margin: 0;
-		overflow: visible;
-		clip: auto;
 	}
 	.tip {
 		margin: 0;

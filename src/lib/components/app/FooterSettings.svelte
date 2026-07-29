@@ -4,10 +4,12 @@
 	import * as Tooltip from '$lib/components/ui/tooltip/index.js';
 
 	/**
-	 * Settings entry point in the chat-list footer. Icon-only at rest, label
-	 * reveals on hover/focus, matching the other three footer controls. A plain
-	 * anchor (client-side goto) rather than a Sheet — Settings is a full route,
-	 * not a panel.
+	 * Settings entry point in the chat-list footer. Icon-only; `.chip-label`
+	 * stays in the DOM as the accessible name but is permanently visually
+	 * hidden (F10: hover reveal widened chips and shifted neighbours — tooltip
+	 * carries the word). Matches the other footer chips. A plain anchor
+	 * (client-side goto) rather than a Sheet — Settings is a full route, not a
+	 * panel.
 	 */
 	function open(e: MouseEvent) {
 		e.preventDefault();
@@ -47,11 +49,10 @@
 		padding: 0.2rem 0.5rem;
 		border-radius: 999px;
 		/* Transparent at rest so the control sits IN the recessed footer rather
-		   than floating on it as a pill. Hover lifts it to the raised surface,
-		   which doubles as the hover affordance now that the label reveal is the
-		   only other feedback. Semantic states (live, warn, bad) re-assert their
-		   own border and tint below — those carry meaning and must stay visible
-		   at rest. */
+		   than floating on it as a pill. Hover lifts it to the raised surface —
+		   that is the hover affordance (F10: the label no longer expands).
+		   Semantic states (live, warn, bad) re-assert their own border and tint
+		   below — those carry meaning and must stay visible at rest. */
 		border: 1px solid transparent;
 		background: transparent;
 		box-shadow: none;
@@ -77,18 +78,7 @@
 		margin: -1px;
 		overflow: hidden;
 		clip: rect(0, 0, 0, 0);
-		white-space: nowrap;
 		border: 0;
-	}
-	.chip:hover .chip-label,
-	.chip:focus-visible .chip-label,
-	.chip:focus-within .chip-label {
-		position: static;
-		width: auto;
-		height: auto;
-		margin: 0;
-		overflow: visible;
-		clip: auto;
 	}
 	.tip {
 		margin: 0;

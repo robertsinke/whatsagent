@@ -207,11 +207,9 @@
 		background: var(--hairline);
 	}
 	/* Below ~220px pane (the 20% min of a 1440 shell), the separators collapse to
-	   thin margins so the four icon-only chips stay on one row. Hover labels are
-	   allowed to overflow the pane visually rather than wrap — the absolutely
-	   positioned footer has no scroll, and clipping a hover label would hide the
-	   very affordance the hover reveals. The footer itself stays within bounds
-	   because at this width every chip is icon-only at rest. */
+	   thin margins so the five icon-only chips stay on one row. F10 dropped the
+	   hover label reveal (chips never resize), so overflow for expanding labels
+	   is no longer a concern — tooltip popovers carry the text instead. */
 	@container (max-width: 220px) {
 		.footer-sep {
 			margin: 0.15rem 0.2rem;
