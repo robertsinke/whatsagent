@@ -324,10 +324,15 @@ body::before {
   scrollbar-color: transparent transparent;
   transition: scrollbar-color 160ms ease;
 
+  /* Cobalt, not ink: the thumb is only ever visible while scrolling, so it is a
+     free place for the brand to show. Note the percentages are NOT the ink ones
+     scaled across — `--ink-50` already carries 50% alpha, so its 55% mix landed
+     near 0.28 effective, whereas `--cobalt` is opaque and 55% would read as a
+     solid blue bar. 38/32 keeps the same visual weight with hue. */
   &:hover,
   &:focus-within,
   &[data-active-scroll='true'] {
-    scrollbar-color: color-mix(in srgb, var(--ink-50) 55%, transparent) transparent;
+    scrollbar-color: color-mix(in srgb, var(--cobalt) 38%, transparent) transparent;
   }
 
   &::-webkit-scrollbar {
@@ -346,7 +351,7 @@ body::before {
   &:hover::-webkit-scrollbar-thumb,
   &:focus-within::-webkit-scrollbar-thumb,
   &[data-active-scroll='true']::-webkit-scrollbar-thumb {
-    background-color: color-mix(in srgb, var(--ink-50) 45%, transparent);
+    background-color: color-mix(in srgb, var(--cobalt) 32%, transparent);
   }
 }
 
