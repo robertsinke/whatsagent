@@ -10,7 +10,6 @@
 	import Composer from '$lib/components/app/Composer.svelte';
 	import ConversationPane from '$lib/components/app/ConversationPane.svelte';
 	import DeepenHistoryButton from '$lib/components/app/DeepenHistoryButton.svelte';
-	import DraftStatus from '$lib/components/app/DraftStatus.svelte';
 	import FirstRunScreen from '$lib/components/app/FirstRunScreen.svelte';
 	import OutboxTray from '$lib/components/app/OutboxTray.svelte';
 	import PairingScreen from '$lib/components/app/PairingScreen.svelte';
@@ -125,7 +124,12 @@
 						/>
 
 						<div class="conv-foot">
-							<DraftStatus
+							<Composer
+								bind:value={composerValue}
+								replyTo={app.replyTarget}
+								ondismissreply={() => app.dismissReply()}
+								onsend={(text) => app.send(text)}
+								placeholder={`Message ${chatTitle}`}
 								draft={app.draft}
 								stalePrompt={app.stalePrompt}
 								agentEligible={app.selectedChat.kind === '1:1'}
@@ -139,13 +143,6 @@
 								generating={app.generating}
 								generateError={app.generateError}
 								ongenerate={() => app.generateDraft()}
-							/>
-							<Composer
-								bind:value={composerValue}
-								replyTo={app.replyTarget}
-								ondismissreply={() => app.dismissReply()}
-								onsend={(text) => app.send(text)}
-								placeholder={`Message ${chatTitle}`}
 							/>
 						</div>
 					{:else}
@@ -267,7 +264,6 @@
 		flex: none;
 		display: flex;
 		flex-direction: column;
-		gap: 0.4rem;
 	}
 	:global(.conv-empty) {
 		flex: 1;

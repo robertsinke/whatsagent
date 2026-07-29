@@ -290,6 +290,61 @@ upsertChat(db, { jid: OWNER_LAST, name: 'Nadia Bakker', kind: '1:1', last_msg_at
 upsertMessage(db, { id: 'o-1', chat_jid: OWNER_LAST, from_me: false, ts: at(), type: 'text', text: 'Heb je de cijfers van vorige maand nog ergens?' });
 upsertMessage(db, { id: 'o-2', chat_jid: OWNER_LAST, from_me: true, ts: at(), type: 'text', text: 'Ja, ik zoek ze even op — kom er zo op terug.' });
 
+/**
+ * PL-F2 — drafting shimmer: a visible in-flight draft so the composer extension
+ * can be screenshotted mid-generation (no separate card chrome).
+ */
+const DRAFTING = 'preview-drafting@s.whatsapp.net';
+upsertChat(db, { jid: DRAFTING, name: 'Sam Ortega', kind: '1:1', last_msg_at: at(), unread: 1 });
+upsertMessage(db, {
+	id: 'd-in',
+	chat_jid: DRAFTING,
+	from_me: false,
+	ts: at(),
+	type: 'text',
+	text: 'Can we push the call to Thursday?'
+});
+upsertDraft(db, {
+	chat_jid: DRAFTING,
+	text: '',
+	status: 'drafting',
+	generated_at: at(),
+	provider: 'fake',
+	basis_msg_id: 'd-in'
+});
+
+/**
+ * PL-F2 — terminal draft dead-state: the owner already replied (draft status
+ * `sent`). Before the fix, visibleDraft was null AND `!draft` was false, so the
+ * Generate draft button vanished. This chat must show the generate affordance.
+ */
+const TERMINAL = 'preview-terminal@s.whatsapp.net';
+upsertChat(db, { jid: TERMINAL, name: 'Lea Hofman', kind: '1:1', last_msg_at: at(), unread: 0 });
+upsertMessage(db, {
+	id: 'term-in',
+	chat_jid: TERMINAL,
+	from_me: false,
+	ts: at(),
+	type: 'text',
+	text: 'Thanks for the intro — talk next week?'
+});
+upsertMessage(db, {
+	id: 'term-out',
+	chat_jid: TERMINAL,
+	from_me: true,
+	ts: at(),
+	type: 'text',
+	text: 'Absolutely — I will send a couple of slots.'
+});
+upsertDraft(db, {
+	chat_jid: TERMINAL,
+	text: 'Absolutely — I will send a couple of slots.',
+	status: 'sent',
+	generated_at: at(),
+	provider: 'fake',
+	basis_msg_id: 'term-in'
+});
+
 const fakeProvider: DraftProvider = {
 	draft: async (): Promise<DraftResult> => ({ kind: 'draft', text: 'Preview draft — no provider was called.' })
 };
