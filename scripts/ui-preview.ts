@@ -35,14 +35,15 @@
  * enough to exercise the two-line clamp, a quote whose target is not loaded, and
  * a reaction the owner sent themselves.
  */
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createApp } from '../server/index.js';
 import { openDatabase } from '../server/store/db.js';
 import { upsertChat } from '../server/store/chats.js';
 import { upsertContact } from '../server/store/contacts.js';
-import { upsertMessage, upsertMessageReaction } from '../server/store/messages.js';
+import { setMediaRef, upsertMessage, upsertMessageReaction } from '../server/store/messages.js';
 import { upsertDraft } from '../server/store/drafts.js';
 import { linkContactIdentity } from '../server/store/contacts.js';
 import { linkIdentityAndMergeChats } from '../server/store/identity.js';
@@ -61,6 +62,7 @@ import {
 	FIXTURE_SPLIT_PHONE_JID
 } from '../shared/test-fixtures.js';
 
+const scriptDir = dirname(fileURLToPath(import.meta.url));
 const dataDir = mkdtempSync(join(tmpdir(), 'whatsagent-ui-preview-'));
 
 // W4-U10 / P3.4: seed a learned voice document so the Voice tab has real content
@@ -345,6 +347,60 @@ upsertDraft(db, {
 	basis_msg_id: 'term-in'
 });
 
+/**
+ * PL-F5 — stickers as inline media (not the document download-link branch).
+ * Own chat so Quote Gallery page-limit assertions stay stable. Seeds a ready
+ * animated-capable WebP sticker plus a placeholder so the Sticker icon path
+ * is visible without a load.
+ */
+const STICKER_CHAT = 'preview-sticker@s.whatsapp.net';
+upsertChat(db, { jid: STICKER_CHAT, name: 'Sticker Lab', kind: '1:1', last_msg_at: at(), unread: 0 });
+mkdirSync(join(dataDir, 'media'), { recursive: true });
+const stickerRel = join('media', 'preview-sticker.webp');
+copyFileSync(join(scriptDir, 'fixtures', 'preview-sticker.webp'), join(dataDir, stickerRel));
+const STICKER_ENVELOPE = JSON.stringify({
+	key: { id: 'sticker-ready', remoteJid: STICKER_CHAT, fromMe: false },
+	message: {
+		stickerMessage: {
+			mimetype: 'image/webp',
+			fileLength: { low: 4032, high: 0, unsigned: true }
+		}
+	}
+});
+upsertMessage(db, {
+	id: 'sticker-ready',
+	chat_jid: STICKER_CHAT,
+	from_me: false,
+	ts: at(),
+	type: 'sticker',
+	raw: STICKER_ENVELOPE
+});
+setMediaRef(db, 'sticker-ready', stickerRel);
+upsertMessage(db, {
+	id: 'sticker-placeholder',
+	chat_jid: STICKER_CHAT,
+	from_me: false,
+	ts: at(),
+	type: 'sticker',
+	raw: JSON.stringify({
+		key: { id: 'sticker-placeholder', remoteJid: STICKER_CHAT, fromMe: false },
+		message: {
+			stickerMessage: {
+				mimetype: 'image/webp',
+				fileLength: { low: 12_000, high: 0, unsigned: true }
+			}
+		}
+	})
+});
+upsertMessage(db, {
+	id: 'sticker-ack',
+	chat_jid: STICKER_CHAT,
+	from_me: true,
+	ts: at(),
+	type: 'text',
+	text: 'nice sticker'
+});
+
 const fakeProvider: DraftProvider = {
 	draft: async (): Promise<DraftResult> => ({ kind: 'draft', text: 'Preview draft — no provider was called.' })
 };
@@ -466,7 +522,8 @@ First-run screens to look at:
 Open "Quote Gallery" for every quote subtype, the reaction chips, and the
 unread boundary. "Group Sandbox" covers group sender attribution.
 "Felix De Groene" is the W4-U16 masked-name case — the chat list must show
-the contact name, not "+31 [dots] 85".
+the contact name, not "+31 [dots] 85". "Sticker Lab" has a ready sticker
+inline in the bubble (PL-F5) plus a tap-to-load placeholder.
 
 Capture with:
   node scripts/screenshot.mjs http://127.0.0.1:${app.port} /tmp/<name>.png

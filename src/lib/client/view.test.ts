@@ -17,6 +17,7 @@ import {
 	isFirstRun,
 	isVisibleDraftStatus,
 	mediaAffordance,
+	mediaPresentation,
 	mergeMessages,
 	quotePreview,
 	reactionChip,
@@ -360,6 +361,19 @@ describe('media affordances (D2)', () => {
 		expect(formatBytes(512)).toBe('512 B');
 		expect(formatBytes(2048)).toBe('2 KB');
 		expect(formatBytes(3_500_000)).toBe('3.3 MB');
+	});
+
+	it('presents stickers as image-like, never the document download branch', () => {
+		// Regression for PL-F5: mediaKind('sticker') is its own kind, and the
+		// document branch is the canOpen fallthrough — so stickers must map to
+		// the image presentation, not document.
+		expect(mediaPresentation('sticker')).toBe('image');
+		expect(mediaPresentation('image')).toBe('image');
+		expect(mediaPresentation('video')).toBe('video');
+		expect(mediaPresentation('audio')).toBe('audio');
+		expect(mediaPresentation('document')).toBe('document');
+		expect(mediaPresentation('sticker')).not.toBe('document');
+		expect(mediaPresentation('other')).toBe('document');
 	});
 });
 

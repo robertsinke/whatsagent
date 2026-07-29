@@ -452,6 +452,29 @@ export function mediaKind(type: string): MediaKind {
 	}
 }
 
+/**
+ * How ready media is presented in the bubble. Stickers are image-like
+ * (inline thumb + lightbox) — never the document download-link branch.
+ * That branch is an `<a href>` to the media URL; in Electron a same-window
+ * navigation replaces the SPA with the raw file and leaves no way back.
+ */
+export type MediaPresentation = 'image' | 'video' | 'audio' | 'document';
+
+export function mediaPresentation(type: string): MediaPresentation {
+	switch (mediaKind(type)) {
+		case 'image':
+		case 'sticker':
+			return 'image';
+		case 'video':
+			return 'video';
+		case 'audio':
+			return 'audio';
+		case 'document':
+		case 'other':
+			return 'document';
+	}
+}
+
 export type MediaAffordance = {
 	label: string;
 	/** Fetch-on-demand button (D2: media is never bulk-prefetched). */

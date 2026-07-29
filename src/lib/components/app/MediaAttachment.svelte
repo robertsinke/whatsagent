@@ -13,7 +13,7 @@
 	} from '@lucide/svelte';
 	import { api } from '$lib/client/api.js';
 	import type { Message } from '$lib/client/types.js';
-	import { mediaAffordance, mediaKind } from '$lib/client/view.js';
+	import { mediaAffordance, mediaKind, mediaPresentation } from '$lib/client/view.js';
 
 	let {
 		message,
@@ -27,6 +27,7 @@
 
 	const media = $derived(message.media!);
 	const kind = $derived(mediaKind(message.type));
+	const presentation = $derived(mediaPresentation(message.type));
 	const state = $derived(mediaAffordance(message.type, media));
 	const src = $derived(api.mediaUrl(message.id));
 </script>
@@ -35,18 +36,23 @@
   D2: the four states are read straight off the server. `unavailable` is terminal
   and deliberately renders no retry button — retrying cannot bring it back.
 -->
-<div class="media" class:terminal={state.terminal}>
-	{#if state.canOpen && kind === 'image'}
+<div class="media" class:terminal={state.terminal} class:sticker-ready={kind === 'sticker' && state.canOpen}>
+	{#if state.canOpen && kind === 'sticker'}
+		<!-- Stickers are WebP (often animated); <img> keeps the animation playing. -->
+		<button type="button" class="sticker" onclick={() => onopen?.(message)}>
+			<img {src} alt="Sticker" />
+		</button>
+	{:else if state.canOpen && presentation === 'image'}
 		<button type="button" class="thumb" onclick={() => onopen?.(message)}>
 			<img {src} alt={media.filename ?? 'Photo'} />
 		</button>
-	{:else if state.canOpen && kind === 'video'}
+	{:else if state.canOpen && presentation === 'video'}
 		<button type="button" class="thumb" onclick={() => onopen?.(message)}>
 			<video {src} preload="metadata" muted></video>
 			<span class="play"><Video class="size-4" /></span>
 		</button>
-	{:else if state.canOpen && kind === 'audio'}
-		<!-- Audio plays inline; images/video go to the lightbox; docs hand off to the OS. -->
+	{:else if state.canOpen && presentation === 'audio'}
+		<!-- Audio plays inline; images/video/stickers go to the lightbox; docs hand off to the OS. -->
 		<audio controls {src} class="audio"></audio>
 	{:else if state.canOpen}
 		<a class="document" href={src} download={media.filename ?? undefined}>
@@ -92,6 +98,9 @@
 	.media {
 		max-width: 320px;
 	}
+	.media.sticker-ready {
+		max-width: 160px;
+	}
 	.placeholder {
 		display: flex;
 		align-items: center;
@@ -134,6 +143,21 @@
 		max-width: 320px;
 		max-height: 260px;
 		object-fit: cover;
+	}
+	/* Stickers read as stickers: small, square, no photo chrome. */
+	.sticker {
+		display: block;
+		padding: 0;
+		border: none;
+		border-radius: 0;
+		background: transparent;
+		cursor: zoom-in;
+	}
+	.sticker img {
+		display: block;
+		width: 140px;
+		height: 140px;
+		object-fit: contain;
 	}
 	.play {
 		position: absolute;

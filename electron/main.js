@@ -172,6 +172,23 @@ function createWindow(url) {
 		void shell.openExternal(target);
 		return { action: 'deny' };
 	});
+	// Defense in depth for same-window navigations (setWindowOpenHandler only
+	// covers window.open / target=_blank). A stray <a href> must not replace
+	// the SPA with a chrome-less page that Escape cannot leave.
+	const appOrigin = new URL(url).origin;
+	window.webContents.on('will-navigate', (event, navigationUrl) => {
+		let targetOrigin;
+		try {
+			targetOrigin = new URL(navigationUrl).origin;
+		} catch {
+			event.preventDefault();
+			return;
+		}
+		if (targetOrigin !== appOrigin) {
+			event.preventDefault();
+			void shell.openExternal(navigationUrl);
+		}
+	});
 	window.on('closed', () => {
 		window = undefined;
 	});
