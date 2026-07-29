@@ -146,6 +146,7 @@ function extensionForType(type: string): string {
 		case 'image':
 			return '.jpg';
 		case 'video':
+		case 'ptv':
 			return '.mp4';
 		case 'audio':
 			return '.ogg';

@@ -401,6 +401,64 @@ upsertMessage(db, {
 	text: 'nice sticker'
 });
 
+/**
+ * PL-F8 — video notes (ptvMessage) as media, not an empty bubble. Own chat so
+ * other page-limit fixtures stay stable. Seeds a ready mp4 plus a placeholder
+ * so both the Load affordance and the video thumb/play overlay are visible.
+ */
+const VIDEO_NOTE_CHAT = 'preview-video-note@s.whatsapp.net';
+upsertChat(db, {
+	jid: VIDEO_NOTE_CHAT,
+	name: 'Video Note Lab',
+	kind: '1:1',
+	last_msg_at: at(),
+	unread: 0
+});
+const videoNoteRel = join('media', 'preview-video-note.mp4');
+copyFileSync(join(scriptDir, 'fixtures', 'preview-video-note.mp4'), join(dataDir, videoNoteRel));
+const VIDEO_NOTE_ENVELOPE = JSON.stringify({
+	key: { id: 'ptv-ready', remoteJid: VIDEO_NOTE_CHAT, fromMe: false },
+	message: {
+		ptvMessage: {
+			mimetype: 'video/mp4',
+			fileLength: { low: 2283, high: 0, unsigned: true }
+		}
+	}
+});
+upsertMessage(db, {
+	id: 'ptv-ready',
+	chat_jid: VIDEO_NOTE_CHAT,
+	from_me: false,
+	ts: at(),
+	type: 'ptv',
+	raw: VIDEO_NOTE_ENVELOPE
+});
+setMediaRef(db, 'ptv-ready', videoNoteRel);
+upsertMessage(db, {
+	id: 'ptv-placeholder',
+	chat_jid: VIDEO_NOTE_CHAT,
+	from_me: false,
+	ts: at(),
+	type: 'ptv',
+	raw: JSON.stringify({
+		key: { id: 'ptv-placeholder', remoteJid: VIDEO_NOTE_CHAT, fromMe: false },
+		message: {
+			ptvMessage: {
+				mimetype: 'video/mp4',
+				fileLength: { low: 98_304, high: 0, unsigned: true }
+			}
+		}
+	})
+});
+upsertMessage(db, {
+	id: 'ptv-ack',
+	chat_jid: VIDEO_NOTE_CHAT,
+	from_me: true,
+	ts: at(),
+	type: 'text',
+	text: 'got the note'
+});
+
 const fakeProvider: DraftProvider = {
 	draft: async (): Promise<DraftResult> => ({ kind: 'draft', text: 'Preview draft — no provider was called.' })
 };
@@ -523,7 +581,9 @@ Open "Quote Gallery" for every quote subtype, the reaction chips, and the
 unread boundary. "Group Sandbox" covers group sender attribution.
 "Felix De Groene" is the W4-U16 masked-name case — the chat list must show
 the contact name, not "+31 [dots] 85". "Sticker Lab" has a ready sticker
-inline in the bubble (PL-F5) plus a tap-to-load placeholder.
+inline in the bubble (PL-F5) plus a tap-to-load placeholder. "Video Note Lab"
+has a ready video note (PL-F8) plus a placeholder — neither may render as an
+empty bubble.
 
 Capture with:
   node scripts/screenshot.mjs http://127.0.0.1:${app.port} /tmp/<name>.png

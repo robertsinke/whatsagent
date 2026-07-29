@@ -109,4 +109,23 @@ describe('toChatView name resolution', () => {
 		expect(messageView.sender?.name).toBe('Felix De Groene');
 		expect(chatNeedsReply(database, getChat(database, jid)!)).toBe(true);
 	});
+
+	it('previews a video note last message as Video', () => {
+		const database = openTempDb();
+		const jid = 'alice@s.whatsapp.net';
+		upsertChat(database, { jid, name: 'Alice', kind: '1:1', last_msg_at: 50 });
+		upsertMessage(database, {
+			id: 'ptv-last',
+			chat_jid: jid,
+			from_me: false,
+			ts: 50,
+			type: 'ptv',
+			raw: JSON.stringify({
+				key: { id: 'ptv-last' },
+				message: { ptvMessage: { mimetype: 'video/mp4' } }
+			})
+		});
+		const view = toChatView(database, getChat(database, jid)!, () => false);
+		expect(view.preview).toBe('Video');
+	});
 });

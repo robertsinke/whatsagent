@@ -17,6 +17,7 @@ import {
 	isFirstRun,
 	isVisibleDraftStatus,
 	mediaAffordance,
+	mediaKind,
 	mediaPresentation,
 	mergeMessages,
 	quotePreview,
@@ -374,6 +375,17 @@ describe('media affordances (D2)', () => {
 		expect(mediaPresentation('document')).toBe('document');
 		expect(mediaPresentation('sticker')).not.toBe('document');
 		expect(mediaPresentation('other')).toBe('document');
+	});
+
+	it('presents video notes (ptv) as video, never the document download branch', () => {
+		// PL-F8: stored type stays `ptv`, but presentation must be the video
+		// thumb/lightbox path — same Electron-nav hazard as PL-F5 stickers.
+		expect(mediaKind('ptv')).toBe('video');
+		expect(mediaPresentation('ptv')).toBe('video');
+		expect(mediaPresentation('ptv')).not.toBe('document');
+		expect(mediaAffordance('ptv', media({ state: 'placeholder', size: 12_000 })).label).toContain(
+			'Video'
+		);
 	});
 });
 

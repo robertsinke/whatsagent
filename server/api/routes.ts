@@ -366,7 +366,12 @@ function mediaContentType(message: Message): string {
 	const described = describeMedia(message);
 	const mime = described?.mime?.toLowerCase();
 	if (message.type === 'image' && mime?.startsWith('image/') && mime !== 'image/svg+xml') return mime;
-	if (message.type === 'video' && mime?.startsWith('video/')) return mime;
+	if (
+		(message.type === 'video' || message.type === 'ptv') &&
+		mime?.startsWith('video/')
+	) {
+		return mime;
+	}
 	if (message.type === 'audio' && mime?.startsWith('audio/')) return mime;
 	if (message.type === 'sticker') return 'image/webp';
 	// Documents and unknown sender-declared types download rather than execute

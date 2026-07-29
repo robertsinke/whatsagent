@@ -447,6 +447,11 @@ export function mediaKind(type: string): MediaKind {
 		case 'document':
 		case 'sticker':
 			return type;
+		// Video note (ptvMessage) — same mp4 download path as video; keep the
+		// stored type distinct but present it as video (never the document
+		// download-link branch; see mediaPresentation / PL-F5).
+		case 'ptv':
+			return 'video';
 		default:
 			return 'other';
 	}
@@ -635,6 +640,8 @@ export function quoteKind(type: string): QuoteKind {
 		case 'contact':
 		case 'text':
 			return type;
+		case 'ptv':
+			return 'video';
 		default:
 			return 'other';
 	}

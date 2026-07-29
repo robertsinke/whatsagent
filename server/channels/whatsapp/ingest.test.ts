@@ -746,6 +746,21 @@ describe('owner-sent messages through the real Baileys event buffer', () => {
 		expect(countMessages(database)).toBe(1);
 	});
 
+	it('classifies a WhatsApp video note as ptv (not collapsed to video)', () => {
+		// PL-F8 approach (b): keep the stored type distinct; media sets widen instead.
+		const note = {
+			key: { id: 'PTV1', remoteJid: 'alice@s.whatsapp.net', fromMe: false },
+			messageTimestamp: 1,
+			message: {
+				ptvMessage: {
+					mimetype: 'video/mp4',
+					fileLength: { low: 1000, high: 0, unsigned: true }
+				}
+			}
+		};
+		expect(classifyMessageType(note as any)).toBe('ptv');
+	});
+
 	it('leaves an owner reaction on the message-updated path', async () => {
 		const database = openTempDb();
 		const chatJid = FIXTURE_GROUP_JID;

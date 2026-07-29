@@ -64,7 +64,9 @@ export type MediaView = {
 	cached: boolean;
 };
 
-const MEDIA_TYPES = new Set(['image', 'video', 'audio', 'document', 'sticker']);
+// `ptv` = WhatsApp video note (round bubble). Same IVideoMessage bytes as
+// `video`, kept as its own stored type so a round UI can diverge later (PL-F8).
+const MEDIA_TYPES = new Set(['image', 'video', 'audio', 'document', 'sticker', 'ptv']);
 
 export function isMediaType(type: string): boolean {
 	return MEDIA_TYPES.has(type);
@@ -93,7 +95,8 @@ const ENVELOPE_KEYS: Record<string, string> = {
 	video: 'videoMessage',
 	audio: 'audioMessage',
 	document: 'documentMessage',
-	sticker: 'stickerMessage'
+	sticker: 'stickerMessage',
+	ptv: 'ptvMessage'
 };
 
 /**

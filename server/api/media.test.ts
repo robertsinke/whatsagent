@@ -13,7 +13,7 @@ import { upsertChat } from '../store/chats.js';
 import { openDatabase, type AppDatabase } from '../store/db.js';
 import { getMessage, setMediaState, upsertMessage } from '../store/messages.js';
 import { EventBus } from './events.js';
-import { describeMedia } from './message-view.js';
+import { describeMedia, toMessageView } from './message-view.js';
 
 let dataDir: string;
 let db: AppDatabase;
@@ -95,6 +95,37 @@ describe('media state machine (D2)', () => {
 			mime: 'image/jpeg',
 			cached: false
 		});
+	});
+
+	it('describes a video note (ptv) from its ptvMessage envelope', () => {
+		// PL-F8: classifyMessageType strips to `ptv`; without MEDIA_TYPES/ENVELOPE_KEYS
+		// knowing that key, toMessageView carried media: null and the bubble was empty.
+		const envelope = JSON.stringify({
+			key: { id: 'ptv-1' },
+			message: {
+				ptvMessage: {
+					mimetype: 'video/mp4',
+					fileLength: { low: 98_304, high: 0, unsigned: true }
+				}
+			}
+		});
+		upsertMessage(db, {
+			id: 'ptv-1',
+			chat_jid: 'alice@s.whatsapp.net',
+			from_me: false,
+			ts: 20,
+			type: 'ptv',
+			raw: envelope
+		});
+		const message = getMessage(db, 'ptv-1')!;
+		expect(describeMedia(message)).toMatchObject({
+			state: 'placeholder',
+			error: null,
+			size: 98_304,
+			mime: 'video/mp4',
+			cached: false
+		});
+		expect(toMessageView(db, message).media).not.toBeNull();
 	});
 
 	// Boom errors are shaped `{ output: { statusCode } }`. Constructed literally

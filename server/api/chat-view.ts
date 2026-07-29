@@ -24,6 +24,7 @@ export type ChatView = Chat & {
 const MEDIA_PREVIEW: Record<string, string> = {
 	image: 'Photo',
 	video: 'Video',
+	ptv: 'Video',
 	audio: 'Voice message',
 	document: 'Document',
 	sticker: 'Sticker'
