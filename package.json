@@ -71,6 +71,7 @@
     "@milkdown/preset-gfm": "^7.21.3",
     "@milkdown/prose": "^7.21.3",
     "@milkdown/utils": "^7.21.3",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@vectorize-io/hindsight-client": "0.8.5",
     "baileys": "7.0.0-rc13",
     "better-sqlite3": "^13.0.1",

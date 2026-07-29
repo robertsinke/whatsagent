@@ -25,9 +25,11 @@ import {
 	type ServerEvent
 } from './api/events.js';
 import { chatViewFor } from './api/chat-view.js';
-import { createRequestHandler } from './api/routes.js';
+import { createRequestHandler, type RoutesDeps } from './api/routes.js';
 import { createSessionState } from './api/session.js';
 import { buildAllowedOrigins, validateOriginAndHost } from './api/security.js';
+import { createMcpSurface, isMcpEnabled } from './mcp/surface.js';
+import { ensureMcpToken } from './mcp/token.js';
 import { DraftScheduler } from './agent/scheduler.js';
 import type { Memory } from './agent/memory/memory.js';
 import { NullMemory } from './agent/memory/null-memory.js';
@@ -103,6 +105,12 @@ export type CreateAppOptions = {
 	/** Supplying a transport mounts and starts the sole WhatsApp send path. */
 	outboxTransport?: WhatsAppSendTransport;
 	outboxPacer?: Omit<OutboxPacerOptions, 'db' | 'transport' | 'onUpdated'>;
+	/**
+	 * PL-U2 — enable the `/mcp` surface. Off by default. Also enabled when
+	 * `WHATSAGENT_MCP=1`. Token is minted only while enabled (CSPRNG →
+	 * `{dataDir}/mcp.token` at 0600). Pass `{ enabled: true, token }` in tests.
+	 */
+	mcp?: boolean | { enabled?: boolean; token?: string };
 };
 
 export type App = {
@@ -113,6 +121,11 @@ export type App = {
 	port: number;
 	host: string;
 	url: string;
+	/**
+	 * Present only when MCP is enabled. Token is for the spawning harness /
+	 * tests — never log it. Absent means `/mcp` 404s like an unknown route.
+	 */
+	mcp: { token: string; tokenPath: string } | null;
 	start: () => Promise<void>;
 	close: () => Promise<void>;
 };
@@ -228,7 +241,7 @@ export function createApp(options: CreateAppOptions = {}): App {
 
 	const getAllowedOrigins = () => buildAllowedOrigins(listeningPort);
 
-	const handleRequest = createRequestHandler({
+	const routeDeps: RoutesDeps = {
 		db,
 		events,
 		getConnectionStatus: connection.get,
@@ -261,7 +274,29 @@ export function createApp(options: CreateAppOptions = {}): App {
 			: undefined,
 		activeProvider: options.activeProvider,
 		providerDiscovery: options.providerDiscovery
-	});
+	};
+
+	// MCP is off by default. Token is minted only while enabled — an unused
+	// token file would be pure attack surface. Env WHATSAGENT_MCP=1 or
+	// options.mcp flips it on (process-scoped; not a settings row the SPA
+	// can flip by accident).
+	let mcpInfo: { token: string; tokenPath: string } | null = null;
+	if (isMcpEnabled(options)) {
+		const override =
+			typeof options.mcp === 'object' && typeof options.mcp.token === 'string'
+				? options.mcp.token
+				: undefined;
+		const minted = ensureMcpToken(dataDir, override);
+		const surface = createMcpSurface({
+			deps: routeDeps,
+			token: minted.token,
+			tokenPath: minted.path
+		});
+		routeDeps.mcp = surface;
+		mcpInfo = { token: minted.token, tokenPath: minted.path };
+	}
+
+	const handleRequest = createRequestHandler(routeDeps);
 
 	const server = createServer((req, res) => {
 		void handleRequest(req, res);
@@ -493,6 +528,7 @@ export function createApp(options: CreateAppOptions = {}): App {
 		get url() {
 			return `http://${host}:${listeningPort}`;
 		},
+		mcp: mcpInfo,
 		start,
 		close
 	};
