@@ -8,6 +8,7 @@
 	import { displayName, filterChats, jidDigits, type ChatTab } from '$lib/client/view.js';
 	import ChatRow from './ChatRow.svelte';
 	import FooterSettings from './FooterSettings.svelte';
+	import FooterThemeToggle from './FooterThemeToggle.svelte';
 	import NeedsReplyTabs from './NeedsReplyTabs.svelte';
 	import OutboxTray from './OutboxTray.svelte';
 	import SendModeIndicator from './SendModeIndicator.svelte';
@@ -102,6 +103,8 @@
 		<OutboxTray {outbox} {chats} {oncancel} />
 		<span class="footer-sep" aria-hidden="true"></span>
 		<FooterSettings />
+		<span class="footer-sep" aria-hidden="true"></span>
+		<FooterThemeToggle />
 	</footer>
 </div>
 
