@@ -42,9 +42,25 @@ export class CodexProvider implements DraftProvider {
 		await writeFile(schemaPath, JSON.stringify(draftResultSchema), { mode: 0o600 });
 		// `--sandbox read-only` still leaves the shell tool enabled (it only
 		// constrains writes). Drafting only needs a prompt→JSON round-trip, so
-		// disable the shell the same way Claude's `--tools ''` does — otherwise
-		// conversation text (attacker-controlled via WhatsApp) can induce file
-		// reads whose contents land in the owner-facing draft.
+		// disable the shell — otherwise conversation text (attacker-controlled
+		// via WhatsApp) can induce file reads whose contents land in the
+		// owner-facing draft.
+		//
+		// THIS IS A REDUCTION, NOT A FIX, AND IT IS NOT PARITY WITH CLAUDE.
+		// Verified 2026-07-29 with this exact flag set: the model still lists
+		// `functions.exec`, `functions.apply_patch`, `web.run` and the MCP
+		// resource tools, still loads the user's `~/.codex/config.toml` MCP
+		// servers, and STILL READ A DECOY FILE and returned its contents when
+		// asked. `--disable shell_tool` removes one execution path of several.
+		// Evidence that injection "no longer works" was a model *refusal* under
+		// one prompt, which is not the same as the capability being absent.
+		//
+		// Claude's `--tools ''` genuinely removes the whole built-in set; codex
+		// has no equivalent. Until that gap is closed (candidates:
+		// `--ignore-user-config` plus disabling the remaining features, each
+		// verified by decoy rather than by asking the model), treat codex as a
+		// provider that can read the filesystem while drafting attacker-supplied
+		// text, and do not describe the providers as capability-equivalent.
 		const args = [
 			'exec',
 			'--json',
