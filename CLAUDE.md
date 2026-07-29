@@ -117,7 +117,10 @@ Do not relitigate without cause — see the plan for rationale.
   deliberately.
 - **Provider adapters:** read
   `docs/solutions/2026-07-25-subscription-provider-cli-adapters.md` before
-  changing spawn/env behavior.
+  changing spawn/env behavior, and
+  `docs/solutions/2026-07-29-draft-provider-tool-surface.md` for the
+  attacker-controlled-text / tool-surface story (why `--disable shell_tool` was
+  not a fix and what was).
 - **Migrations:** pick the next integer by listing
   `server/store/migrations/` — collisions fail every `openDatabase()`. See
   `docs/solutions/2026-07-26-migration-numbering-and-high-water-mark.md`.
