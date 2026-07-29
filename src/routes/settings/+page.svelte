@@ -600,8 +600,8 @@
 		background: var(--surface-raised);
 	}
 	.send-mode-card[data-mode='live'] {
-		border-color: color-mix(in srgb, var(--terracotta) 45%, var(--hairline));
-		background: color-mix(in srgb, var(--terracotta) 6%, var(--surface-raised));
+		border-color: color-mix(in srgb, var(--cobalt) 45%, var(--hairline));
+		background: color-mix(in srgb, var(--cobalt) 6%, var(--surface-raised));
 	}
 	.send-mode-head {
 		display: flex;
@@ -620,8 +620,8 @@
 		background: color-mix(in srgb, var(--ink-10) 12%, transparent);
 	}
 	.send-mode-icon[data-mode='live'] {
-		color: var(--terracotta);
-		background: color-mix(in srgb, var(--terracotta) 14%, transparent);
+		color: var(--cobalt);
+		background: color-mix(in srgb, var(--cobalt) 14%, transparent);
 	}
 	.send-mode-titles {
 		display: flex;
@@ -634,7 +634,7 @@
 		line-height: 1.35;
 	}
 	.send-mode-state[data-mode='live'] {
-		color: var(--terracotta);
+		color: var(--cobalt);
 		font-weight: 500;
 	}
 	.send-mode-controls {
@@ -649,11 +649,11 @@
 		line-height: 1.4;
 	}
 	:global(.enable-live[data-mode='dry-run']) {
-		border-color: color-mix(in srgb, var(--terracotta) 40%, var(--hairline));
-		color: var(--terracotta);
+		border-color: color-mix(in srgb, var(--cobalt) 40%, var(--hairline));
+		color: var(--cobalt);
 	}
 	:global(.enable-live[data-mode='dry-run']:hover) {
-		background: color-mix(in srgb, var(--terracotta) 10%, var(--surface-raised));
+		background: color-mix(in srgb, var(--cobalt) 10%, var(--surface-raised));
 	}
 	:global(.confirm-live) {
 		max-width: 460px;

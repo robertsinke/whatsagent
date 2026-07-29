@@ -108,6 +108,7 @@
 					size="icon-sm"
 					type="submit"
 					variant="default"
+					class="send-hero"
 					{disabled}
 				>
 					{#if busy}
@@ -132,12 +133,21 @@
 	.composer-input :global(textarea) {
 		font-size: 0.88rem;
 	}
+	/* P1.2: the one hero control gets a cobalt-700→600 gradient so the brand
+	   appears on the single most-touched affordance. The class is handed to a
+	   catalog component, so it lives under :global() — the scoper can't see it. */
+	:global(.send-hero) {
+		background-image: linear-gradient(135deg, var(--cobalt-700), var(--cobalt-600));
+	}
+	:global(.send-hero:disabled) {
+		background-image: none;
+	}
 	.reply-context {
 		display: flex;
 		align-items: center;
 		gap: 0.5rem;
 		padding: 0.3rem 0.45rem;
-		border-left: 2px solid var(--terracotta);
+		border-left: 2px solid var(--cobalt);
 		border-radius: var(--radius-sm);
 		background: var(--quote-tint);
 	}

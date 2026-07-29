@@ -58,8 +58,8 @@
 		color: var(--ink-80);
 	}
 	.chip[data-tone='warn'] {
-		border-color: color-mix(in srgb, var(--terracotta) 40%, var(--hairline));
-		color: var(--terracotta);
+		border-color: color-mix(in srgb, var(--cobalt) 40%, var(--hairline));
+		color: var(--cobalt);
 	}
 	.chip[data-tone='bad'] {
 		border-color: var(--destructive);
