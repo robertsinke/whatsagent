@@ -2136,3 +2136,38 @@ describe('OSS-P2.4 GET /api/providers', () => {
 		expect(res.status).toBe(503);
 	});
 });
+
+describe('POST /api/dev/agent-demo (PL-A1 gated emitter)', () => {
+	afterEach(async () => {
+		delete process.env.WHATSAGENT_DEV_EVENTS;
+		await app?.close();
+		app = undefined;
+		db?.close();
+		db = undefined;
+		if (dataDir) rmSync(dataDir, { recursive: true, force: true });
+		dataDir = undefined;
+	});
+
+	it('404s when WHATSAGENT_DEV_EVENTS is unset', async () => {
+		await startTestApp();
+		const res = await api('/api/dev/agent-demo', { method: 'POST', body: '{}' });
+		expect(res.status).toBe(404);
+	});
+
+	it('returns 202 and emits through the EventBus when enabled', async () => {
+		process.env.WHATSAGENT_DEV_EVENTS = '1';
+		const events = new EventBus();
+		const seen: string[] = [];
+		events.subscribe((e) => seen.push(e.type));
+		await startTestApp(events);
+
+		const res = await api('/api/dev/agent-demo', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ stepMs: 5 })
+		});
+		expect(res.status).toBe(202);
+		await vi.waitFor(() => expect(seen).toContain('client-command'), { timeout: 2000 });
+		expect(seen).toContain('agent-part-updated');
+	});
+});

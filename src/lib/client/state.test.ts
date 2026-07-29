@@ -1103,3 +1103,190 @@ describe('AppState chat identity merge', () => {
 		expect(state.selectedJid).toBe(JID);
 	});
 });
+
+describe('AppState agent-part-updated', () => {
+	const sessionId = 'sess-1';
+	const messageId = 'msg-1';
+	const partId = 'part-text';
+
+	it('creates a part and appends deltas by partId', () => {
+		const state = new AppState();
+		state.applyEvent({
+			type: 'agent-part-updated',
+			part: { kind: 'text', sessionId, messageId, partId, text: 'Hel' },
+			delta: 'Hel'
+		});
+		state.applyEvent({
+			type: 'agent-part-updated',
+			part: { kind: 'text', sessionId, messageId, partId, text: 'Hel' },
+			delta: 'lo'
+		});
+		expect(state.agentSessions[sessionId]?.parts).toEqual([
+			{ kind: 'text', sessionId, messageId, partId, text: 'Hello' }
+		]);
+	});
+
+	it('ignores out-of-order older snapshots and duplicate deltas', () => {
+		const state = new AppState();
+		state.applyEvent({
+			type: 'agent-part-updated',
+			part: { kind: 'text', sessionId, messageId, partId, text: 'Hello' },
+			delta: 'Hello'
+		});
+		// Older snapshot arrives late — must not shrink.
+		state.applyEvent({
+			type: 'agent-part-updated',
+			part: { kind: 'text', sessionId, messageId, partId, text: 'Hel' }
+		});
+		expect(state.agentSessions[sessionId]?.parts[0]).toMatchObject({ text: 'Hello' });
+		// Duplicate delta with unchanged snapshot — must not double-append.
+		state.applyEvent({
+			type: 'agent-part-updated',
+			part: { kind: 'text', sessionId, messageId, partId, text: 'Hello' },
+			delta: 'lo'
+		});
+		expect(state.agentSessions[sessionId]?.parts[0]).toMatchObject({ text: 'Hello' });
+	});
+
+	it('ignores unknown part kinds without corrupting the session', () => {
+		const state = new AppState();
+		state.applyEvent({
+			type: 'agent-part-updated',
+			part: { kind: 'text', sessionId, messageId, partId, text: 'ok' }
+		});
+		state.applyEvent({
+			type: 'agent-part-updated',
+			// @ts-expect-error — deliberately unknown kind on the wire
+			part: { kind: 'reasoning', sessionId, messageId, partId: 'p-unknown', text: 'secret' }
+		});
+		expect(state.agentSessions[sessionId]?.parts).toHaveLength(1);
+		expect(state.agentSessions[sessionId]?.parts[0]?.kind).toBe('text');
+	});
+
+	it('tracks tool lifecycle so a UI can render name, input, and output', () => {
+		const state = new AppState();
+		const toolId = 'part-tool';
+		state.applyEvent({
+			type: 'agent-part-updated',
+			part: {
+				kind: 'tool',
+				sessionId,
+				messageId,
+				partId: toolId,
+				name: 'generate_draft',
+				input: { jid: JID },
+				state: 'pending'
+			}
+		});
+		state.applyEvent({
+			type: 'agent-part-updated',
+			part: {
+				kind: 'tool',
+				sessionId,
+				messageId,
+				partId: toolId,
+				name: 'generate_draft',
+				input: { jid: JID },
+				state: 'complete',
+				output: { draft: 'hey' }
+			}
+		});
+		expect(state.agentSessions[sessionId]?.parts[0]).toMatchObject({
+			kind: 'tool',
+			name: 'generate_draft',
+			state: 'complete',
+			output: { draft: 'hey' }
+		});
+	});
+
+	it('records step-start and step-finish as turn boundaries', () => {
+		const state = new AppState();
+		state.applyEvent({
+			type: 'agent-part-updated',
+			part: { kind: 'step-start', sessionId, messageId, partId: 's0' }
+		});
+		state.applyEvent({
+			type: 'agent-part-updated',
+			part: { kind: 'step-finish', sessionId, messageId, partId: 's1' }
+		});
+		expect(state.agentSessions[sessionId]?.parts.map((p) => p.kind)).toEqual([
+			'step-start',
+			'step-finish'
+		]);
+	});
+});
+
+describe('AppState client-command', () => {
+	afterEach(() => vi.restoreAllMocks());
+
+	it('open-chat fires openChat (async fire-and-forget)', async () => {
+		const state = new AppState();
+		state.chats = [chatRow()];
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.includes('/messages?')) return jsonResponse({ items: [inbound('m1', 1)] });
+			if (url.endsWith('/draft')) return jsonResponse({ error: 'Not found' }, 404);
+			if (url.includes('/read')) return jsonResponse(chatRow({ unread: 0 }));
+			throw new Error(`Unexpected request: ${url}`);
+		});
+
+		state.applyEvent({ type: 'client-command', command: { type: 'open-chat', jid: JID } });
+		expect(state.selectedJid).toBe(JID);
+		await vi.waitFor(() => expect(state.messages.map((m) => m.id)).toEqual(['m1']));
+	});
+
+	it('select-reply and dismiss-reply drive replyTarget', async () => {
+		const state = new AppState();
+		state.chats = [chatRow()];
+		const msg = inbound('m2', 2);
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.includes('/messages?')) return jsonResponse({ items: [inbound('m1', 1), msg] });
+			if (url.endsWith('/draft')) return jsonResponse({ error: 'Not found' }, 404);
+			if (url.includes('/read')) return jsonResponse(chatRow({ unread: 0 }));
+			throw new Error(`Unexpected request: ${url}`);
+		});
+		await state.openChat(JID);
+
+		state.applyEvent({
+			type: 'client-command',
+			command: { type: 'select-reply', messageId: 'm2' }
+		});
+		expect(state.replyTarget?.id).toBe('m2');
+
+		state.applyEvent({ type: 'client-command', command: { type: 'dismiss-reply' } });
+		expect(state.replyTarget).toBeNull();
+	});
+
+	it('jump-to-quoted-message signals an in-page target', async () => {
+		const state = new AppState();
+		state.chats = [chatRow()];
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.includes('/messages?')) {
+				return jsonResponse({ items: [inbound('m1', 1), inbound('m2', 2)] });
+			}
+			if (url.endsWith('/draft')) return jsonResponse({ error: 'Not found' }, 404);
+			if (url.includes('/read')) return jsonResponse(chatRow({ unread: 0 }));
+			throw new Error(`Unexpected request: ${url}`);
+		});
+		await state.openChat(JID);
+
+		state.applyEvent({
+			type: 'client-command',
+			command: { type: 'jump-to-quoted-message', messageId: 'm1' }
+		});
+		await vi.waitFor(() => expect(state.jumpTarget?.id).toBe('m1'));
+	});
+
+	it('select-reply is a no-op when the message is not loaded', () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		state.messages = [inbound('m1', 1)];
+		state.applyEvent({
+			type: 'client-command',
+			command: { type: 'select-reply', messageId: 'missing' }
+		});
+		expect(state.replyTarget).toBeNull();
+	});
+});

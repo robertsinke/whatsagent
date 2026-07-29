@@ -1,3 +1,4 @@
+import type { AgentPart, ClientCommand } from '../../shared/agent-events.js';
 import type { ChannelConnectionState } from '../channels/channel.js';
 import type { Chat } from '../store/chats.js';
 import type { Draft } from '../store/drafts.js';
@@ -55,7 +56,20 @@ export type ServerEvent =
 			chatsSynced: number;
 			messagesSynced: number;
 			complete: boolean;
-	  };
+	  }
+	/**
+	 * PL-A1 — streaming agent turn parts (opencode-shaped). Correlation lives
+	 * inside `part` (sessionId / messageId / partId); `delta` is the optional
+	 * text chunk for live append. One-way server→client, same as every other
+	 * variant — no request/response layer on the socket.
+	 */
+	| { type: 'agent-part-updated'; part: AgentPart; delta?: string }
+	/**
+	 * PL-A1 — pure client-state commands (no REST route exists). Closed typed
+	 * set; the client reducer dispatches into AppState. Still server→client
+	 * only — an agent (or the dev emitter) pushes these through the EventBus.
+	 */
+	| { type: 'client-command'; command: ClientCommand };
 
 export type ServerEventListener = (event: ServerEvent) => void;
 

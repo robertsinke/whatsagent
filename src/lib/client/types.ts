@@ -17,6 +17,12 @@ export type {
 	ActiveProviderInfo,
 	SavedProviderInfo
 } from '../../../shared/provider-types.js';
+export type {
+	AgentPart,
+	AgentSessionView,
+	ClientCommand
+} from '../../../shared/agent-events.js';
+import type { AgentPart, ClientCommand } from '../../../shared/agent-events.js';
 
 export type ChatKind = '1:1' | 'group';
 
@@ -228,7 +234,11 @@ export type ServerEvent =
 	 * sent without reaching a recipient. Mirrors the server event so the
 	 * topbar indicator and the settings toggle stay in sync without a refetch.
 	 */
-	| { type: 'send-mode'; live: boolean; dry_run: boolean };
+	| { type: 'send-mode'; live: boolean; dry_run: boolean }
+	/** PL-A1 — streaming agent parts; see shared/agent-events.ts. */
+	| { type: 'agent-part-updated'; part: AgentPart; delta?: string }
+	/** PL-A1 — closed client-command set; see shared/agent-events.ts. */
+	| { type: 'client-command'; command: ClientCommand };
 
 /** Thrown by the API client; `status` carries the HTTP code (409 = stale draft). */
 export class ApiError extends Error {

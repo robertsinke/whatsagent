@@ -35,6 +35,7 @@ import { GLOBAL_VOICE_STEM, VoiceFiles, VOICE_STEMS } from '../agent/memory/voic
 import { looksLikeVoiceDocument } from '../../shared/voice-document.js';
 import { isRefinementIntent } from '../providers/provider.js';
 import type { ConnectionStatus, EventBus } from './events.js';
+import { isDevAgentEventsEnabled, startAgentDemoSequence } from './dev-agent-events.js';
 import type { SessionView } from './session.js';
 import {
 	buildAllowedOrigins,
@@ -399,6 +400,26 @@ async function handleApi(
 ): Promise<void> {
 	const { db, events } = deps;
 	const path = url.pathname;
+
+	/**
+	 * PL-A1 — gated by WHATSAGENT_DEV_EVENTS=1. Pushes a scripted agent-part +
+	 * client-command sequence through the live EventBus. Absent the flag this
+	 * path 404s like any unknown route (the check is inside the handler so a
+	 * forgotten mount cannot leak the emitter into production).
+	 */
+	if (path === '/api/dev/agent-demo' && method === 'POST') {
+		if (!isDevAgentEventsEnabled()) {
+			error(res, 404, 'Not found');
+			return;
+		}
+		const body = (await readJsonBody(req)) as { openChatJid?: string; stepMs?: number } | undefined;
+		startAgentDemoSequence(events, {
+			...(body?.openChatJid ? { openChatJid: body.openChatJid } : {}),
+			...(typeof body?.stepMs === 'number' ? { stepMs: body.stepMs } : {})
+		});
+		json(res, 202, { ok: true, gatedBy: 'WHATSAGENT_DEV_EVENTS=1' });
+		return;
+	}
 
 	if (path === '/api/connection' && method === 'GET') {
 		json(res, 200, deps.getConnectionStatus());

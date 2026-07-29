@@ -7,8 +7,14 @@ import {
 	type Message,
 	type OutboxRow,
 	type RefinementIntent,
-	type SessionView
+	type SessionView,
+	type AgentSessionView
 } from './types.js';
+import {
+	isKnownAgentPartKind,
+	upsertAgentPart,
+	type AgentPart
+} from '../../../shared/agent-events.js';
 import {
 	deriveUnreadBoundary,
 	deriveUnreadBoundaryFromCursor,
@@ -139,6 +145,12 @@ export class AppState {
 	 * an answer yet or it would flash on every launch. See {@link isFirstRun}.
 	 */
 	hydrated = $state(false);
+	/**
+	 * PL-A1 — agent turn parts keyed by sessionId. Accumulated by
+	 * `agent-part-updated` events; the panel (or the temporary /dev/agent-trace
+	 * page) renders from this, never from the wire directly.
+	 */
+	agentSessions = $state<Record<string, AgentSessionView>>({});
 
 	#realtime: Realtime | undefined;
 	#conversationEpoch = 0;
@@ -757,6 +769,58 @@ export class AppState {
 				return;
 			case 'send-mode':
 				this.sendsLive = event.live;
+				return;
+			case 'agent-part-updated':
+				this.#applyAgentPart(event.part, event.delta);
+				return;
+			case 'client-command':
+				this.#applyClientCommand(event.command);
+				return;
+			default:
+				return;
+		}
+	}
+
+	/**
+	 * Accumulate a streaming agent part. Unknown kinds are ignored so a future
+	 * server can ship a new kind without crashing older clients. Text rules:
+	 * see {@link upsertAgentPart} / {@link mergeAgentText} in shared/.
+	 */
+	#applyAgentPart(part: AgentPart | { kind: string }, delta?: string): void {
+		if (!isKnownAgentPartKind(part.kind)) return;
+		const known = part as AgentPart;
+		const existing = this.agentSessions[known.sessionId];
+		const parts = upsertAgentPart(existing?.parts ?? [], known, delta);
+		this.agentSessions = {
+			...this.agentSessions,
+			[known.sessionId]: { sessionId: known.sessionId, parts }
+		};
+	}
+
+	/**
+	 * Dispatch a closed client-command. Async actions (`openChat`,
+	 * `jumpToQuotedMessage`) are fire-and-forget — same pattern as
+	 * `chat-removed` already uses for `void this.openChat(...)`. `applyEvent`
+	 * stays a synchronous reducer; those methods have their own epoch guards
+	 * so a late completion cannot corrupt a chat the owner already left. A
+	 * command queue would add ordering complexity without a consumer that
+	 * needs to await completion on the wire.
+	 */
+	#applyClientCommand(command: import('./types.js').ClientCommand): void {
+		switch (command.type) {
+			case 'open-chat':
+				void this.openChat(command.jid);
+				return;
+			case 'select-reply': {
+				const message = this.messages.find((m) => m.id === command.messageId);
+				if (message) this.selectReply(message);
+				return;
+			}
+			case 'dismiss-reply':
+				this.dismissReply();
+				return;
+			case 'jump-to-quoted-message':
+				void this.jumpToQuotedMessage(command.messageId);
 				return;
 			default:
 				return;
