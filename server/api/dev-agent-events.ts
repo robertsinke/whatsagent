@@ -1,10 +1,14 @@
 /**
  * Dev-only scripted emitter for the PL-A1 agent event channels.
  *
- * Gating: the HTTP route that calls {@link startAgentDemoSequence} is registered
- * only when `process.env.WHATSAGENT_DEV_EVENTS === '1'`. Absent that flag the
- * handler is never mounted and `POST /api/dev/agent-demo` returns 404 — so a
- * production or normal preview build cannot be driven by accident.
+ * Gating: the route is always mounted, and the flag is checked *inside* the
+ * handler at request time — `POST /api/dev/agent-demo` returns 404 unless
+ * `process.env.WHATSAGENT_DEV_EVENTS === '1'`, so a production or normal
+ * preview build cannot be driven by accident. Deliberately not a conditional
+ * mount: a mount guarded at startup is one refactor away from being dropped
+ * silently, whereas a check at the call site cannot be bypassed by reordering
+ * registration. (Corrected — this comment previously described the
+ * conditional-mount design that was considered and not shipped.)
  *
  * There is no agent runtime yet; this pushes a fixed sequence of
  * `agent-part-updated` and `client-command` events through the real EventBus so
