@@ -1,0 +1,181 @@
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import {
+	CallToolRequestSchema,
+	ListToolsRequestSchema,
+	type CallToolResult,
+	type Tool
+} from '@modelcontextprotocol/sdk/types.js';
+import {
+	actionRegistry,
+	dispatch,
+	listActionsForCaller,
+	type ActionRegistry
+} from '../actions/index.js';
+import type { RoutesDeps } from '../api/routes.js';
+import { validateHostAndBearer } from '../api/security.js';
+
+export const MCP_PATH = '/mcp';
+
+export type McpSurface = {
+	token: string;
+	tokenPath: string;
+	handle: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+};
+
+/**
+ * Build the MCP HTTP surface. Tools are advertised from
+ * `listActionsForCaller(registry, 'tool')` and every call goes through
+ * `dispatch` with `caller: 'tool'` — never a hand-maintained list, never a
+ * direct `run`.
+ */
+export function createMcpSurface(options: {
+	deps: RoutesDeps;
+	token: string;
+	tokenPath: string;
+	registry?: ActionRegistry;
+}): McpSurface {
+	const registry = options.registry ?? actionRegistry;
+	const { deps, token, tokenPath } = options;
+
+	async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		const auth = validateHostAndBearer(req, token);
+		if (!auth.ok) {
+			writeJson(res, auth.status, {
+				jsonrpc: '2.0',
+				error: {
+					code: -32001,
+					message: auth.status === 401 ? 'unauthorized' : 'forbidden'
+				},
+				id: null
+			});
+			return;
+		}
+
+		const server = createRegistryServer(registry, deps);
+		const transport = new StreamableHTTPServerTransport({
+			sessionIdGenerator: undefined
+		});
+		try {
+			await server.connect(transport);
+			await transport.handleRequest(req, res);
+			res.on('close', () => {
+				void transport.close();
+				void server.close();
+			});
+		} catch (error) {
+			console.error('[mcp] request error', error instanceof Error ? error.message : 'error');
+			if (!res.headersSent) {
+				writeJson(res, 500, {
+					jsonrpc: '2.0',
+					error: { code: -32603, message: 'internal error' },
+					id: null
+				});
+			}
+			void transport.close();
+			void server.close();
+		}
+	}
+
+	return { token, tokenPath, handle };
+}
+
+function createRegistryServer(registry: ActionRegistry, deps: RoutesDeps): Server {
+	const server = new Server(
+		{ name: 'whatsagent', version: '0.0.1' },
+		{ capabilities: { tools: {} } }
+	);
+
+	server.setRequestHandler(ListToolsRequestSchema, async () => {
+		const tools: Tool[] = listActionsForCaller(registry, 'tool').map((action) => ({
+			name: action.name,
+			description: `WhatsApp agent action \`${action.name}\`.`,
+			inputSchema: toToolInputSchema(action.jsonSchema)
+		}));
+		return { tools };
+	});
+
+	server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
+		const name = request.params.name;
+		const raw = request.params.arguments ?? {};
+		const result = await dispatch(registry, name, raw, { caller: 'tool', deps });
+
+		if (result.kind === 'error') {
+			audit(name, 'error', result.status);
+			return {
+				content: [
+					{
+						type: 'text',
+						text: JSON.stringify({
+							error: result.error,
+							status: result.status,
+							...(result.extra ?? {})
+						})
+					}
+				],
+				isError: true
+			};
+		}
+
+		audit(name, 'ok', result.status);
+		return {
+			content: [
+				{
+					type: 'text',
+					text: JSON.stringify(result.body)
+				}
+			]
+		};
+	});
+
+	return server;
+}
+
+function toToolInputSchema(schema: Record<string, unknown>): Tool['inputSchema'] {
+	const type = schema.type === 'object' || schema.type === undefined ? 'object' : 'object';
+	return {
+		type,
+		...(typeof schema.properties === 'object' && schema.properties
+			? { properties: schema.properties as Tool['inputSchema']['properties'] }
+			: {}),
+		...(Array.isArray(schema.required) ? { required: schema.required as string[] } : {}),
+		...(schema.additionalProperties !== undefined
+			? { additionalProperties: schema.additionalProperties as boolean }
+			: {})
+	};
+}
+
+/** Structured audit — action name, caller, outcome. Never log inputs. */
+function audit(action: string, outcome: 'ok' | 'error', status: number): void {
+	console.info(
+		JSON.stringify({
+			scope: 'mcp',
+			action,
+			caller: 'tool',
+			outcome,
+			status
+		})
+	);
+}
+
+function writeJson(res: ServerResponse, status: number, body: unknown): void {
+	const payload = JSON.stringify(body);
+	res.writeHead(status, {
+		'Content-Type': 'application/json; charset=utf-8',
+		'Content-Length': Buffer.byteLength(payload)
+	});
+	res.end(payload);
+}
+
+/** True when the MCP surface should be minted. Off by default. */
+export function isMcpEnabled(
+	options: { mcp?: boolean | { enabled?: boolean } } | undefined,
+	env: NodeJS.ProcessEnv = process.env
+): boolean {
+	if (options?.mcp === false) return false;
+	if (options?.mcp === true) return true;
+	if (typeof options?.mcp === 'object' && options.mcp.enabled === true) return true;
+	if (typeof options?.mcp === 'object' && options.mcp.enabled === false) return false;
+	return env.WHATSAGENT_MCP === '1';
+}

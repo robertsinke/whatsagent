@@ -35,6 +35,7 @@ import type { DiscoveredProvider } from '../providers/discovery.js';
 import type { ProviderInfo, ProviderModelOption } from '../../shared/provider-types.js';
 import { actionRegistry, dispatch } from '../actions/index.js';
 import { writeActionResult } from '../actions/respond.js';
+import { MCP_PATH, type McpSurface } from '../mcp/surface.js';
 
 /**
  * Map a discovery {@link DiscoveredProvider} onto the shared {@link ProviderInfo}
@@ -124,6 +125,12 @@ export type RoutesDeps = {
 		drafting: boolean;
 		model: string | null;
 	};
+	/**
+	 * PL-U2 — MCP surface. Absent (the default) means the `/mcp` path is an
+	 * unknown route (404). When present, Host+bearer auth replaces Origin for
+	 * that path only; Host must still be loopback.
+	 */
+	mcp?: McpSurface;
 };
 
 const MIME: Record<string, string> = {
@@ -233,11 +240,26 @@ export function createRequestHandler(deps: RoutesDeps) {
 			res.writeHead(204, {
 				'Access-Control-Allow-Origin': [...allowedOrigins][0] ?? '',
 				'Access-Control-Allow-Methods': 'GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS',
-				'Access-Control-Allow-Headers': 'Content-Type',
+				'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 				'Access-Control-Max-Age': '86400'
 			});
 			res.end();
 			return;
+		}
+
+		// MCP path: when enabled, Host+bearer (additional auth path). When
+		// disabled, fall through so the path 404s like any unknown route —
+		// never 401, which would advertise the feature.
+		if (url.pathname === MCP_PATH) {
+			if (deps.mcp) {
+				try {
+					await deps.mcp.handle(req, res);
+				} catch (err) {
+					console.error('[mcp]', err instanceof Error ? err.message : err);
+					if (!res.headersSent) error(res, 500, 'Internal server error');
+				}
+				return;
+			}
 		}
 
 		if (isMutatingMethod(method)) {
