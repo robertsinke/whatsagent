@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { tick } from 'svelte';
+	import { scrollActivity } from '$lib/actions/scroll-activity.svelte.js';
 	import Shimmer from '$lib/components/ai-elements/shimmer.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { animate, spring } from 'motion';
@@ -310,6 +311,8 @@
 					bind:this={editorEl}
 					id="draft-editor-text"
 					aria-label="Edit draft text"
+					class="scrollbar-contextual"
+					use:scrollActivity
 					bind:value={editedText}
 					disabled={approving}
 					onkeydown={(event) => {

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { getContext } from 'svelte';
+	import { scrollActivity } from '$lib/actions/scroll-activity.svelte.js';
 	import { cn } from '$lib/utils';
 	import { CONVERSATION_CTX, type ConversationContext } from './context.js';
 	import { isAtBottom } from './scroll-anchor.js';
@@ -34,14 +35,13 @@
 				clientHeight: el.clientHeight
 			})
 		);
-		ctx.noteScroll();
 	}
 </script>
 
 <div
 	use:bindViewport
+	use:scrollActivity
 	class={cn('scrollbar-contextual flex h-full flex-col gap-8 overflow-y-auto p-4', className)}
-	data-active-scroll={ctx.isScrolling ? 'true' : 'false'}
 	onscroll={onScroll}
 	{...rest}
 >

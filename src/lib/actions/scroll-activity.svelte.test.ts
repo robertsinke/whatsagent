@@ -38,4 +38,18 @@ describe('createScrollActivity', () => {
 		expect(activity.active).toBe(false);
 		expect(vi.getTimerCount()).toBe(0);
 	});
+
+	it('notifies onChange when activity flips so the action can sync the DOM', () => {
+		const seen: boolean[] = [];
+		const activity = createScrollActivity(900, (active) => seen.push(active));
+
+		activity.poke();
+		expect(seen).toEqual([true]);
+
+		vi.advanceTimersByTime(900);
+		expect(seen).toEqual([true, false]);
+
+		activity.dispose();
+		expect(seen).toEqual([true, false, false]);
+	});
 });

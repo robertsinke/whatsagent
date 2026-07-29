@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { scrollActivity } from '$lib/actions/scroll-activity.svelte.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as Sheet from '$lib/components/ui/sheet/index.js';
@@ -45,7 +46,7 @@
 			</Sheet.Description>
 		</Sheet.Header>
 
-		<div class="tray-rows">
+		<div class="tray-rows scrollbar-contextual" use:scrollActivity>
 			{#each outbox as row (row.id)}
 				<div class="tray-row" class:sent={row.status === 'sent'}>
 					<div class="tray-top">

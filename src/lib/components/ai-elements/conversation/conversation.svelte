@@ -1,9 +1,8 @@
 <script lang="ts">
-	import { onDestroy, setContext } from 'svelte';
+	import { setContext } from 'svelte';
 	import { cn } from '$lib/utils';
 	import { CONVERSATION_CTX, type ConversationContext } from './context.js';
 	import { preservedScrollTop, type ViewportGeometry } from './scroll-anchor.js';
-	import { createScrollActivity } from './scroll-activity.svelte.js';
 	import type { Snippet } from 'svelte';
 	import type { HTMLAttributes } from 'svelte/elements';
 
@@ -15,9 +14,6 @@
 
 	let viewport: HTMLElement | null = null;
 	let isAtBottom = $state(true);
-	const activity = createScrollActivity();
-
-	onDestroy(() => activity.dispose());
 
 	function scrollToBottom(behavior: ScrollBehavior = 'smooth') {
 		if (!viewport) return;
@@ -74,9 +70,6 @@
 		get isAtBottom() {
 			return isAtBottom;
 		},
-		get isScrolling() {
-			return activity.active;
-		},
 		setIsAtBottom: (value) => {
 			isAtBottom = value;
 		},
@@ -85,7 +78,6 @@
 		setViewport: (el) => {
 			viewport = el;
 		},
-		noteScroll: () => activity.poke(),
 		captureAnchor
 	});
 </script>

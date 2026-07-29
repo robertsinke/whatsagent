@@ -311,9 +311,14 @@ body::before {
 }
 
 /* Contextual scrollbar — chrome is hidden at rest and revealed while scrolling
-   (`data-active-scroll`, driven by an idle timer), on hover, or when keyboard
-   focus enters the scroller. The gutter is always reserved (thin track with a
-   transparent thumb) so revealing it never reflows the conversation. */
+   (`data-active-scroll`, driven by `use:scrollActivity` / idle timer), on hover,
+   or when keyboard focus enters the scroller. The gutter is always reserved
+   (thin track with a transparent thumb) so revealing it never reflows content.
+
+   Known limitation: Chromium's styled/`thin` scrollbar is a classic non-overlay
+   bar that occupies layout width — CSS cannot restore true macOS overlay
+   scrollbars. Reserving the gutter is the design. Author `scrollbar-color`
+   overrides macOS "Show scroll bars: Always". */
 @utility scrollbar-contextual {
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
