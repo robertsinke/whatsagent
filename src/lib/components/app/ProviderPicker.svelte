@@ -225,7 +225,7 @@
 	}
 	.field-warning {
 		font-size: 0.72rem;
-		color: var(--terracotta, #c45c26);
+		color: var(--cobalt);
 		line-height: 1.35;
 	}
 	.option-main {
@@ -254,8 +254,8 @@
 		line-height: 1.4;
 		padding: 0.55rem 0.7rem;
 		border-radius: var(--radius-md);
-		border: 1px solid color-mix(in srgb, var(--terracotta, #c45c26) 35%, var(--hairline));
-		background: color-mix(in srgb, var(--terracotta, #c45c26) 8%, var(--surface-raised));
+		border: 1px solid color-mix(in srgb, var(--cobalt) 35%, var(--hairline));
+		background: color-mix(in srgb, var(--cobalt) 8%, var(--surface-raised));
 		color: var(--ink-90);
 	}
 	.coerced-banner {

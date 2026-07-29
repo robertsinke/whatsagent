@@ -7,7 +7,7 @@
 	 * unsure whether a send is live. Surfaced in the topbar so it is visible on
 	 * every screen, not buried in settings.
 	 *
-	 * - `sendsLive === true`  → live (terracotta, Radio icon): approving a draft
+	 * - `sendsLive === true`  → live (cobalt, Radio icon): approving a draft
 	 *   or pressing send transmits over WhatsApp to a real recipient.
 	 * - `sendsLive === false` → dry-run (muted, ShieldAlert icon): approving a
 	 *   draft marks it sent and nothing reaches the recipient. This is the
@@ -73,9 +73,9 @@
 		white-space: nowrap;
 	}
 	.chip[data-mode='live'] {
-		border-color: color-mix(in srgb, var(--terracotta) 55%, var(--hairline));
-		color: var(--terracotta);
-		background: color-mix(in srgb, var(--terracotta) 8%, var(--surface-raised));
+		border-color: color-mix(in srgb, var(--cobalt) 55%, var(--hairline));
+		color: var(--cobalt);
+		background: color-mix(in srgb, var(--cobalt) 8%, var(--surface-raised));
 	}
 	.chip[data-mode='dry-run'] {
 		color: var(--ink-60);

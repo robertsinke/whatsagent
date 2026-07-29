@@ -235,14 +235,14 @@
 		align-items: center;
 		gap: 0.5rem;
 		margin: 0.5rem 0 0.3rem;
-		color: var(--terracotta);
+		color: var(--cobalt);
 	}
 	.unread::before,
 	.unread::after {
 		content: '';
 		flex: 1;
 		height: 1px;
-		background: color-mix(in srgb, var(--terracotta) 45%, transparent);
+		background: color-mix(in srgb, var(--cobalt) 45%, transparent);
 	}
 	.unread span {
 		font-size: 0.66rem;
@@ -263,8 +263,8 @@
 	   to a child component. */
 	@keyframes jump-flash {
 		0% {
-			background: color-mix(in srgb, var(--terracotta) 22%, transparent);
-			box-shadow: 0 0 0 2px color-mix(in srgb, var(--terracotta) 55%, transparent);
+			background: color-mix(in srgb, var(--cobalt) 22%, transparent);
+			box-shadow: 0 0 0 2px color-mix(in srgb, var(--cobalt) 55%, transparent);
 		}
 		100% {
 			background: transparent;
@@ -279,7 +279,7 @@
 		   removal clears, so reduced-motion users still see the target. */
 		.jump-highlight :global(.bubble) {
 			animation: none;
-			background: color-mix(in srgb, var(--terracotta) 18%, transparent);
+			background: color-mix(in srgb, var(--cobalt) 18%, transparent);
 		}
 	}
 </style>

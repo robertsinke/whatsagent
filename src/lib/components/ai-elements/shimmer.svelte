@@ -33,7 +33,7 @@
 	this={as}
 	bind:this={el}
 	class={`relative inline-block bg-clip-text text-transparent bg-[length:250%_100%,auto] [background-repeat:no-repeat,padding-box] ${className}`}
-	style={`--spread:${dynamicSpread}px;background-image:linear-gradient(90deg,#0000 calc(50% - var(--spread)),var(--color-background),#0000 calc(50% + var(--spread))),linear-gradient(var(--color-muted-foreground),var(--color-muted-foreground))`}
+	style={`--spread:${dynamicSpread}px;background-image:linear-gradient(90deg,#0000 calc(50% - var(--spread)),color-mix(in srgb, var(--cobalt) 55%, var(--color-background)),#0000 calc(50% + var(--spread))),linear-gradient(var(--color-muted-foreground),var(--color-muted-foreground))`}
 >
 	{children}
 </svelte:element>

@@ -79,8 +79,8 @@
 		color: var(--ink-50);
 	}
 	:global(.deepen-btn[data-kind='error']) {
-		color: var(--terracotta);
-		border-color: color-mix(in srgb, var(--terracotta) 35%, var(--hairline));
+		color: var(--cobalt);
+		border-color: color-mix(in srgb, var(--cobalt) 35%, var(--hairline));
 	}
 	.dismiss {
 		display: inline-flex;

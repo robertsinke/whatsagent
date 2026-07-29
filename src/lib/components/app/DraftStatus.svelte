@@ -443,8 +443,8 @@
 		background: var(--surface-raised);
 	}
 	.draft.stale {
-		border-color: color-mix(in srgb, var(--terracotta) 45%, var(--hairline));
-		background: color-mix(in srgb, var(--terracotta) 8%, var(--surface-raised));
+		border-color: color-mix(in srgb, var(--cobalt) 45%, var(--hairline));
+		background: color-mix(in srgb, var(--cobalt) 8%, var(--surface-raised));
 	}
 	.draft-head {
 		display: flex;
@@ -513,7 +513,7 @@
 	.refine-error {
 		margin: 0;
 		font-size: 0.74rem;
-		color: var(--terracotta);
+		color: var(--cobalt);
 	}
 	.editor-refine {
 		border-top: none;

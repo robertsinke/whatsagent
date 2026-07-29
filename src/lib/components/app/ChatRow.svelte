@@ -79,14 +79,20 @@
 		border-color: var(--hairline-soft);
 	}
 	.chat-row:focus-visible {
-		outline: 2px solid var(--terracotta);
+		outline: 2px solid var(--cobalt);
 		outline-offset: 1px;
 	}
-	/* Pressed = the active chat, per the neumorphic accessibility rule. */
+	/* Pressed = the active chat, per the neumorphic accessibility rule.
+	   P1.2: an inset cobalt rail + accent-tint background so the selected row
+	   reads as brand, not just sunken. The rail also satisfies the on-record
+	   constraint that interactive affordances never depend on shadows alone
+	   (the prior shadow-only selected state failed it). */
 	.chat-row.selected {
-		background: var(--surface-sunken);
+		background: var(--accent-tint);
 		border-color: var(--hairline);
-		box-shadow: var(--shadow-pressed);
+		box-shadow:
+			inset 3px 0 0 var(--ring),
+			var(--shadow-pressed);
 	}
 
 	/* Classes handed to catalog components are invisible to the scoper. */
@@ -146,8 +152,8 @@
 		height: 1.25rem;
 		padding-inline: 0.35rem;
 		border-radius: var(--radius-full, 999px);
-		background: var(--terracotta);
-		color: var(--surface-raised);
+		background: var(--primary);
+		color: var(--primary-foreground);
 		font-size: 0.66rem;
 		font-weight: 600;
 		display: inline-flex;

@@ -200,16 +200,18 @@
 		border: 1px solid var(--hairline-soft);
 		box-shadow: var(--shadow-bevel);
 	}
-	/* Own messages get the sunken treatment — pressed, not floating. */
+	/* Own messages — cobalt-tinted so the largest surface in the app reads as
+	   brand, not greyscale. 8% cobalt wash, 22% border, body text stays on
+	   --ink-90 for legibility. Pressed, not floating. */
 	:global(.bubble-mine) {
-		background: var(--surface-sunken);
-		border: 1px solid var(--hairline);
+		background: color-mix(in srgb, var(--cobalt) 8%, var(--surface-sunken));
+		border: 1px solid color-mix(in srgb, var(--cobalt) 22%, var(--hairline));
 	}
 	.sender {
 		font-size: 0.7rem;
 		font-weight: 600;
 		letter-spacing: 0.01em;
-		color: var(--terracotta);
+		color: var(--cobalt);
 		line-height: 1.2;
 	}
 	/* Inset, sunken, and rule-marked so quoted context never reads as body text. */
@@ -218,7 +220,7 @@
 		flex-direction: column;
 		gap: 0.1rem;
 		padding: 0.25rem 0.45rem;
-		border-left: 2px solid var(--terracotta);
+		border-left: 2px solid var(--cobalt);
 		border-radius: var(--radius-sm);
 		background: var(--quote-tint);
 		/* U5 — when rendered as a button (jump-to-quote available), reset button
@@ -233,9 +235,9 @@
 	}
 	.quote:not(:disabled):hover,
 	.quote:not(:disabled):focus-visible {
-		background: color-mix(in srgb, var(--terracotta) 10%, var(--quote-tint));
+		background: color-mix(in srgb, var(--cobalt) 10%, var(--quote-tint));
 		outline: none;
-		box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--terracotta) 40%, transparent);
+		box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cobalt) 40%, transparent);
 	}
 	.quote-missing {
 		border-left-style: dashed;
@@ -307,7 +309,7 @@
 	}
 	.reply-action:hover,
 	.reply-action:focus-visible {
-		color: var(--terracotta);
+		color: var(--cobalt);
 		text-decoration: underline;
 		text-underline-offset: 0.15rem;
 	}
@@ -343,7 +345,7 @@
 		background: var(--surface-sunken);
 	}
 	.react-pick[aria-pressed='true'] {
-		background: color-mix(in srgb, var(--terracotta) 15%, transparent);
+		background: color-mix(in srgb, var(--cobalt) 15%, transparent);
 	}
 	.reactions {
 		display: flex;
@@ -366,11 +368,11 @@
 	}
 	.reaction-chip:hover,
 	.reaction-chip:focus-visible {
-		border-color: var(--terracotta);
+		border-color: var(--cobalt);
 	}
 	.reaction-mine {
-		border-color: var(--terracotta);
-		background: color-mix(in srgb, var(--terracotta) 8%, var(--surface-raised));
+		border-color: var(--cobalt);
+		background: color-mix(in srgb, var(--cobalt) 8%, var(--surface-raised));
 	}
 	.reaction-chip-count {
 		font-size: 0.62rem;

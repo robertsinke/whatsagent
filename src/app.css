@@ -73,7 +73,8 @@ body::before {
   --color-bg: var(--bg);
   --color-surface-raised: var(--surface-raised);
   --color-surface-sunken: var(--surface-sunken);
-  --color-terracotta: var(--terracotta);
+  --color-cobalt: var(--cobalt);
+  --color-accent-tint: var(--accent-tint);
   --color-lime: var(--lime);
   --color-ink: var(--ink-solid);
   --color-ink-90: var(--ink-90);
@@ -115,13 +116,17 @@ body::before {
   --cobalt-900: #0a2358;
   --cobalt-950: #06163d;
 
-  /* Semantic brand alias — per-mode; terracotta compat alias follows it. */
+  /* Semantic brand alias — per-mode. */
   --cobalt: var(--cobalt-700);
 
   /* Surfaces — cool off-white, layered. */
   --bg: #f5f6f8;
   --surface-raised: #fbfbfd;
   --surface-sunken: #e6e8ec;
+
+  /* Accent tint — the active-chat-row wash. Faint cobalt over the sunken
+     surface so the selected row reads as brand, not just pressed. */
+  --accent-tint: color-mix(in srgb, var(--cobalt-700) 7%, var(--surface-sunken));
 
   /* Ink — single hex #1e2230 at opacity steps + solid. */
   --ink-solid: #1e2230;
@@ -132,8 +137,7 @@ body::before {
   --ink-50: #1e223080;
   --ink-10: #1e22301a;
 
-  /* Accents — cobalt primary (compat --terracotta alias), lime secondary. */
-  --terracotta: var(--cobalt);
+  /* Accents — cobalt primary, lime secondary. */
   --lime: #bbf451;
 
   /* Hairline borders — always paired with shadows on interactive chrome. */
@@ -193,6 +197,8 @@ body::before {
   --surface-raised: #171c22;
   --surface-sunken: #0b0e12;
 
+  --accent-tint: color-mix(in srgb, var(--cobalt-400) 12%, var(--surface-sunken));
+
   --ink-solid: #e8ecf2;
   --ink-90: #e8ecf2e6;
   --ink-80: #e8ecf2cc;
@@ -201,7 +207,6 @@ body::before {
   --ink-50: #e8ecf280;
   --ink-10: #e8ecf21a;
 
-  --terracotta: var(--cobalt);
   --lime: #c5e86b;
 
   --hairline: #2a323b;
@@ -256,6 +261,13 @@ body::before {
   }
   html {
     @apply font-sans;
+  }
+  /* Brand-tinted text selection — absent entirely before P1.2; the app's
+     largest neutral surface was the conversation, and OS-default selection
+     read as a second system. Cobalt at low alpha keeps body text legible. */
+  ::selection {
+    background: color-mix(in srgb, var(--cobalt) 22%, transparent);
+    color: var(--ink-90);
   }
 }
 

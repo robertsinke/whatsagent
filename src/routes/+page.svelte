@@ -220,7 +220,9 @@
 		width: 10px;
 		height: 10px;
 		border-radius: 999px;
-		background: var(--terracotta);
+		/* P1.2: gradient echoing the app icon — the mark that survives P2.3's
+		   wordmark removal. Cobalt-700→600 reads as brand at this size. */
+		background: linear-gradient(135deg, var(--cobalt-700), var(--cobalt-600));
 		box-shadow: var(--shadow-bevel);
 	}
 	.brand-name {

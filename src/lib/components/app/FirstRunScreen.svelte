@@ -351,7 +351,7 @@
 		box-shadow: var(--shadow-bevel);
 	}
 	.step[data-state='current'] .step-num {
-		background: var(--terracotta);
+		background: var(--cobalt);
 		color: #fbfbf8;
 	}
 
@@ -466,13 +466,13 @@
 		color: var(--ink-70);
 	}
 	/* This palette has no green: the "good" tone elsewhere in the app is just
-	   stronger ink (see SessionStatus), and terracotta carries every warning. */
+	   stronger ink (see SessionStatus), and cobalt carries every warning. */
 	.provider-status[data-status='detected'] {
 		color: var(--ink-80);
 		font-weight: 600;
 	}
 	.provider-status[data-status='not_running'] {
-		color: var(--terracotta);
+		color: var(--cobalt);
 	}
 	.provider-path {
 		font-size: 0.68rem;
