@@ -28,13 +28,20 @@
 <Sheet.Root>
 	<Sheet.Trigger>
 		{#snippet child({ props })}
-			<Button variant="ghost" size="sm" {...props}>
-				<Send class="size-3.5" />
-				Outbox
+			<button
+				type="button"
+				class="chip"
+				data-has-pending={pending.length ? true : undefined}
+				aria-label="Outbox{pending.length ? `, ${pending.length} pending` : ''}"
+				title="Outbox{pending.length ? ` · ${pending.length} pending` : ''}"
+				{...props}
+			>
+				<Send class="size-3" />
+				<span class="chip-label">Outbox</span>
 				{#if pending.length}
 					<Badge variant="secondary" class="tray-count">{pending.length}</Badge>
 				{/if}
-			</Button>
+			</button>
 		{/snippet}
 	</Sheet.Trigger>
 	<Sheet.Content side="right" class="tray">
@@ -78,6 +85,56 @@
 </Sheet.Root>
 
 <style>
+	/* Trigger chip: matches SendModeIndicator / SessionStatus so all four footer
+	   controls read as one row. Icon-only at rest; label reveals on hover/focus.
+	   The pending count badge stays visible — a count is meaningful even when the
+	   word is clipped. */
+	.chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.3rem;
+		font-size: 0.7rem;
+		padding: 0.2rem 0.5rem;
+		border-radius: 999px;
+		border: 1px solid var(--hairline);
+		background: var(--surface-raised);
+		box-shadow: var(--shadow-bevel);
+		color: var(--ink-70);
+		cursor: default;
+		white-space: nowrap;
+		font-family: inherit;
+		line-height: 1;
+	}
+	.chip:hover,
+	.chip:focus-visible {
+		color: var(--ink-90);
+	}
+	.chip[data-has-pending] {
+		border-color: color-mix(in srgb, var(--cobalt) 40%, var(--hairline));
+		color: var(--cobalt);
+	}
+	.chip-label {
+		white-space: nowrap;
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		border: 0;
+	}
+	.chip:hover .chip-label,
+	.chip:focus-visible .chip-label,
+	.chip:focus-within .chip-label {
+		position: static;
+		width: auto;
+		height: auto;
+		margin: 0;
+		overflow: visible;
+		clip: auto;
+	}
 	:global(.tray) {
 		width: min(420px, 92vw);
 	}

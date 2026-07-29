@@ -13,16 +13,20 @@
 	const banner = $derived(sessionBanner(session));
 	// Indeterminate by construction — a spinner, never a percentage bar (D5).
 	const busy = $derived(banner.tone === 'progress');
-	// Only the steady "Connected" state collapses to icon-only. Warn/bad/progress
-	// labels stay permanently visible — those are the states that need action.
-	const compact = $derived(banner.tone === 'good');
+	// Icon-only at rest for every tone; the label reveals on hover/focus. The
+	// connected vs warn vs bad distinction is carried by the icon swap
+	// (Wifi/WifiOff/Spinner) and the tone-driven colour, not by text. An earlier
+	// revision kept warn/bad/progress labels permanently visible as a safety
+	// carve-out; Robert asked for hover-only across all four footer controls
+	// after seeing it, so the carve-out was removed deliberately — do not
+	// reinstate it without re-asking. The tooltip still carries banner.detail.
 </script>
 
 <Tooltip.Provider>
 	<Tooltip.Root>
 		<Tooltip.Trigger>
 			{#snippet child({ props })}
-				<span class="chip" data-tone={banner.tone} data-compact={compact || undefined} {...props}>
+				<span class="chip" data-tone={banner.tone} {...props}>
 					{#if busy}
 						<Spinner class="size-3" />
 					{:else if socketConnected}
@@ -71,7 +75,10 @@
 	.chip-label {
 		white-space: nowrap;
 	}
-	.chip[data-compact] .chip-label {
+	/* Icon-only at rest; label reveals on hover/focus for every tone. The
+	   connected vs warn vs bad distinction is carried by the icon swap and the
+	   tone-driven colour, not by text. See the header comment above. */
+	.chip .chip-label {
 		position: absolute;
 		width: 1px;
 		height: 1px;
@@ -82,9 +89,9 @@
 		white-space: nowrap;
 		border: 0;
 	}
-	.chip[data-compact]:hover .chip-label,
-	.chip[data-compact]:focus-visible .chip-label,
-	.chip[data-compact]:focus-within .chip-label {
+	.chip:hover .chip-label,
+	.chip:focus-visible .chip-label,
+	.chip:focus-within .chip-label {
 		position: static;
 		width: auto;
 		height: auto;

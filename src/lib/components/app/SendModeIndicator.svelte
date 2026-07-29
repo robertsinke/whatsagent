@@ -8,11 +8,17 @@
 	 * conversation screen.
 	 *
 	 * - `sendsLive === true`  → live (cobalt, Radio icon): approving a draft
-	 *   or pressing send transmits over WhatsApp to a real recipient. Label stays
-	 *   permanently visible — a safety carve-out, not a hover-only affordance.
+	 *   or pressing send transmits over WhatsApp to a real recipient.
 	 * - `sendsLive === false` → dry-run (muted, ShieldAlert icon): approving a
-	 *   draft marks it sent and nothing reaches the recipient. Icon-only at rest;
-	 *   label reveals on hover/focus.
+	 *   draft marks it sent and nothing reaches the recipient.
+	 *
+	 * Both states are icon-only at rest; the label reveals on hover/focus. The
+	 * live vs off distinction stays legible without text through the cobalt-tinted
+	 * border/icon colour and the Radio vs ShieldAlert icon swap. An earlier
+	 * revision kept the "Sends live" label permanently visible as a safety
+	 * carve-out; Robert asked for hover-only across all four footer controls after
+	 * seeing it, so the carve-out was removed deliberately — do not reinstate it
+	 * without re-asking. The tooltip still carries the full sentence.
 	 */
 	let {
 		sendsLive = false,
@@ -27,7 +33,6 @@
 				<span
 					class="chip"
 					data-mode={sendsLive ? 'live' : 'dry-run'}
-					data-compact={!sendsLive || undefined}
 					data-pending={pending || undefined}
 					role="status"
 					aria-live="polite"
@@ -88,8 +93,10 @@
 	.chip-label {
 		white-space: nowrap;
 	}
-	/* Steady dry-run state: icon-only at rest. Live sends keep the label. */
-	.chip[data-compact] .chip-label {
+	/* Icon-only at rest; label reveals on hover/focus for both live and dry-run.
+	   The live vs off distinction is carried by the cobalt border/icon colour and
+	   the Radio vs ShieldAlert icon, not by text. See the header comment. */
+	.chip .chip-label {
 		position: absolute;
 		width: 1px;
 		height: 1px;
@@ -100,9 +107,9 @@
 		white-space: nowrap;
 		border: 0;
 	}
-	.chip[data-compact]:hover .chip-label,
-	.chip[data-compact]:focus-visible .chip-label,
-	.chip[data-compact]:focus-within .chip-label {
+	.chip:hover .chip-label,
+	.chip:focus-visible .chip-label,
+	.chip:focus-within .chip-label {
 		position: static;
 		width: auto;
 		height: auto;
