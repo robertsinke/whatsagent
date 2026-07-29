@@ -128,7 +128,11 @@ try {
 			returnByValue: true
 		});
 		console.log(res.result?.result?.value);
-		await sleep(1200);
+		// A click that triggers an SPA state change (selecting a chat) starts an
+		// async load, and 1200ms was not enough for it: a following `--eval` ran
+		// against a half-hydrated DOM, and twice hung the whole run to its 180s
+		// timeout. Configurable, and defaulted high enough for the chat pane.
+		await sleep(Number(process.env.SHOT_CLICK_WAIT ?? 3000));
 	}
 
 	if (evalExpr) {
