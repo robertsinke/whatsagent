@@ -1,18 +1,16 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { goto } from '$app/navigation';
 	import * as Resizable from '$lib/components/ui/resizable/index.js';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as Empty from '$lib/components/ui/empty/index.js';
-	import { MessagesSquare, Settings } from '@lucide/svelte';
+	import { MessagesSquare } from '@lucide/svelte';
 	import ChatList from '$lib/components/app/ChatList.svelte';
 	import Composer from '$lib/components/app/Composer.svelte';
 	import ConversationPane from '$lib/components/app/ConversationPane.svelte';
 	import DeepenHistoryButton from '$lib/components/app/DeepenHistoryButton.svelte';
 	import DraftStatus from '$lib/components/app/DraftStatus.svelte';
 	import FirstRunScreen from '$lib/components/app/FirstRunScreen.svelte';
-	import OutboxTray from '$lib/components/app/OutboxTray.svelte';
 	import PairingScreen from '$lib/components/app/PairingScreen.svelte';
 	import { AppState } from '$lib/client/state.svelte.js';
 	import { displayName, initialsFor, isFirstRun, sessionBanner } from '$lib/client/view.js';
@@ -48,18 +46,6 @@
 </script>
 
 <div class="shell">
-	<header class="topbar">
-		<div class="brand">
-			<span class="brand-dot"></span>
-		</div>
-		<div class="topbar-right">
-			<OutboxTray outbox={app.outbox} chats={app.chats} oncancel={(id) => app.cancelOutbox(id)} />
-			<Button variant="ghost" size="sm" onclick={() => goto('/settings')}>
-				<Settings class="size-4" /> Settings
-			</Button>
-		</div>
-	</header>
-
 	{#if firstRun}
 		<!-- Nothing has ever synced and WhatsApp is not linked: risk disclosure,
 		     drafting setup, then the QR. -->
@@ -80,6 +66,8 @@
 						sendingMode={app.sendingMode}
 						session={app.session}
 						socketConnected={app.connected}
+						outbox={app.outbox}
+						oncancel={(id) => app.cancelOutbox(id)}
 						onselect={openChat}
 					/>
 				</section>
@@ -184,33 +172,6 @@
 		min-height: 0;
 		padding: 0.6rem;
 		gap: 0.5rem;
-	}
-	.topbar {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 0.5rem;
-		padding: 0 0.3rem;
-	}
-	.brand {
-		display: flex;
-		align-items: center;
-		gap: 0.45rem;
-	}
-	.brand-dot {
-		width: 10px;
-		height: 10px;
-		border-radius: 999px;
-		/* P1.2: gradient echoing the app icon — the mark that survives P2.3's
-		   wordmark removal. Cobalt-700→600 reads as brand at this size. */
-		background: linear-gradient(135deg, var(--cobalt-700), var(--cobalt-600));
-		box-shadow: var(--shadow-bevel);
-	}
-	.topbar-right {
-		display: flex;
-		align-items: center;
-		gap: 0.35rem;
-		margin-left: auto;
 	}
 
 	:global(.panes) {

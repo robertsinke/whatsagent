@@ -4,10 +4,12 @@
 	import * as Empty from '$lib/components/ui/empty/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Inbox, Search } from '@lucide/svelte';
-	import type { Chat, SessionView } from '$lib/client/types.js';
+	import type { Chat, OutboxRow, SessionView } from '$lib/client/types.js';
 	import { displayName, filterChats, jidDigits, type ChatTab } from '$lib/client/view.js';
 	import ChatRow from './ChatRow.svelte';
+	import FooterSettings from './FooterSettings.svelte';
 	import NeedsReplyTabs from './NeedsReplyTabs.svelte';
+	import OutboxTray from './OutboxTray.svelte';
 	import SendModeIndicator from './SendModeIndicator.svelte';
 	import SessionStatus from './SessionStatus.svelte';
 
@@ -19,6 +21,8 @@
 		sendingMode = false,
 		session,
 		socketConnected = true,
+		outbox = [],
+		oncancel,
 		onselect
 	}: {
 		chats: Chat[];
@@ -28,6 +32,8 @@
 		sendingMode?: boolean;
 		session: SessionView;
 		socketConnected?: boolean;
+		outbox?: OutboxRow[];
+		oncancel?: (id: number) => void;
 		onselect?: (jid: string) => void;
 	} = $props();
 
@@ -92,6 +98,10 @@
 		<SendModeIndicator {sendsLive} pending={sendingMode} />
 		<span class="footer-sep" aria-hidden="true"></span>
 		<SessionStatus {session} {socketConnected} />
+		<span class="footer-sep footer-sep-strong" aria-hidden="true"></span>
+		<OutboxTray {outbox} {chats} {oncancel} />
+		<span class="footer-sep" aria-hidden="true"></span>
+		<FooterSettings />
 	</footer>
 </div>
 
@@ -137,15 +147,37 @@
 		display: flex;
 		align-items: center;
 		gap: 0;
+		/* Room for the Outbox count badge — it sits on the trailing control and
+		   must not be clipped by the pane's right edge. */
 		padding: 0.35rem 0.45rem;
 		border-top: 1px solid var(--hairline-soft);
 		background: var(--surface-raised);
 		z-index: 1;
+		min-width: 0;
 	}
 	.footer-sep {
 		width: 1px;
 		align-self: stretch;
 		margin: 0.2rem 0.4rem;
 		background: var(--hairline-soft);
+	}
+	/* A slightly heavier rule between the status group (sends, connection) and
+	   the actions group (outbox, settings) so the four read as two pairs. */
+	.footer-sep-strong {
+		background: var(--hairline);
+	}
+	/* Below ~220px pane (the 20% min of a 1440 shell), the separators collapse to
+	   thin margins so the four icon-only chips stay on one row. Hover labels are
+	   allowed to overflow the pane visually rather than wrap — the absolutely
+	   positioned footer has no scroll, and clipping a hover label would hide the
+	   very affordance the hover reveals. The footer itself stays within bounds
+	   because at this width every chip is icon-only at rest. */
+	@container (max-width: 220px) {
+		.footer-sep {
+			margin: 0.15rem 0.2rem;
+		}
+		.footer-sep-strong {
+			margin-inline: 0.3rem;
+		}
 	}
 </style>
