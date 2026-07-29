@@ -72,9 +72,15 @@
 		font-size: 0.7rem;
 		padding: 0.2rem 0.5rem;
 		border-radius: 999px;
-		border: 1px solid var(--hairline);
-		background: var(--surface-raised);
-		box-shadow: var(--shadow-bevel);
+		/* Transparent at rest so the control sits IN the recessed footer rather
+		   than floating on it as a pill. Hover lifts it to the raised surface,
+		   which doubles as the hover affordance now that the label reveal is the
+		   only other feedback. Semantic states (live, warn, bad) re-assert their
+		   own border and tint below — those carry meaning and must stay visible
+		   at rest. */
+		border: 1px solid transparent;
+		background: transparent;
+		box-shadow: none;
 		color: var(--ink-70);
 		cursor: default;
 		white-space: nowrap;
@@ -87,6 +93,9 @@
 	   out-specify a bare `.chip:hover`. */
 	.chip:hover,
 	.chip:focus-visible {
+		background: var(--surface-raised);
+		border-color: var(--hairline);
+		box-shadow: var(--shadow-bevel);
 		color: var(--ink-90);
 	}
 	.chip[data-mode='live'] {

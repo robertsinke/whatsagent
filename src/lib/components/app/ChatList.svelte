@@ -151,7 +151,9 @@
 		   must not be clipped by the pane's right edge. */
 		padding: 0.35rem 0.45rem;
 		border-top: 1px solid var(--hairline-soft);
-		background: var(--surface-raised);
+		/* Matches the recess it sits in. It used to be `--surface-raised`, which
+		   read as a floating strip once the list stopped being a card. */
+		background: var(--surface-sunken);
 		z-index: 1;
 		min-width: 0;
 	}

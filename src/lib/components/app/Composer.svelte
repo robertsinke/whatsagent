@@ -106,7 +106,7 @@
   region. DraftStatus keeps approve / skip / refine / stale re-confirm / generate
   behaviour; this shell only owns the shared border.
 -->
-<div class="composer neumorphic-raised">
+<div class="composer">
 	<DraftStatus
 		{draft}
 		{stalePrompt}
@@ -171,8 +171,12 @@
 </div>
 
 <style>
+	/* No surface of its own: the composer is part of the conversation card, so a
+	   bordered box here was a card inside a card. The hairline above it is the
+	   only separation it needs. */
 	.composer {
-		border-radius: var(--radius-md);
+		border-top: 1px solid var(--hairline-soft);
+		border-radius: 0;
 		padding: 0.5rem 0.5rem 0.35rem;
 		display: flex;
 		flex-direction: column;

@@ -75,7 +75,7 @@
 			<Resizable.Handle />
 
 			<Resizable.Pane defaultSize={70}>
-				<section class="pane conv-pane">
+				<section class="pane conv-pane neumorphic-raised">
 					{#if app.selectedChat}
 						<header class="conv-head">
 							<Avatar class="conv-avatar">
@@ -192,11 +192,17 @@
 	   the background and the conversation is the one raised surface, so the two
 	   are separated by tone rather than by a border, a radius and a divider line
 	   stacked on top of each other. */
+	/* The canvas is the base. The list is RECESSED into it (sunken surface plus
+	   the inset shadow), and the conversation FLOATS above it as a rounded card
+	   with its own margin, so the two read as different depths rather than as two
+	   cards side by side. */
 	.list-pane {
-		background: var(--bg);
+		background: var(--surface-sunken);
+		box-shadow: var(--shadow-pressed);
 	}
 	.conv-pane {
-		background: var(--surface-raised);
+		margin: 0.55rem 0.55rem 0.55rem 0.45rem;
+		border-radius: var(--radius-lg);
 	}
 	/* The resizable handle ships a 1px `bg-border` rule. Kept as a drag target,
 	   made invisible: the tonal step between the two panes already reads as the

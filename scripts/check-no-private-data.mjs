@@ -15,7 +15,20 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const fixturesPath = join(repoRoot, 'shared', 'test-fixtures.ts');
 const DIGITS = /[0-9]{11,15}/g;
-const SKIP_DIRS = new Set(['node_modules', '.git', 'build', '.svelte-kit', 'coverage']);
+// `release` and `dist` are packaging output. Scanning them made `npm run check`
+// fail after any `dist:mac`, on a build number inside the app bundle's own
+// Info.plist — a gate that cannot be run once a build exists is worse than no
+// gate, because the reflex is to stop running it. They are gitignored and never
+// published, so nothing in them can leak through the export.
+const SKIP_DIRS = new Set([
+	'node_modules',
+	'.git',
+	'build',
+	'.svelte-kit',
+	'coverage',
+	'release',
+	'dist'
+]);
 
 const fixturesSource = readFileSync(fixturesPath, 'utf8');
 const allow = new Set(fixturesSource.match(DIGITS) ?? []);
