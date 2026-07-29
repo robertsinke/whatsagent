@@ -1,0 +1,66 @@
+import type { ActionDefinition } from './types.js';
+import type { ActionRegistry } from './dispatch.js';
+import { agentDemoAction } from './agent-demo.js';
+import { approveDraftAction } from './approve-draft.js';
+import { cancelOutboxAction } from './cancel-outbox.js';
+import { deepenHistoryAction } from './deepen-history.js';
+import { editDraftAction } from './edit-draft.js';
+import { generateDraftAction } from './generate-draft.js';
+import { loadMediaAction } from './load-media.js';
+import { markReadAction } from './mark-read.js';
+import { reactAction } from './react.js';
+import { refineDraftAction } from './refine-draft.js';
+import { refreshVoiceAction } from './refresh-voice.js';
+import { regeneratePairingAction } from './regenerate-pairing.js';
+import { saveVoiceAction } from './save-voice.js';
+import { sendAction } from './send.js';
+import { setSendModeAction } from './set-send-mode.js';
+import { setSettingAction } from './set-setting.js';
+import { skipDraftAction } from './skip-draft.js';
+
+const actions: ActionDefinition<unknown>[] = [
+	agentDemoAction as ActionDefinition<unknown>,
+	approveDraftAction as ActionDefinition<unknown>,
+	cancelOutboxAction as ActionDefinition<unknown>,
+	deepenHistoryAction as ActionDefinition<unknown>,
+	editDraftAction as ActionDefinition<unknown>,
+	generateDraftAction as ActionDefinition<unknown>,
+	loadMediaAction as ActionDefinition<unknown>,
+	markReadAction as ActionDefinition<unknown>,
+	reactAction as ActionDefinition<unknown>,
+	refineDraftAction as ActionDefinition<unknown>,
+	refreshVoiceAction as ActionDefinition<unknown>,
+	regeneratePairingAction as ActionDefinition<unknown>,
+	saveVoiceAction as ActionDefinition<unknown>,
+	sendAction as ActionDefinition<unknown>,
+	setSendModeAction as ActionDefinition<unknown>,
+	setSettingAction as ActionDefinition<unknown>,
+	skipDraftAction as ActionDefinition<unknown>
+];
+
+export function createActionRegistry(): ActionRegistry {
+	const map = new Map<string, ActionDefinition<unknown>>();
+	for (const action of actions) {
+		if (map.has(action.name)) {
+			throw new Error(`Duplicate action name: ${action.name}`);
+		}
+		map.set(action.name, action);
+	}
+	return map;
+}
+
+/** Default process-wide registry — routes and tests share the same declarations. */
+export const actionRegistry = createActionRegistry();
+
+export {
+	dispatch,
+	listActionsForCaller,
+	type ActionRegistry
+} from './dispatch.js';
+export type {
+	ActionCaller,
+	ActionContext,
+	ActionDefinition,
+	ActionResult
+} from './types.js';
+export { actionError, actionJson } from './types.js';

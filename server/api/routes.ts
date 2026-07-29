@@ -2,40 +2,22 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { extname, join, normalize, sep } from 'node:path';
 import type { AppDatabase } from '../store/db.js';
+import { getChat, listChats } from '../store/chats.js';
+import { getDraft } from '../store/drafts.js';
+import { getMessage, listMessagesPage, type Message } from '../store/messages.js';
+import { listOutbox } from '../store/outbox.js';
 import {
-	getChat,
-	listChats,
-	markChatRead,
-	setChatAgentState,
-	type Chat
-} from '../store/chats.js';
-import { deleteDraft, getDraft, upsertDraft } from '../store/drafts.js';
-import { recordDraftFeedback } from '../store/draft-feedback.js';
-import {
-	getLastInboundMessage,
-	getLastMessage,
-	getMessage,
-	listMessagesPage,
-	type Message
-} from '../store/messages.js';
-import {
-	cancelOutbox,
-	cancelPendingDraftOutbox,
-	enqueueDraftOutbox,
-	enqueueManualOutbox,
-	enqueueReactionOutbox,
-	getOutbox,
-	listOutbox
-} from '../store/outbox.js';
-import { getSetting, listEffectiveSettings, MEMORY_SETTING, OUTBOX_DRY_RUN_SETTING, resolveOutboxDryRun, setSetting, validateSettingValue, PROVIDER_SETTING, PROVIDER_MODEL_SETTING } from '../store/settings.js';
+	getSetting,
+	listEffectiveSettings,
+	MEMORY_SETTING,
+	OUTBOX_DRY_RUN_SETTING,
+	PROVIDER_SETTING,
+	PROVIDER_MODEL_SETTING
+} from '../store/settings.js';
 import type { Memory } from '../agent/memory/memory.js';
 import type { RefinementAttempt, RefineDraftRequest } from '../agent/refiner.js';
-import { retainDraftLearning } from '../agent/voice.js';
-import { GLOBAL_VOICE_STEM, VoiceFiles, VOICE_STEMS } from '../agent/memory/voice-files.js';
-import { looksLikeVoiceDocument } from '../../shared/voice-document.js';
-import { isRefinementIntent } from '../providers/provider.js';
+import { VoiceFiles, VOICE_STEMS } from '../agent/memory/voice-files.js';
 import type { ConnectionStatus, EventBus } from './events.js';
-import { isDevAgentEventsEnabled, startAgentDemoSequence } from './dev-agent-events.js';
 import type { SessionView } from './session.js';
 import {
 	buildAllowedOrigins,
@@ -51,6 +33,8 @@ export { chatNeedsReply };
 import { describeMedia, isMediaType, toMessageView } from './message-view.js';
 import type { DiscoveredProvider } from '../providers/discovery.js';
 import type { ProviderInfo, ProviderModelOption } from '../../shared/provider-types.js';
+import { actionRegistry, dispatch } from '../actions/index.js';
+import { writeActionResult } from '../actions/respond.js';
 
 /**
  * Map a discovery {@link DiscoveredProvider} onto the shared {@link ProviderInfo}
@@ -171,12 +155,18 @@ function error(res: ServerResponse, status: number, message: string, extra?: Rec
 	json(res, status, { error: message, ...extra });
 }
 
-/**
- * Ceiling for a hand-saved voice document. The real one is ~8 KB; 256 KB is generous
- * enough that no legitimate edit hits it and small enough that a runaway client cannot
- * park megabytes in the data dir.
- */
-const MAX_VOICE_DOCUMENT_BYTES = 256 * 1024;
+async function dispatchAction(
+	deps: RoutesDeps,
+	res: ServerResponse,
+	name: string,
+	raw: unknown
+): Promise<void> {
+	const result = await dispatch(actionRegistry, name, raw, {
+		caller: 'frontend',
+		deps
+	});
+	writeActionResult(res, result, { json, error });
+}
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
 	const chunks: Buffer[] = [];
@@ -282,9 +272,7 @@ export function createRequestHandler(deps: RoutesDeps) {
 
 /**
  * D2 media endpoints.
- * - `POST` fetches on demand (never bulk-prefetched) and persists the resulting
- *   state; failures come back with the `unavailable` / `transient` sub-reason so
- *   the UI can decide whether a retry button is even honest.
+ * - `POST` fetches on demand via the `load-media` action.
  * - `GET` streams cached bytes for the lightbox / inline audio / OS handoff.
  */
 async function handleMedia(
@@ -293,6 +281,11 @@ async function handleMedia(
 	method: string,
 	messageId: string
 ): Promise<void> {
+	if (method === 'POST') {
+		await dispatchAction(deps, res, 'load-media', { messageId });
+		return;
+	}
+
 	const message = getMessage(deps.db, messageId);
 	if (!message) {
 		error(res, 404, 'Message not found', { id: messageId });
@@ -300,35 +293,6 @@ async function handleMedia(
 	}
 	if (!isMediaType(message.type)) {
 		error(res, 400, 'Message has no media', { id: messageId, type: message.type });
-		return;
-	}
-
-	if (method === 'POST') {
-		if (message.media_state === 'ready' && message.media_ref) {
-			json(res, 200, toMessageView(deps.db, message));
-			return;
-		}
-		if (message.media_state === 'failed' && message.media_error === 'unavailable') {
-			// Terminal — retrying cannot help, so do not pretend it might.
-			error(res, 410, 'Media is no longer available', { id: messageId });
-			return;
-		}
-		if (!deps.downloadMedia) {
-			error(res, 503, 'No channel attached');
-			return;
-		}
-		try {
-			await deps.downloadMedia(messageId);
-		} catch (err) {
-			const updated = getMessage(deps.db, messageId);
-			const reason = updated?.media_error ?? 'transient';
-			error(res, reason === 'unavailable' ? 410 : 502, 'Media download failed', {
-				id: messageId,
-				reason
-			});
-			return;
-		}
-		json(res, 200, toMessageView(deps.db, getMessage(deps.db, messageId)!));
 		return;
 	}
 
@@ -398,26 +362,15 @@ async function handleApi(
 	method: string,
 	url: URL
 ): Promise<void> {
-	const { db, events } = deps;
+	const { db } = deps;
 	const path = url.pathname;
 
 	/**
-	 * PL-A1 — gated by WHATSAGENT_DEV_EVENTS=1. Pushes a scripted agent-part +
-	 * client-command sequence through the live EventBus. Absent the flag this
-	 * path 404s like any unknown route (the check is inside the handler so a
-	 * forgotten mount cannot leak the emitter into production).
+	 * PL-A1 — gated by WHATSAGENT_DEV_EVENTS=1 inside the agent-demo action.
 	 */
 	if (path === '/api/dev/agent-demo' && method === 'POST') {
-		if (!isDevAgentEventsEnabled()) {
-			error(res, 404, 'Not found');
-			return;
-		}
-		const body = (await readJsonBody(req)) as { openChatJid?: string; stepMs?: number } | undefined;
-		startAgentDemoSequence(events, {
-			...(body?.openChatJid ? { openChatJid: body.openChatJid } : {}),
-			...(typeof body?.stepMs === 'number' ? { stepMs: body.stepMs } : {})
-		});
-		json(res, 202, { ok: true, gatedBy: 'WHATSAGENT_DEV_EVENTS=1' });
+		const body = await readJsonBody(req);
+		await dispatchAction(deps, res, 'agent-demo', body ?? {});
 		return;
 	}
 
@@ -439,12 +392,7 @@ async function handleApi(
 
 	// Regenerate affordance for `qr_expired`, and re-pair after `logged_out`.
 	if (path === '/api/session/pair' && method === 'POST') {
-		if (!deps.regeneratePairing) {
-			error(res, 503, 'No channel attached');
-			return;
-		}
-		await deps.regeneratePairing();
-		json(res, 202, { ok: true });
+		await dispatchAction(deps, res, 'regenerate-pairing', {});
 		return;
 	}
 
@@ -457,29 +405,13 @@ async function handleApi(
 	const reactionMatch = /^\/api\/messages\/([^/]+)\/reactions$/.exec(path);
 	if (reactionMatch && method === 'POST') {
 		const messageId = decodeURIComponent(reactionMatch[1]!);
-		const message = getMessage(db, messageId);
-		if (!message) {
+		// Preserve pre-extraction order: message 404 before body validation.
+		if (!getMessage(db, messageId)) {
 			error(res, 404, 'Message not found', { id: messageId });
 			return;
 		}
-		const body = (await readJsonBody(req)) as { emoji?: unknown } | undefined;
-		const emoji = typeof body?.emoji === 'string' ? body.emoji.trim() : '';
-		// An empty emoji string removes a reaction; a missing/non-string emoji is a 400.
-		if (typeof body?.emoji !== 'string') {
-			error(res, 400, 'Expected { emoji }');
-			return;
-		}
-		const now = Date.now();
-		const id = enqueueReactionOutbox(db, {
-			chatJid: message.chat_jid,
-			targetMsgId: messageId,
-			emoji,
-			now
-		});
-		const row = getOutbox(db, id)!;
-		deps.wakeOutbox?.();
-		events.emit({ type: 'outbox-updated', outbox: row });
-		json(res, 202, row);
+		const body = (await readJsonBody(req)) as Record<string, unknown> | undefined;
+		await dispatchAction(deps, res, 'react', { messageId, ...(body ?? {}) });
 		return;
 	}
 
@@ -540,111 +472,27 @@ async function handleApi(
 	}
 
 	/**
-	 * P3.2: save a hand edit of a voice document.
-	 *
-	 * CSRF needs no code here — `security.ts` routes every non-GET/HEAD/OPTIONS request
-	 * through `validateOriginAndHost` before dispatch (see the `isMutatingMethod` gate in
-	 * `handleRequest`), so a cross-origin `PUT` is rejected with 403 before this runs.
-	 * There is a test asserting exactly that; it is the proof, not this comment.
-	 *
-	 * Ordering is load-bearing:
-	 *   1. whitelist / size / `baseHash` checks — all of which leave the file untouched;
-	 *   2. `writeOwnerEdit`, which arms the mirror guard and is NEVER rolled back;
-	 *   3. the Hindsight directive, which is best-effort.
-	 * A 409 must not reach step 2: arming the guard on a save that never happened would
-	 * hold the mirror off a document the owner never edited.
+	 * P3.2: save a hand edit of a voice document — `save-voice` action.
+	 * CSRF is enforced by `security.ts` before this runs.
 	 */
 	if (voiceGlobalMatch && method === 'PUT') {
 		const stem = decodeURIComponent(voiceGlobalMatch[1]!);
+		// Preserve pre-extraction order: whitelist + dataDir before body validation.
 		if (!VOICE_STEMS.has(stem)) {
 			error(res, 404, 'Not found');
 			return;
 		}
-		const dataDir = deps.dataDir;
-		if (!dataDir) {
+		if (!deps.dataDir) {
 			error(res, 503, 'Voice storage unavailable');
 			return;
 		}
-		const body = (await readJsonBody(req)) as
-			| { content?: unknown; baseHash?: unknown; note?: unknown }
-			| undefined;
-		if (typeof body?.content !== 'string' || typeof body.baseHash !== 'string') {
-			error(res, 400, 'Expected { content, baseHash }');
-			return;
-		}
-		// The real document is ~8 KB. The ceiling exists so a runaway client cannot park
-		// megabytes in the data dir, and it is checked in BYTES before anything is hashed.
-		if (Buffer.byteLength(body.content, 'utf8') > MAX_VOICE_DOCUMENT_BYTES) {
-			error(res, 400, 'Voice document too large', { maxBytes: MAX_VOICE_DOCUMENT_BYTES });
-			return;
-		}
-		const files = new VoiceFiles(dataDir);
-		const current = files.inspect(stem);
-		if (current.hash !== body.baseHash) {
-			// Someone (the mirror, another tab) moved the document since this editor loaded
-			// it. Return what is actually on disk and let the owner decide — silently
-			// overwriting is how an edit disappears without anyone noticing.
-			json(res, 409, {
-				stem,
-				conflict: true,
-				content: current.content,
-				hash: current.hash,
-				byteLength: current.byteLength,
-				modifiedAt:
-					current.modifiedAt === null ? null : new Date(current.modifiedAt).toISOString(),
-				mirrorGuard: current.mirrorGuard
-			});
-			return;
-		}
-
-		files.writeOwnerEdit(stem, body.content);
-
-		// The directive is D3's "correction becomes a hard rule for reflect". It is
-		// attempted after the write and can never undo it: an owner who saved and got a
-		// 500 back would have no way to tell whether their text survived. `skipped` means
-		// no memory service is wired at all; `failed` means one is and the call did not
-		// land — the guard is armed either way, which is the whole point of arming it
-		// unconditionally.
-		let directive: 'recorded' | 'skipped' | 'failed' = 'skipped';
-		if (typeof deps.memory?.recordVoiceCorrection === 'function') {
-			const note = typeof body.note === 'string' ? body.note.trim() : '';
-			try {
-				await deps.memory.recordVoiceCorrection(
-					`Owner voice correction (${stem})`,
-					note ||
-						'The owner hand-edited the voice document. Treat their edited version as ' +
-							'authoritative about how they write, over anything inferred from message history.',
-					undefined
-				);
-				directive = 'recorded';
-			} catch {
-				directive = 'failed';
-			}
-		}
-
-		const saved = files.inspect(stem);
-		json(res, 200, {
-			stem,
-			hash: saved.hash,
-			byteLength: saved.byteLength,
-			modifiedAt: saved.modifiedAt === null ? null : new Date(saved.modifiedAt).toISOString(),
-			mirrorGuard: saved.mirrorGuard,
-			// A WARNING, never a rejection (P3.1). Refusing a legitimate owner edit because a
-			// heuristic disagreed is worse than the Milkdown mangling it watches for.
-			looksLikeVoiceDocument: looksLikeVoiceDocument(body.content),
-			directive
-		});
+		const body = (await readJsonBody(req)) as Record<string, unknown> | undefined;
+		await dispatchAction(deps, res, 'save-voice', { stem, ...(body ?? {}) });
 		return;
 	}
 
 	/**
-	 * P3.2: owner-triggered "refresh now" — the release valve for the mirror guard. It
-	 * does not clear the guard: `refreshMentalModel` is a trigger, and the mirror that
-	 * runs immediately after it still carries the PRE-EDIT document. The guard releases
-	 * itself when genuinely new content arrives, which is the only moment it is safe to.
-	 *
-	 * "No memory service" is a 200 with `available: false`, not an error status, so the
-	 * UI can explain the situation instead of alarming about it.
+	 * P3.2: owner-triggered "refresh now" — `refresh-voice` action.
 	 */
 	const voiceRefreshMatch = /^\/api\/voice\/([^/]+)\/refresh$/.exec(path);
 	if (voiceRefreshMatch && method === 'POST') {
@@ -653,60 +501,13 @@ async function handleApi(
 			error(res, 404, 'Not found');
 			return;
 		}
-		if (typeof deps.memory?.refreshVoiceModels !== 'function') {
-			json(res, 200, { available: false, refreshed: [], error: null });
-			return;
-		}
-		try {
-			const refreshed = await deps.memory.refreshVoiceModels();
-			json(res, 200, { available: true, refreshed, error: null });
-		} catch (err) {
-			// Hindsight being down is an expected state, not a server fault — report it as
-			// data so the UI says "memory is offline" rather than "something broke".
-			json(res, 200, {
-				available: true,
-				refreshed: [],
-				error: err instanceof Error ? err.message : String(err)
-			});
-		}
+		await dispatchAction(deps, res, 'refresh-voice', { stem });
 		return;
 	}
 
 	if (path === '/api/settings' && method === 'PUT') {
-		const body = (await readJsonBody(req)) as { key?: string; value?: string } | undefined;
-		if (!body?.key || typeof body.value !== 'string') {
-			error(res, 400, 'Expected { key, value }');
-			return;
-		}
-		// OSS-P2.4: validate VALUES, never keys. A key whitelist is the wrong
-		// instrument — this endpoint is also the write path for hindsight_url,
-		// hindsight_bank, hindsight_refresh_cron, memory, the two pacing keys,
-		// outbox_dry_run and whatsapp_history_sync_complete. Whitelisting keys
-		// silently breaks every one of them. Closed domains are validated and
-		// NORMALIZED here; everything else passes through unchanged. Today a
-		// typo saves with a 200, looks like it worked, and the app fails to
-		// start on the next boot — recoverable only by hand-editing SQLite.
-		const result = validateSettingValue(body.key, body.value);
-		if (!result.ok) {
-			error(res, 400, result.message, { allowed: result.allowed });
-			return;
-		}
-		setSetting(db, body.key, result.normalized);
-		// W4-U8: when the outbox dry-run setting is touched, push the resolved
-		// polarity into the live pacer so the toggle takes effect without a
-		// restart. The generic PUT is the settings UI's only path today; a
-		// dedicated endpoint would just duplicate this. The pacer stays the
-		// sole sender — this only flips whether it transmits.
-		if (body.key === OUTBOX_DRY_RUN_SETTING && deps.setOutboxDryRun) {
-			deps.setOutboxDryRun(resolveOutboxDryRun(result.normalized));
-		}
-		// OSS-P2.4: invalidate the discovery cache when the provider or model
-		// changed, so the next GET /api/providers reflects the new saved value
-		// (and, for provider, re-probes against the new selection's auth state).
-		if ((body.key === PROVIDER_SETTING || body.key === PROVIDER_MODEL_SETTING) && deps.providerDiscovery) {
-			deps.providerDiscovery.invalidate();
-		}
-		json(res, 200, { key: body.key, value: getSetting(db, body.key) });
+		const body = await readJsonBody(req);
+		await dispatchAction(deps, res, 'set-setting', body ?? {});
 		return;
 	}
 
@@ -759,18 +560,8 @@ async function handleApi(
 		return;
 	}
 	if (path === '/api/outbox/send-mode' && method === 'PUT') {
-		const body = (await readJsonBody(req)) as { live?: unknown } | undefined;
-		if (typeof body?.live !== 'boolean') {
-			error(res, 400, 'Expected { live: boolean }');
-			return;
-		}
-		const live = body.live;
-		const value = live ? 'false' : 'true';
-		setSetting(db, OUTBOX_DRY_RUN_SETTING, value);
-		if (deps.setOutboxDryRun) deps.setOutboxDryRun(!live);
-		const resolved = { live, dry_run: !live };
-		events.emit({ type: 'send-mode', ...resolved });
-		json(res, 200, resolved);
+		const body = await readJsonBody(req);
+		await dispatchAction(deps, res, 'set-send-mode', body ?? {});
 		return;
 	}
 
@@ -782,20 +573,7 @@ async function handleApi(
 
 	const outboxMatch = /^\/api\/outbox\/(\d+)$/.exec(path);
 	if (outboxMatch && method === 'DELETE') {
-		const id = Number(outboxMatch[1]);
-		const existing = getOutbox(db, id);
-		if (!existing) {
-			error(res, 404, 'Outbox item not found');
-			return;
-		}
-		if (!cancelOutbox(db, id)) {
-			error(res, 409, 'Outbox item is not cancellable');
-			return;
-		}
-		const updated = getOutbox(db, id)!;
-		deps.wakeOutbox?.();
-		events.emit({ type: 'outbox-updated', outbox: updated });
-		json(res, 200, updated);
+		await dispatchAction(deps, res, 'cancel-outbox', { id: Number(outboxMatch[1]) });
 		return;
 	}
 
@@ -867,83 +645,21 @@ async function handleApi(
 	}
 
 	if (rest === 'messages' && method === 'POST') {
-		// Composer send → outbox only. Never calls WhatsApp send (R9 / U9).
-		if (!chat) {
-			error(res, 404, 'Chat not found', { jid });
-			return;
-		}
-		const body = (await readJsonBody(req)) as
-			| { text?: string; reply_to_msg_id?: unknown }
-			| undefined;
-		const text = body?.text?.trim();
-		if (!text) {
-			error(res, 400, 'Expected { text }');
-			return;
-		}
-		let replyToMsgId: string | undefined;
-		if (body?.reply_to_msg_id !== undefined) {
-			if (typeof body.reply_to_msg_id !== 'string' || !body.reply_to_msg_id.trim()) {
-				error(res, 400, 'Expected reply_to_msg_id to be a message id');
-				return;
-			}
-			replyToMsgId = body.reply_to_msg_id.trim();
-			const target = getMessage(db, replyToMsgId);
-			if (!target) {
-				error(res, 400, 'Reply target not found');
-				return;
-			}
-			if (target.chat_jid !== jid) {
-				error(res, 400, 'Reply target does not belong to this chat');
-				return;
-			}
-		}
-		const now = Date.now();
-		const id = enqueueManualOutbox(db, {
-			chatJid: jid,
-			text,
-			replyToMsgId,
-			now
-		});
-		const row = getOutbox(db, id)!;
-		deps.wakeOutbox?.();
-		events.emit({ type: 'outbox-updated', outbox: row });
-		json(res, 202, row);
+		const body = (await readJsonBody(req)) as Record<string, unknown> | undefined;
+		await dispatchAction(deps, res, 'send', { chatJid: jid, ...(body ?? {}) });
 		return;
 	}
 
 	if (rest === 'history/deepen' && method === 'POST') {
-		if (!deps.deepenHistory) {
-			error(res, 503, 'History deepening unavailable');
-			return;
-		}
-		const body = (await readJsonBody(req)) as { count?: number } | undefined;
-		const requestedCount = typeof body?.count === 'number' && Number.isFinite(body.count)
-			? Math.trunc(body.count)
-			: 50;
-		const count = Math.min(Math.max(requestedCount, 1), 200);
-		json(res, 202, await deps.deepenHistory(jid, count));
+		const body = (await readJsonBody(req)) as Record<string, unknown> | undefined;
+		await dispatchAction(deps, res, 'deepen-history', { chatJid: jid, ...(body ?? {}) });
 		return;
 	}
 
 	if (rest === 'read' && method === 'POST') {
-		if (!chat) {
-			error(res, 404, 'Chat not found', { jid });
-			return;
-		}
-		markChatRead(db, jid);
-		const updated = toChatView(db, getChat(db, jid)!, (c) => chatNeedsReply(db, c));
-		events.emit({ type: 'chat-updated', chat: updated });
-		// U4 seam — intentionally unused. The local read cursor advanced above
-		// is a LOCAL marker only. Emitting WhatsApp read receipts on view marks
-		// the chat read on the owner's real phone and is a separate owner
-		// decision that has been explicitly deferred (see plan D3). When that
-		// decision is taken, hook the send transport here — and only here — with
-		// a call like:
-		//   emitReadReceiptOnView(deps, jid, updated.last_read_msg_id);
-		// Do NOT broaden the existing post-send `transport.markRead` trigger in
-		// `server/outbox/pacer.ts` (that one fires only as a follow-up to a reply
-		// the owner actually sent).
-		json(res, 200, updated);
+		// U4 seam — intentionally unused in mark-read action. Local cursor only;
+		// WhatsApp read receipts remain deferred (plan D3).
+		await dispatchAction(deps, res, 'mark-read', { chatJid: jid });
 		return;
 	}
 
@@ -962,249 +678,30 @@ async function handleApi(
 	}
 
 	if (rest === 'draft' && method === 'PATCH') {
-		if (!chat) {
-			error(res, 404, 'Chat not found', { jid });
-			return;
-		}
-		const existing = getDraft(db, jid);
-		if (!existing) {
-			error(res, 404, 'Draft not found');
-			return;
-		}
-		if (!['ready', 'stale', 'drafted'].includes(existing.status)) {
-			error(res, 409, 'Draft is not editable', { status: existing.status });
-			return;
-		}
-		const body = (await readJsonBody(req)) as { text?: string } | undefined;
-		if (typeof body?.text !== 'string') {
-			error(res, 400, 'Expected { text }');
-			return;
-		}
-		upsertDraft(db, { ...existing, text: body.text });
-		const draft = getDraft(db, jid)!;
-		events.emit({ type: 'draft-updated', draft });
-		json(res, 200, draft);
+		const body = (await readJsonBody(req)) as Record<string, unknown> | undefined;
+		await dispatchAction(deps, res, 'edit-draft', { chatJid: jid, ...(body ?? {}) });
 		return;
 	}
 
-	/**
-	 * W4-U15 — owner presses "Generate draft". Mutating, so the shared
-	 * Origin/Host validation already covers it; no second check here.
-	 *
-	 * Accepts with 202 and does not wait on the provider: the existing
-	 * `draft-updated` events carry the UI through drafting → ready.
-	 *
-	 * R9 is untouched. This writes a draft row; it enqueues nothing, wakes no
-	 * pacer, and has no path to the WhatsApp send function.
-	 */
 	if (rest === 'draft/generate' && method === 'POST') {
-		if (!chat) {
-			error(res, 404, 'Chat not found', { jid });
-			return;
-		}
-		// R8: groups are structurally excluded from drafting and the owner cannot
-		// opt out of that. The scheduler seam refuses them again.
-		if (chat.kind !== '1:1') {
-			error(res, 400, 'Drafting is available for 1:1 chats only', { kind: chat.kind });
-			return;
-		}
-		if (!deps.generateDraft) {
-			error(res, 503, 'Draft generation unavailable');
-			return;
-		}
-		// History sync creates chat rows independently of message delivery, so a
-		// 1:1 chat with no messages is reachable. The drafter would return
-		// `not_needed` for it and emit nothing at all — a 202 followed by silence
-		// is exactly the silent no-op this unit is supposed to remove.
-		if (!getLastMessage(db, jid)) {
-			error(res, 409, 'No messages in this chat to draft from');
-			return;
-		}
-		const existing = getDraft(db, jid);
-		if (existing?.status === 'drafting') {
-			error(res, 409, 'A draft is already being generated', { status: existing.status });
-			return;
-		}
-		// An approved draft may already be queued in the outbox — regenerating
-		// under one would swap the text out from beneath an owner approval.
-		if (existing?.status === 'approved') {
-			error(res, 409, 'Draft is already approved', { status: existing.status });
-			return;
-		}
-		if (!deps.generateDraft(jid)) {
-			error(res, 409, 'Draft generation was refused for this chat');
-			return;
-		}
-		json(res, 202, { ok: true, chat_jid: jid });
+		await dispatchAction(deps, res, 'generate-draft', { chatJid: jid });
 		return;
 	}
 
 	if (rest === 'draft/refine' && method === 'POST') {
-		const body = (await readJsonBody(req)) as { intent?: unknown; text?: unknown } | undefined;
-		if (!isRefinementIntent(body?.intent)) {
-			error(res, 400, 'Invalid refinement intent');
-			return;
-		}
-		if (body.text !== undefined && typeof body.text !== 'string') {
-			error(res, 400, 'Expected text to be a string');
-			return;
-		}
-		if (!deps.refineDraft) {
-			error(res, 503, 'Draft refinement unavailable');
-			return;
-		}
-
-		const result = await deps.refineDraft({
-			chatJid: jid,
-			intent: body.intent,
-			preview: body.text
-		});
-		if (result.kind === 'ready') {
-			json(res, 200, result.draft);
-			return;
-		}
-		if (result.kind === 'not_found') {
-			error(res, 404, 'Draft not found');
-			return;
-		}
-		if (result.kind === 'not_refinable') {
-			error(res, 409, 'Draft is not refinable', { status: result.status });
-			return;
-		}
-		if (result.kind === 'invalid_preview') {
-			error(res, 400, 'Empty draft text');
-			return;
-		}
-		if (result.kind === 'superseded') {
-			error(res, 409, 'Draft changed during refinement');
-			return;
-		}
-		error(res, result.code === 'rate_limit' ? 429 : 502, 'Draft refinement failed', {
-			code: result.code
-		});
+		const body = (await readJsonBody(req)) as Record<string, unknown> | undefined;
+		await dispatchAction(deps, res, 'refine-draft', { chatJid: jid, ...(body ?? {}) });
 		return;
 	}
 
 	if (rest === 'draft/approve' && method === 'POST') {
-		if (!chat) {
-			error(res, 404, 'Chat not found', { jid });
-			return;
-		}
-		const body = (await readJsonBody(req)) as
-			| { text?: string; confirmed_latest_inbound_id?: string }
-			| undefined;
-		// Re-read after the await above. Another approval may have completed while
-		// this request body was arriving; only one request may observe approvable.
-		const existing = getDraft(db, jid);
-		if (!existing) {
-			error(res, 404, 'Draft not found');
-			return;
-		}
-		if (!['ready', 'stale', 'drafted'].includes(existing.status)) {
-			error(res, 409, 'Draft is not approvable', { status: existing.status });
-			return;
-		}
-		const latestInbound = getLastInboundMessage(db, jid);
-		if (
-			existing.basis_msg_id &&
-			latestInbound &&
-			latestInbound.id !== existing.basis_msg_id &&
-			body?.confirmed_latest_inbound_id !== latestInbound.id
-		) {
-			error(res, 409, 'Draft is stale; newer inbound arrived', {
-				basis_msg_id: existing.basis_msg_id,
-				latest_inbound_id: latestInbound.id
-			});
-			return;
-		}
-		const text = (body?.text ?? existing.text).trim();
-		if (!text) {
-			error(res, 400, 'Empty draft text');
-			return;
-		}
-		const now = Date.now();
-		const approve = db.transaction(() => {
-			const id = enqueueDraftOutbox(db, {
-				chatJid: jid,
-				text,
-				draftText: existing.original_text,
-				basisMsgId: existing.basis_msg_id,
-				now,
-				jitterMs: deps.nextDraftJitterMs?.() ?? 30_000
-			});
-			recordDraftFeedback(db, {
-				chat_jid: jid,
-				kind: 'approved',
-				draft_text: existing.original_text,
-				final_text: text,
-				basis_msg_id: existing.basis_msg_id,
-				created_at: now
-			});
-			upsertDraft(db, { ...existing, text, status: 'approved' });
-			return { row: getOutbox(db, id)!, draft: getDraft(db, jid)! };
-		});
-		const { row, draft } = approve();
-		if (deps.memory) {
-			void retainDraftLearning(deps.memory, {
-				chatJid: jid,
-				draft: existing.original_text,
-				final: text,
-				skipped: false
-			});
-		}
-		deps.wakeOutbox?.();
-		events.emit({ type: 'outbox-updated', outbox: row });
-		events.emit({ type: 'draft-updated', draft });
-		json(res, 202, { outbox: row, draft });
+		const body = (await readJsonBody(req)) as Record<string, unknown> | undefined;
+		await dispatchAction(deps, res, 'approve-draft', { chatJid: jid, ...(body ?? {}) });
 		return;
 	}
 
 	if (rest === 'draft/skip' && method === 'POST') {
-		if (!chat) {
-			error(res, 404, 'Chat not found', { jid });
-			return;
-		}
-		const existing = getDraft(db, jid);
-		if (!existing) {
-			error(res, 404, 'Draft not found');
-			return;
-		}
-		let cancelled: ReturnType<typeof cancelPendingDraftOutbox> = [];
-		const skip = db.transaction(() => {
-			if (existing.status === 'approved') {
-				cancelled = cancelPendingDraftOutbox(db, jid, existing.basis_msg_id);
-				if (cancelled.length === 0) return false;
-			}
-			recordDraftFeedback(db, {
-				chat_jid: jid,
-				kind: 'skipped',
-				draft_text: existing.original_text,
-				final_text: null,
-				basis_msg_id: existing.basis_msg_id,
-				created_at: Date.now()
-			});
-			deleteDraft(db, jid);
-			setChatAgentState(db, jid, 'skipped');
-			return true;
-		});
-		if (!skip()) {
-			error(res, 409, 'Approved draft is already sending or sent');
-			return;
-		}
-		if (deps.memory) {
-			void retainDraftLearning(deps.memory, {
-				chatJid: jid,
-				draft: existing.original_text,
-				final: null,
-				skipped: true
-			});
-		}
-		deps.wakeOutbox?.();
-		for (const outbox of cancelled) events.emit({ type: 'outbox-updated', outbox });
-		const updated = toChatView(db, getChat(db, jid)!, (c) => chatNeedsReply(db, c));
-		events.emit({ type: 'draft-removed', chat_jid: jid });
-		events.emit({ type: 'chat-updated', chat: updated });
-		json(res, 200, { ok: true, chat: updated });
+		await dispatchAction(deps, res, 'skip-draft', { chatJid: jid });
 		return;
 	}
 
