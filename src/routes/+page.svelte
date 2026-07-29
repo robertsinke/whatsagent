@@ -56,7 +56,7 @@
 		<!-- Syncing never gates: chats render as they land (D5). -->
 		<Resizable.PaneGroup direction="horizontal" class="panes">
 			<Resizable.Pane defaultSize={30} minSize={20} maxSize={45}>
-				<section class="pane list-pane neumorphic-raised">
+				<section class="pane list-pane">
 					<ChatList
 						chats={app.chats}
 						selectedJid={app.selectedJid}
@@ -72,10 +72,10 @@
 				</section>
 			</Resizable.Pane>
 
-			<Resizable.Handle withHandle />
+			<Resizable.Handle />
 
 			<Resizable.Pane defaultSize={70}>
-				<section class="pane conv-pane neumorphic-raised">
+				<section class="pane conv-pane">
 					{#if app.selectedChat}
 						<header class="conv-head">
 							<Avatar class="conv-avatar">
@@ -167,8 +167,12 @@
 		/* dvh keeps the composer reachable when mobile browser chrome collapses. */
 		height: 100dvh;
 		min-height: 0;
-		padding: 0.6rem;
-		gap: 0.5rem;
+		/* No padding or gap: the panes tile the window edge to edge. There used to
+		   be a 0.6rem surround, which left a strip of the `--bg` canvas showing
+		   around two rounded cards — a background nothing sits on. The panes carry
+		   their own surface, so the canvas has no job here. */
+		padding: 0;
+		gap: 0;
 	}
 
 	:global(.panes) {
@@ -178,17 +182,27 @@
 	.pane {
 		height: 100%;
 		min-height: 0;
-		border-radius: var(--radius-lg);
 		padding: 0.6rem;
 		display: flex;
 		flex-direction: column;
 		gap: 0.5rem;
 	}
+	/* Neither pane is a card any more. The nesting used to run window > canvas >
+	   rounded card > list, and every layer added an edge. Now the list simply IS
+	   the background and the conversation is the one raised surface, so the two
+	   are separated by tone rather than by a border, a radius and a divider line
+	   stacked on top of each other. */
 	.list-pane {
-		margin-right: 0.3rem;
+		background: var(--bg);
 	}
 	.conv-pane {
-		margin-left: 0.3rem;
+		background: var(--surface-raised);
+	}
+	/* The resizable handle ships a 1px `bg-border` rule. Kept as a drag target,
+	   made invisible: the tonal step between the two panes already reads as the
+	   boundary, and a line on top of it was one edge too many. */
+	:global(.panes .cn-resizable-handle) {
+		background: transparent;
 	}
 	.conv-head {
 		flex: none;

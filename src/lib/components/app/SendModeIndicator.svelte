@@ -78,6 +78,16 @@
 		color: var(--ink-70);
 		cursor: default;
 		white-space: nowrap;
+		line-height: 1;
+	}
+	/* Hover/focus feedback identical to the Outbox and Settings chips, so all
+	   four footer controls behave the same. Live keeps cobalt on hover — that
+	   colour is the live-send signal, not decoration — so only dry-run darkens,
+	   and it needs an explicit rule because `[data-mode]` would otherwise
+	   out-specify a bare `.chip:hover`. */
+	.chip:hover,
+	.chip:focus-visible {
+		color: var(--ink-90);
 	}
 	.chip[data-mode='live'] {
 		border-color: color-mix(in srgb, var(--cobalt) 55%, var(--hairline));
@@ -86,6 +96,10 @@
 	}
 	.chip[data-mode='dry-run'] {
 		color: var(--ink-60);
+	}
+	.chip[data-mode='dry-run']:hover,
+	.chip[data-mode='dry-run']:focus-visible {
+		color: var(--ink-90);
 	}
 	.chip[data-pending] {
 		opacity: 0.6;

@@ -60,9 +60,24 @@
 		box-shadow: var(--shadow-bevel);
 		color: var(--ink-70);
 		cursor: default;
+		white-space: nowrap;
+		line-height: 1;
+	}
+	/* Hover/focus feedback identical to the Outbox and Settings chips, so all
+	   four footer controls behave the same. Tone-bearing states keep their own
+	   colour on hover — warn and bad are meaning, not decoration — so only the
+	   neutral states darken, and they get an explicit rule because the tone
+	   selectors below would otherwise out-specify a bare `.chip:hover`. */
+	.chip:hover,
+	.chip:focus-visible {
+		color: var(--ink-90);
 	}
 	.chip[data-tone='good'] {
 		color: var(--ink-80);
+	}
+	.chip[data-tone='good']:hover,
+	.chip[data-tone='good']:focus-visible {
+		color: var(--ink-90);
 	}
 	.chip[data-tone='warn'] {
 		border-color: color-mix(in srgb, var(--cobalt) 40%, var(--hairline));
