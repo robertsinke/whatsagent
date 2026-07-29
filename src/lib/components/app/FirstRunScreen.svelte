@@ -353,7 +353,11 @@
 	}
 	.step[data-state='current'] .step-num {
 		background: var(--cobalt);
-		color: #fbfbf8;
+		/* --primary-foreground is the raised surface (near-white in light,
+		   near-black in dark) — the same token every cobalt-filled control in
+		   the app uses for its label. The previous hardcoded #fbfbf8 was a
+		   light-only value: on dark cobalt-400 it dropped to 2.83:1 (below AA). */
+		color: var(--primary-foreground);
 	}
 
 	.pane {
