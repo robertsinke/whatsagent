@@ -3,15 +3,16 @@
 	import { Radio, ShieldAlert } from '@lucide/svelte';
 
 	/**
-	 * W4-U8 — always-visible send-mode indicator. The owner must never be
-	 * unsure whether a send is live. Surfaced in the topbar so it is visible on
-	 * every screen, not buried in settings.
+	 * Always-visible send-mode indicator. The owner must never be unsure whether
+	 * a send is live. Lives in the chat-list footer so it stays in view on every
+	 * conversation screen.
 	 *
 	 * - `sendsLive === true`  → live (cobalt, Radio icon): approving a draft
-	 *   or pressing send transmits over WhatsApp to a real recipient.
+	 *   or pressing send transmits over WhatsApp to a real recipient. Label stays
+	 *   permanently visible — a safety carve-out, not a hover-only affordance.
 	 * - `sendsLive === false` → dry-run (muted, ShieldAlert icon): approving a
-	 *   draft marks it sent and nothing reaches the recipient. This is the
-	 *   fail-safe default and the safe direction of the toggle.
+	 *   draft marks it sent and nothing reaches the recipient. Icon-only at rest;
+	 *   label reveals on hover/focus.
 	 */
 	let {
 		sendsLive = false,
@@ -26,6 +27,7 @@
 				<span
 					class="chip"
 					data-mode={sendsLive ? 'live' : 'dry-run'}
+					data-compact={!sendsLive || undefined}
 					data-pending={pending || undefined}
 					role="status"
 					aria-live="polite"
@@ -82,6 +84,31 @@
 	}
 	.chip[data-pending] {
 		opacity: 0.6;
+	}
+	.chip-label {
+		white-space: nowrap;
+	}
+	/* Steady dry-run state: icon-only at rest. Live sends keep the label. */
+	.chip[data-compact] .chip-label {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		border: 0;
+	}
+	.chip[data-compact]:hover .chip-label,
+	.chip[data-compact]:focus-visible .chip-label,
+	.chip[data-compact]:focus-within .chip-label {
+		position: static;
+		width: auto;
+		height: auto;
+		margin: 0;
+		overflow: visible;
+		clip: auto;
 	}
 	.tip {
 		margin: 0;
