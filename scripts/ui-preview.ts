@@ -63,9 +63,10 @@ import {
 
 const dataDir = mkdtempSync(join(tmpdir(), 'whatsagent-ui-preview-'));
 
-// W4-U10: seed a learned voice document so the new Voice tab has real content
-// to screenshot, not the empty state. Synthetic, not derived from any real
-// conversation — the inspector is read-only and the file is a Hindsight mirror.
+// W4-U10 / P3.4: seed a learned voice document so the Voice tab has real content
+// to screenshot, not the empty state. Includes a GFM table — the Voice tab's
+// save-with-zero-edits round-trip proof depends on it (Milkdown must preserve
+// the table). Synthetic, not derived from any real conversation.
 mkdirSync(join(dataDir, 'voice'), { recursive: true });
 writeFileSync(
   join(dataDir, 'voice', 'global.md'),
@@ -80,6 +81,14 @@ writeFileSync(
     '## Language',
     '- Multilingual: English with international/professional contacts, Dutch with family, German in administrative contexts.',
     '- Code-switches within a single conversation.',
+    '',
+    '## Channel defaults',
+    '',
+    '| Channel | Default tone | Emoji density |',
+    '| --- | --- | --- |',
+    '| WhatsApp | casual | low |',
+    '| Email | professional | none |',
+    '| Calendar | terse | none |',
     '',
     '## Emoji',
     '- Emoji-light, typically at the end of a message.',

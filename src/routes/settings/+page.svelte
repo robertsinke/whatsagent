@@ -7,12 +7,24 @@
 	import * as Tabs from '$lib/components/ui/tabs/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
-	import { ArrowLeft, Check, Monitor, Moon, Radio, RefreshCw, ShieldAlert, Sun } from '@lucide/svelte';
-	import { api } from '$lib/client/api.js';
-	import type { ProvidersResponse } from '$lib/client/types.js';
+	import {
+		ArrowLeft,
+		Check,
+		Eye,
+		Monitor,
+		Moon,
+		Pencil,
+		Radio,
+		RefreshCw,
+		ShieldAlert,
+		Sun
+	} from '@lucide/svelte';
+	import { api, type VoiceDocumentResponse, type VoiceSaveResponse } from '$lib/client/api.js';
+	import { ApiError, type ProvidersResponse } from '$lib/client/types.js';
 	// OSS-P3.4 — the provider + model control is shared with first-run setup.
 	// Do not re-implement it here; the two screens must not drift apart.
 	import ProviderPicker from '$lib/components/app/ProviderPicker.svelte';
+	import MarkdownEditor from '$lib/components/app/MarkdownEditor.svelte';
 	import { resetMode, setMode, userPrefersMode } from 'mode-watcher';
 
 	type TextField = {
@@ -33,13 +45,8 @@
 
 	type Field = TextField | SelectField;
 
-	type VoiceView = {
-		stem: string;
-		content: string | null;
-		byteLength: number;
-		modifiedAt: string | null;
-		path: string;
-	};
+	/** P3.2 GET shape — hash/mirrorGuard/memory are what the editor round-trips on. */
+	type VoiceView = VoiceDocumentResponse;
 
 	const MEMORY_OPTIONS: { value: string; label: string }[] = [
 		{ value: 'hindsight', label: 'hindsight (default)' },
@@ -104,10 +111,38 @@
 	let confirmLiveOpen = $state(false);
 	let confirmLiveError = $state<string | null>(null);
 
-	/** W4-U10: read-only voice document inspector — what drafting actually reads (D2). */
+	/**
+	 * P3.4 Voice tab — editable with explicit save (never autosave). Conflict half
+	 * of SlayZone's useWatchedFile: baseline hash, in-flight dedupe, ignore-own-echo,
+	 * diskChanged banner with Reload / Keep mine. Autosave is deliberately NOT
+	 * ported: every save also writes a durable Hindsight directive.
+	 */
+	let settingsTab = $state('agent');
 	let voice = $state<VoiceView | null>(null);
 	let voiceLoading = $state(true);
 	let voiceError = $state<string | null>(null);
+	let voiceMode = $state<'view' | 'edit'>('view');
+	/** Live draft — what the editor holds / what Save writes. */
+	let voiceDraft = $state('');
+	/** Content as last loaded or successfully saved — dirty = draft !== baseline. */
+	let voiceBaseline = $state('');
+	/** SHA-256 from the server; sent back as baseHash on PUT. */
+	let voiceBaseHash = $state('');
+	let voiceDirty = $derived(voiceDraft !== voiceBaseline);
+	let voiceDiskChanged = $state(false);
+	/** Content/hash on disk when a conflict was detected (Reload takes these). */
+	let voiceConflict = $state<{ content: string; hash: string } | null>(null);
+	let voiceSaving = $state(false);
+	/** Dedupes identical in-flight saves (Strict-mode / double Cmd-S). */
+	let voiceSavingTarget: string | null = null;
+	let voiceSavedFlash = $state(false);
+	let voiceSaveError = $state<string | null>(null);
+	/** Last successful save — drives guard-state line + shape warning + directive copy. */
+	let voiceLastSave = $state<VoiceSaveResponse | null>(null);
+	let voiceRefreshing = $state(false);
+	let voiceRefreshNote = $state<string | null>(null);
+	/** Live Milkdown instance — Save reads currentMarkdown() so the draft cannot lag the DOM. `$state.raw` so bind:this identity stays a plain ref (not a deep proxy). */
+	let voiceEditor = $state.raw<{ currentMarkdown?: () => string } | null>(null);
 
 	/**
 	 * PL-P1.3 — appearance mode lives in localStorage (mode-watcher's key), not
@@ -143,15 +178,184 @@
 		}
 	}
 
+	function applyVoiceDocument(doc: VoiceView) {
+		voice = doc;
+		const content = doc.content ?? '';
+		voiceDraft = content;
+		voiceBaseline = content;
+		voiceBaseHash = doc.hash;
+		voiceDiskChanged = false;
+		voiceConflict = null;
+		voiceSaveError = null;
+	}
+
 	async function loadVoice() {
 		voiceLoading = true;
 		voiceError = null;
 		try {
-			voice = await api.voiceGlobal();
+			applyVoiceDocument(await api.voiceGlobal());
 		} catch (err) {
 			voiceError = err instanceof Error ? err.message : String(err);
 		} finally {
 			voiceLoading = false;
+		}
+	}
+
+	/**
+	 * Poll for disk moves under an open editor (mirror tick, another tab, or a
+	 * hand rewrite). There is no file-watcher WS event for voice/, so this is
+	 * the conflict half of useWatchedFile. Skips while a save is in flight so
+	 * our own write is not flagged as a conflict (ignore-own-echo).
+	 */
+	async function pollVoiceDisk() {
+		if (settingsTab !== 'voice' || voiceSaving || voiceSavingTarget !== null) return;
+		if (!voice || voice.content === null) return;
+		try {
+			const doc = await api.voiceGlobal();
+			if (doc.hash === voiceBaseHash) return;
+			// Disk moved. Dirty OR an unresolved conflict banner → keep the banner;
+			// clean with no banner → silent reload (useWatchedFile contract).
+			// Without the voiceDiskChanged arm, a 409 on a clean Save (stale
+			// baseHash, draft === baseline) would set the banner and then the
+			// next poll would auto-reload and wipe it.
+			if (voiceDirty || voiceDiskChanged) {
+				voiceDiskChanged = true;
+				voiceConflict = { content: doc.content ?? '', hash: doc.hash };
+				voice = { ...doc, content: voice.content };
+			} else {
+				applyVoiceDocument(doc);
+			}
+		} catch {
+			// Transient — next tick retries. Don't surface as voiceError mid-edit.
+		}
+	}
+
+	function onVoiceDraftChange(markdown: string) {
+		voiceDraft = markdown;
+	}
+
+	async function saveVoiceDocument() {
+		if (!voice || voice.content === null) return;
+		// Prefer the live editor serialization when mounted — see MarkdownEditor.currentMarkdown.
+		if (voiceMode === 'edit' && voiceEditor?.currentMarkdown) {
+			try {
+				voiceDraft = voiceEditor.currentMarkdown();
+			} catch {
+				// Fall through with the last onchange draft.
+			}
+		}
+		const target = voiceDraft;
+		// In-flight dedupe: identical concurrent saves collapse to one PUT.
+		if (voiceSavingTarget === target) return;
+		voiceSavingTarget = target;
+		voiceSaving = true;
+		voiceSaveError = null;
+		try {
+			const result = await api.saveVoice(target, voiceBaseHash);
+			// Only advance the baseline if no newer keystrokes landed during the save.
+			if (voiceDraft === target) {
+				voiceBaseline = target;
+				voiceBaseHash = result.hash;
+				voiceDiskChanged = false;
+				voiceConflict = null;
+			} else {
+				// Newer edits — still adopt the new hash so the next save is not a
+				// spurious 409 against our own write.
+				voiceBaseHash = result.hash;
+			}
+			if (voice) {
+				voice = {
+					...voice,
+					hash: result.hash,
+					byteLength: result.byteLength,
+					modifiedAt: result.modifiedAt,
+					mirrorGuard: result.mirrorGuard,
+					content: voiceDraft === target ? target : voice.content
+				};
+			}
+			voiceLastSave = result;
+			voiceSavedFlash = true;
+			setTimeout(() => (voiceSavedFlash = false), 1500);
+		} catch (err) {
+			const status =
+				err instanceof ApiError
+					? err.status
+					: typeof err === 'object' && err && 'status' in err
+						? Number((err as { status: unknown }).status)
+						: 0;
+			const body =
+				err instanceof ApiError
+					? err.body
+					: typeof err === 'object' && err && 'body' in err
+						? ((err as { body: Record<string, unknown> }).body ?? {})
+						: {};
+			if (status === 409) {
+				voiceDiskChanged = true;
+				voiceConflict = {
+					content: typeof body.content === 'string' ? body.content : '',
+					hash: typeof body.hash === 'string' ? body.hash : voiceBaseHash
+				};
+				voiceSaveError =
+					'The file changed on disk since you loaded it. Reload or keep your edit, then save again.';
+			} else {
+				voiceSaveError = err instanceof Error ? err.message : String(err);
+			}
+		} finally {
+			if (voiceSavingTarget === target) voiceSavingTarget = null;
+			voiceSaving = false;
+		}
+	}
+
+	function reloadVoiceFromDisk() {
+		if (!voiceConflict) {
+			void loadVoice();
+			return;
+		}
+		voiceDraft = voiceConflict.content;
+		voiceBaseline = voiceConflict.content;
+		voiceBaseHash = voiceConflict.hash;
+		voiceDiskChanged = false;
+		voiceConflict = null;
+		voiceSaveError = null;
+		voiceLastSave = null;
+		if (voice) {
+			voice = {
+				...voice,
+				content: voiceDraft,
+				hash: voiceBaseHash,
+				byteLength: new TextEncoder().encode(voiceDraft).length
+			};
+		}
+	}
+
+	/** Keep local draft; adopt the disk hash so the next save overwrites with ours. */
+	function keepMineVoice() {
+		if (voiceConflict) {
+			voiceBaseHash = voiceConflict.hash;
+		}
+		voiceDiskChanged = false;
+		voiceConflict = null;
+		voiceSaveError = null;
+	}
+
+	async function refreshVoiceNow() {
+		voiceRefreshing = true;
+		voiceRefreshNote = null;
+		try {
+			const result = await api.refreshVoice();
+			if (!result.available) {
+				voiceRefreshNote =
+					'No memory service is available — nothing to refresh. Your file on disk is unchanged.';
+			} else if (result.error) {
+				voiceRefreshNote = `Refresh failed: ${result.error}`;
+			} else {
+				voiceRefreshNote =
+					'Refresh requested. The regenerated document lands on a later mirror tick — not immediately. If a hand edit is guarded, the guard holds until the model actually moves on.';
+			}
+		} catch (err) {
+			voiceRefreshNote = err instanceof Error ? err.message : String(err);
+		} finally {
+			voiceRefreshing = false;
 		}
 	}
 
@@ -170,6 +374,11 @@
 		}
 	}
 
+	/** Memory mode from the voice GET — drives the three honest help states. */
+	function voiceMemoryMode(): string {
+		return voice?.memory.mode ?? values.memory ?? 'hindsight';
+	}
+
 	onMount(() => {
 		void api
 			.settings()
@@ -184,6 +393,34 @@
 			.then((mode) => (sendsLive = mode.live))
 			.catch((err) => (error = err instanceof Error ? err.message : String(err)));
 		void loadVoice();
+
+		const onKey = (e: KeyboardEvent) => {
+			if (settingsTab !== 'voice' || voiceMode !== 'edit') return;
+			if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+				e.preventDefault();
+				void saveVoiceDocument();
+			}
+		};
+		window.addEventListener('keydown', onKey);
+		const poll = setInterval(() => void pollVoiceDisk(), 2500);
+		return () => {
+			window.removeEventListener('keydown', onKey);
+			clearInterval(poll);
+		};
+	});
+
+	// Prefetch Milkdown chunks when the Voice tab is selected — ProseMirror is
+	// the largest thing in the bundle and lives on one tab of one route.
+	$effect(() => {
+		if (settingsTab !== 'voice') return;
+		void Promise.all([
+			import('@milkdown/core'),
+			import('@milkdown/preset-commonmark'),
+			import('@milkdown/preset-gfm'),
+			import('@milkdown/plugin-history'),
+			import('@milkdown/plugin-listener'),
+			import('@milkdown/utils')
+		]);
 	});
 
 	async function save(key: string) {
@@ -260,7 +497,7 @@
 	</header>
 
 	<section class="neumorphic-raised settings-body">
-		<Tabs.Root value="agent">
+		<Tabs.Root bind:value={settingsTab}>
 			<Tabs.List class="settings-tabs">
 				<Tabs.Trigger value="agent">Agent</Tabs.Trigger>
 				<Tabs.Trigger value="safety">Safety</Tabs.Trigger>
@@ -422,13 +659,46 @@
 				<div class="voice-card">
 					<div class="voice-head">
 						<span class="field-label">Learned voice document (global)</span>
-						<p class="voice-help">
-							This is the markdown file drafting actually reads (decision D2): a mirror of the
-							Hindsight mental model, rewritten whenever the model changes. Read-only — any
-							hand edit is silently overwritten at the next memory tick, so an edit box would
-							be a lie. Correcting the voice is a separate future unit that writes to the model,
-							not the file.
-						</p>
+						<div class="voice-help">
+							<p>
+								This is the markdown file drafting actually reads (decision D2): a mirror of the
+								Hindsight mental model. You can edit and save it here — Save writes the file and
+								arms a mirror guard so the next tick does not silently overwrite your correction.
+							</p>
+							{#if voiceMemoryMode() === 'hindsight'}
+								<p>
+									Memory is <strong>hindsight</strong>: a successful save is protected until the
+									next refresh incorporates your correction into the model. Until then the guard
+									holds the mirror off this file.
+								</p>
+							{:else if voiceMemoryMode() === 'off' || voiceMemoryMode() === 'null'}
+								<p>
+									Memory is <strong>{voiceMemoryMode()}</strong>: nothing will ever overwrite this
+									file from a model — your edit is permanent on disk. There is no Hindsight
+									directive to record.
+								</p>
+							{:else}
+								<p>
+									Memory mode is <strong>{voiceMemoryMode()}</strong>. Persistence of a hand edit
+									depends on whether a memory service is available to record the correction.
+								</p>
+							{/if}
+							{#if voiceLastSave?.directive === 'failed'}
+								<p class="voice-help-warn" role="status">
+									Last save wrote the file but the correction directive <strong>failed</strong> —
+									the edit is on disk and guarded for now, but it is <strong>not</strong> permanent
+									in memory. When memory reconnects, mirroring can resume and may eventually move
+									past this guard if the model never absorbs the correction. Retry Save once
+									Hindsight is back, or use Refresh now after it recovers.
+								</p>
+							{:else if voiceLastSave?.directive === 'skipped'}
+								<p role="status">
+									Last save wrote the file; no memory service was wired, so no directive was
+									recorded. With memory off/null that is expected — the file is the source of
+									truth.
+								</p>
+							{/if}
+						</div>
 					</div>
 
 					{#if voiceLoading}
@@ -449,8 +719,115 @@
 								<dt>Path</dt>
 								<dd class="voice-path">{voice.path}</dd>
 							</div>
+							<div>
+								<dt>Mirror</dt>
+								<dd>{voice.mirrorGuard ? 'guarded (hand edit held)' : 'open'}</dd>
+							</div>
 						</dl>
-						<pre class="voice-body scrollbar-contextual" use:scrollActivity>{voice.content}</pre>
+
+						<div class="voice-toolbar">
+							<div class="voice-mode-toggle" role="group" aria-label="View or edit">
+								<Button
+									size="sm"
+									variant={voiceMode === 'view' ? 'default' : 'outline'}
+									onclick={() => (voiceMode = 'view')}
+								>
+									<Eye class="size-3.5" /> View
+								</Button>
+								<Button
+									size="sm"
+									variant={voiceMode === 'edit' ? 'default' : 'outline'}
+									onclick={() => (voiceMode = 'edit')}
+								>
+									<Pencil class="size-3.5" /> Edit
+								</Button>
+							</div>
+							<div class="voice-toolbar-actions">
+								<Button
+									size="sm"
+									variant="outline"
+									disabled={voiceRefreshing}
+									onclick={() => void refreshVoiceNow()}
+								>
+									<RefreshCw class="size-3.5" />
+									{voiceRefreshing ? 'Refreshing…' : 'Refresh now'}
+								</Button>
+								{#if voiceMode === 'edit'}
+									<Button
+										size="sm"
+										disabled={voiceSaving}
+										onclick={() => void saveVoiceDocument()}
+									>
+										{#if voiceSavedFlash}
+											<Check class="size-3.5" /> Saved
+										{:else if voiceSaving}
+											Saving…
+										{:else}
+											Save
+										{/if}
+									</Button>
+								{/if}
+							</div>
+						</div>
+
+						{#if voiceDiskChanged}
+							<div class="voice-conflict" role="alert" data-testid="voice-conflict">
+								<p>
+									The file changed on disk while you were editing. Reload to take the disk
+									version, or Keep mine to keep your draft (the next Save will overwrite disk).
+								</p>
+								<div class="voice-conflict-actions">
+									<Button size="sm" variant="outline" onclick={reloadVoiceFromDisk}>Reload</Button>
+									<Button size="sm" onclick={keepMineVoice}>Keep mine</Button>
+								</div>
+							</div>
+						{/if}
+
+						{#if voiceSaveError}
+							<p class="error" role="alert">{voiceSaveError}</p>
+						{/if}
+
+						{#if voiceRefreshNote}
+							<p class="voice-refresh-note" role="status">{voiceRefreshNote}</p>
+						{/if}
+
+						{#if voiceLastSave}
+							<p class="voice-guard-line" role="status">
+								{#if voiceLastSave.mirrorGuard}
+									Mirror guard is on — your hand edit is held against the next mirror tick.
+								{:else}
+									Mirror guard is off.
+								{/if}
+								Directive: {voiceLastSave.directive}.
+							</p>
+							{#if !voiceLastSave.looksLikeVoiceDocument}
+								<p class="voice-shape-warn" role="alert">
+									Warning: the saved text does not look like a voice document (tables/habits
+									shape). The save still succeeded — check that the editor did not mangle the
+									GFM tables before relying on this draft.
+								</p>
+							{/if}
+						{/if}
+
+						{#if voiceMode === 'view'}
+							<pre class="voice-body scrollbar-contextual" use:scrollActivity>{voiceDraft}</pre>
+						{:else}
+							<div class="voice-editor">
+								<MarkdownEditor
+									bind:this={voiceEditor}
+									value={voiceDraft}
+									onchange={onVoiceDraftChange}
+									variant="inline"
+									readability="compact"
+									width="wide"
+									class="voice-mk"
+								/>
+							</div>
+							<p class="voice-save-hint muted">
+								Explicit Save only — Cmd/Ctrl+S also saves. No autosave (each save records a
+								durable memory directive).
+							</p>
+						{/if}
 					{:else}
 						<p class="voice-empty">
 							No voice has been learned yet. It appears after the agent has observed enough
@@ -723,7 +1100,7 @@
 		max-width: 460px;
 	}
 
-	/* W4-U10 — voice inspector tab */
+	/* W4-U10 / P3.4 — voice inspector + editor tab */
 	.voice-card {
 		display: flex;
 		flex-direction: column;
@@ -743,6 +1120,15 @@
 		color: var(--ink-50);
 		margin: 0;
 		line-height: 1.4;
+		display: flex;
+		flex-direction: column;
+		gap: 0.45rem;
+	}
+	.voice-help p {
+		margin: 0;
+	}
+	.voice-help-warn {
+		color: color-mix(in srgb, #b45309 85%, var(--ink-70));
 	}
 	.voice-meta {
 		display: grid;
@@ -770,6 +1156,48 @@
 		overflow-wrap: anywhere;
 		word-break: break-all;
 	}
+	.voice-toolbar {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.5rem;
+	}
+	.voice-mode-toggle,
+	.voice-toolbar-actions,
+	.voice-conflict-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.35rem;
+	}
+	.voice-conflict {
+		display: flex;
+		flex-direction: column;
+		gap: 0.45rem;
+		padding: 0.55rem 0.65rem;
+		border-radius: var(--radius-sm);
+		border: 1px solid color-mix(in srgb, #b45309 45%, var(--hairline));
+		background: color-mix(in srgb, #b45309 8%, var(--surface-sunken));
+		font-size: 0.75rem;
+		line-height: 1.4;
+		color: var(--ink-90);
+	}
+	.voice-conflict p {
+		margin: 0;
+	}
+	.voice-refresh-note,
+	.voice-guard-line {
+		margin: 0;
+		font-size: 0.72rem;
+		line-height: 1.4;
+		color: var(--ink-70);
+	}
+	.voice-shape-warn {
+		margin: 0;
+		font-size: 0.75rem;
+		line-height: 1.4;
+		color: color-mix(in srgb, #b45309 90%, var(--ink-90));
+	}
 	.voice-body {
 		margin: 0;
 		padding: 0.6rem 0.7rem;
@@ -784,6 +1212,23 @@
 		background: var(--surface-sunken);
 		border-radius: var(--radius-sm);
 		border: 1px solid var(--hairline-soft);
+	}
+	.voice-editor {
+		max-height: 26rem;
+		overflow: auto;
+		border-radius: var(--radius-sm);
+		border: 1px solid var(--hairline-soft);
+		background: var(--surface-sunken);
+	}
+	:global(.voice-mk) {
+		min-height: 12rem;
+	}
+	:global(.voice-mk .mk-doc-scroll) {
+		max-height: 24rem;
+	}
+	.voice-save-hint {
+		margin: 0;
+		font-size: 0.7rem;
 	}
 	.voice-empty {
 		font-size: 0.82rem;

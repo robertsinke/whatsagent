@@ -82,6 +82,7 @@
 	let editorRef: Editor | null = null;
 	let internal = '';
 	let replaceAllFn: ((markdown: string, flush?: boolean) => (ctx: Ctx) => void) | null = null;
+	let getMarkdownFn: ((range?: { from: number; to: number }) => (ctx: Ctx) => string) | null = null;
 
 	// Latest callbacks, kept in plain refs so the create-once effect closes
 	// over stable references and never rebuilds on a callback identity change.
@@ -124,7 +125,7 @@
 		void (async () => {
 			// Dynamic import — ProseMirror is the largest thing in the bundle and
 			// is used on one tab of one route. Keeping these out of the main chunk.
-			const [{ Editor: EditorCtor, rootCtx, defaultValueCtx }, { commonmark }, { gfm }, { history }, { listener, listenerCtx }, { replaceAll }] =
+			const [{ Editor: EditorCtor, rootCtx, defaultValueCtx }, { commonmark }, { gfm }, { history }, { listener, listenerCtx }, { replaceAll, getMarkdown }] =
 				await Promise.all([
 					import('@milkdown/core'),
 					import('@milkdown/preset-commonmark'),
@@ -139,6 +140,7 @@
 			// Stash the action for the external-sync effect (which does not
 			// re-import — it reads this non-reactive var instead).
 			replaceAllFn = replaceAll;
+			getMarkdownFn = getMarkdown;
 
 			editor = EditorCtor.make()
 				.config((ctx: Ctx) => {
@@ -175,6 +177,20 @@
 				return;
 			}
 
+			// Emit the post-parse serialization once on mount. Without this, a
+			// Save-with-zero-edits would write the raw file bytes and never prove
+			// the Milkdown round trip (markdownUpdated only fires on edits).
+			try {
+				const serialized = editor.action(getMarkdown());
+				internal = serialized;
+				if (serialized !== initial) {
+					onChangeRef.current(serialized);
+				}
+			} catch {
+				// Serializer not ready — leave internal as initial; first keystroke
+				// still goes through markdownUpdated.
+			}
+
 			editorRef = editor;
 			editorReady = true;
 			onReadyRef.current();
@@ -185,9 +201,31 @@
 			editorRef = null;
 			editorReady = false;
 			replaceAllFn = null;
+			getMarkdownFn = null;
 			if (editor) void editor.destroy().catch(() => {});
 		};
 	});
+
+	/**
+	 * Live serialization of what the editor is showing right now. Save must call
+	 * this rather than trusting the last `onchange` alone — ProseMirror can accept
+	 * DOM input that has not yet (or will not) emit `markdownUpdated`, and a Save
+	 * that writes a stale draft would silently drop the owner's visible edit.
+	 */
+	export function currentMarkdown(): string {
+		const editor = editorRef;
+		const get = getMarkdownFn;
+		if (editor && get) {
+			try {
+				const next = editor.action(get());
+				internal = next;
+				return next;
+			} catch {
+				return internal;
+			}
+		}
+		return internal;
+	}
 
 	// External-sync: when `value` changes from the outside and diverges from
 	// what the editor currently holds, push it in via `replaceAll`. Tracks
