@@ -13,13 +13,14 @@
 	const banner = $derived(sessionBanner(session));
 	// Indeterminate by construction — a spinner, never a percentage bar (D5).
 	const busy = $derived(banner.tone === 'progress');
-	// Icon-only at rest for every tone; the label reveals on hover/focus. The
-	// connected vs warn vs bad distinction is carried by the icon swap
-	// (Wifi/WifiOff/Spinner) and the tone-driven colour, not by text. An earlier
-	// revision kept warn/bad/progress labels permanently visible as a safety
-	// carve-out; Robert asked for hover-only across all four footer controls
-	// after seeing it, so the carve-out was removed deliberately — do not
-	// reinstate it without re-asking. The tooltip still carries banner.detail.
+	// Icon-only for every tone; the `.chip-label` span stays in the DOM as the
+	// accessible name but is permanently visually hidden. Connected vs warn vs
+	// bad is carried by the icon swap (Wifi/WifiOff/Spinner) and the tone-driven
+	// colour, not by text. An earlier revision kept warn/bad/progress labels
+	// permanently visible as a safety carve-out; then hover/focus reveal was
+	// asked for across the footer chips; F10 drops the reveal (it widened chips
+	// and shifted neighbours) — the tooltip still carries banner.detail on hover
+	// and keyboard focus. Do not reinstate a visible label without re-asking.
 </script>
 
 <Tooltip.Provider>
@@ -56,11 +57,10 @@
 		padding: 0.2rem 0.5rem;
 		border-radius: 999px;
 		/* Transparent at rest so the control sits IN the recessed footer rather
-		   than floating on it as a pill. Hover lifts it to the raised surface,
-		   which doubles as the hover affordance now that the label reveal is the
-		   only other feedback. Semantic states (live, warn, bad) re-assert their
-		   own border and tint below — those carry meaning and must stay visible
-		   at rest. */
+		   than floating on it as a pill. Hover lifts it to the raised surface —
+		   that is the hover affordance (F10: the label no longer expands).
+		   Semantic states (live, warn, bad) re-assert their own border and tint
+		   below — those carry meaning and must stay visible at rest. */
 		border: 1px solid transparent;
 		background: transparent;
 		box-shadow: none;
@@ -99,9 +99,9 @@
 	.chip-label {
 		white-space: nowrap;
 	}
-	/* Icon-only at rest; label reveals on hover/focus for every tone. The
-	   connected vs warn vs bad distinction is carried by the icon swap and the
-	   tone-driven colour, not by text. See the header comment above. */
+	/* Permanently visually hidden — keeps the accessible name without ever
+	   expanding the chip. Connected vs warn vs bad is carried by the icon swap
+	   and the tone-driven colour, not by text. See the header comment above. */
 	.chip .chip-label {
 		position: absolute;
 		width: 1px;
@@ -112,16 +112,6 @@
 		clip: rect(0, 0, 0, 0);
 		white-space: nowrap;
 		border: 0;
-	}
-	.chip:hover .chip-label,
-	.chip:focus-visible .chip-label,
-	.chip:focus-within .chip-label {
-		position: static;
-		width: auto;
-		height: auto;
-		margin: 0;
-		overflow: visible;
-		clip: auto;
 	}
 	.tip {
 		margin: 0;
