@@ -7,6 +7,7 @@
 	import type { Chat, OutboxRow, SessionView } from '$lib/client/types.js';
 	import { displayName, filterChats, jidDigits, type ChatTab } from '$lib/client/view.js';
 	import ChatRow from './ChatRow.svelte';
+	import FooterAgentToggle from './FooterAgentToggle.svelte';
 	import FooterSettings from './FooterSettings.svelte';
 	import FooterThemeToggle from './FooterThemeToggle.svelte';
 	import NeedsReplyTabs from './NeedsReplyTabs.svelte';
@@ -23,6 +24,8 @@
 		session,
 		socketConnected = true,
 		outbox = [],
+		agentCollapsed = false,
+		ontoggleagent,
 		oncancel,
 		onselect
 	}: {
@@ -34,6 +37,8 @@
 		session: SessionView;
 		socketConnected?: boolean;
 		outbox?: OutboxRow[];
+		agentCollapsed?: boolean;
+		ontoggleagent?: () => void;
 		oncancel?: (id: number) => void;
 		onselect?: (jid: string) => void;
 	} = $props();
@@ -105,6 +110,8 @@
 		<FooterSettings />
 		<span class="footer-sep" aria-hidden="true"></span>
 		<FooterThemeToggle />
+		<span class="footer-sep" aria-hidden="true"></span>
+		<FooterAgentToggle collapsed={agentCollapsed} onToggle={() => ontoggleagent?.()} />
 	</footer>
 </div>
 

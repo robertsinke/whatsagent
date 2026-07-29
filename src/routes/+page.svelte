@@ -5,6 +5,7 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as Empty from '$lib/components/ui/empty/index.js';
 	import { MessagesSquare } from '@lucide/svelte';
+	import AgentPanel from '$lib/components/app/AgentPanel.svelte';
 	import ChatList from '$lib/components/app/ChatList.svelte';
 	import Composer from '$lib/components/app/Composer.svelte';
 	import ConversationPane from '$lib/components/app/ConversationPane.svelte';
@@ -16,6 +17,53 @@
 
 	const app = new AppState();
 	let composerValue = $state('');
+
+	// PL-A2 — agent panel collapse state. Persisted in localStorage (not the
+	// settings DB) so the first paint is correct with no async fetch flash —
+	// same rationale as the theme toggle. We do NOT use paneforge's autoSaveId
+	// for the group: the existing two-pane group has none, and adding one would
+	// silently override the established split for current users on first load.
+	// The collapsed boolean is the only state that needs first-paint
+	// persistence; pane sizes stay at their deliberate 25/50/25 defaults.
+	const AGENT_COLLAPSE_KEY = 'whatsagent.agent-panel.collapsed';
+	let agentCollapsed = $state(
+		typeof localStorage !== 'undefined' &&
+			localStorage.getItem(AGENT_COLLAPSE_KEY) === '1'
+	);
+	// The Pane component exports imperative collapse/expand via bind:this.
+	// paneforge's `ref` prop is the HTMLElement, not the API, so we bind the
+	// component instance instead.
+	let agentPane: Resizable.Pane | null = $state(null);
+
+	function persistCollapsed(v: boolean) {
+		agentCollapsed = v;
+		try {
+			localStorage.setItem(AGENT_COLLAPSE_KEY, v ? '1' : '0');
+		} catch {
+			// localStorage may be unavailable (private mode); collapse still
+			// works for the session, just not persisted.
+		}
+	}
+
+	function toggleAgent() {
+		if (agentCollapsed) {
+			agentPane?.expand();
+		} else {
+			agentPane?.collapse();
+		}
+	}
+
+	// Apply the persisted collapsed state once the pane instance is bound.
+	// paneforge does not declaratively collapse from a prop — the initial size
+	// comes from defaultSize and collapse is imperative. This $effect runs once
+	// after mount when agentPane is first available.
+	let collapseApplied = $state(false);
+	$effect(() => {
+		if (agentPane && !collapseApplied) {
+			collapseApplied = true;
+			if (agentCollapsed) agentPane.collapse();
+		}
+	});
 
 	// Never in `load()` — this route prerenders, and a load-time fetch would run
 	// at build time with no backend listening.
@@ -54,8 +102,14 @@
 		<PairingScreen session={app.session} onregenerate={() => app.regeneratePairing()} />
 	{:else}
 		<!-- Syncing never gates: chats render as they land (D5). -->
-		<Resizable.PaneGroup direction="horizontal" class="panes">
-			<Resizable.Pane defaultSize={30} minSize={20} maxSize={45}>
+		<!-- Three-pane budget 25/50/25 (deliberate, not 30/70 + bolt-on): two
+		     recessed rails flank one raised conversation so the conversation
+		     stays the figure and both side panels are ground. The conversation
+		     pane gets a minSize (it had none) — paneforge would otherwise squeeze
+		     it toward zero to make room for the agent pane. The agent pane is
+		     collapsible; its collapsed state persists in localStorage. -->
+		<Resizable.PaneGroup direction="horizontal" class="panes" keyboardResizeBy={5}>
+			<Resizable.Pane defaultSize={25} minSize={20} maxSize={45}>
 				<section class="pane list-pane">
 					<ChatList
 						chats={app.chats}
@@ -66,6 +120,8 @@
 						session={app.session}
 						socketConnected={app.connected}
 						outbox={app.outbox}
+						agentCollapsed={agentCollapsed}
+						ontoggleagent={toggleAgent}
 						oncancel={(id) => app.cancelOutbox(id)}
 						onselect={openChat}
 					/>
@@ -74,7 +130,7 @@
 
 			<Resizable.Handle />
 
-			<Resizable.Pane defaultSize={70}>
+			<Resizable.Pane defaultSize={50} minSize={30}>
 				<section class="pane conv-pane">
 					{#if app.selectedChat}
 						<header class="conv-head">
@@ -145,10 +201,26 @@
 								</Empty.Description>
 							</Empty.Header>
 						</Empty.Root>
-					{/if}
-				</section>
-			</Resizable.Pane>
-		</Resizable.PaneGroup>
+				{/if}
+			</section>
+		</Resizable.Pane>
+
+		<Resizable.Handle />
+
+		<Resizable.Pane
+			bind:this={agentPane}
+			defaultSize={25}
+			minSize={15}
+			maxSize={45}
+			collapsible
+			collapsedSize={0}
+			order={3}
+			onCollapse={() => persistCollapsed(true)}
+			onExpand={() => persistCollapsed(false)}
+		>
+			<AgentPanel />
+		</Resizable.Pane>
+	</Resizable.PaneGroup>
 	{/if}
 
 	{#if app.error}
@@ -192,12 +264,13 @@
 	   the background and the conversation is the one raised surface, so the two
 	   are separated by tone rather than by a border, a radius and a divider line
 	   stacked on top of each other. */
-	/* The canvas is the base. The list is RECESSED into it (sunken surface plus
-	   the inset shadow). The conversation sits on the raised surface and fills
-	   to the window edge — the depth cue is the tonal step from the sunken list,
-	   not a floating card. The margin, radius and card shadow that used to make
-	   it a rounded card on top of the canvas are dropped: the raised surface
-	   colour is the only separator the two panes need. */
+	/* The canvas is the base. The list and agent panes are RECESSED into it
+	   (sunken surface plus the inset shadow) — two recessed rails flanking one
+	   raised conversation, so the conversation stays the figure and both side
+	   panels are ground. The conversation sits on the raised surface and fills
+	   to the window edge — the depth cue is the tonal step from the sunken
+	   rails, not a floating card. The agent pane carries its own matching
+	   recessed treatment in AgentPanel.svelte. */
 	.list-pane {
 		background: var(--surface-sunken);
 		box-shadow: var(--shadow-pressed);
