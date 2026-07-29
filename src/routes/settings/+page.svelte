@@ -1063,7 +1063,11 @@
 		margin: 0;
 	}
 	.voice-help-warn {
-		color: color-mix(in srgb, #b45309 85%, var(--ink-70));
+		/* Cobalt carries every warning in this app (see DeepenHistoryButton,
+		   ProviderPicker field-warning, OutboxTray). The previous #b45309 was a
+		   warm amber ported from another project: in dark mode its mix onto
+		   --hairline/#0b0e12 collapsed to a muddy brown the canvas swallowed. */
+		color: color-mix(in srgb, var(--cobalt) 85%, var(--ink-70));
 	}
 	.voice-meta {
 		display: grid;
@@ -1111,8 +1115,8 @@
 		gap: 0.45rem;
 		padding: 0.55rem 0.65rem;
 		border-radius: var(--radius-sm);
-		border: 1px solid color-mix(in srgb, #b45309 45%, var(--hairline));
-		background: color-mix(in srgb, #b45309 8%, var(--surface-sunken));
+		border: 1px solid color-mix(in srgb, var(--cobalt) 45%, var(--hairline));
+		background: color-mix(in srgb, var(--cobalt) 8%, var(--surface-sunken));
 		font-size: 0.75rem;
 		line-height: 1.4;
 		color: var(--ink-90);
@@ -1131,7 +1135,7 @@
 		margin: 0;
 		font-size: 0.75rem;
 		line-height: 1.4;
-		color: color-mix(in srgb, #b45309 90%, var(--ink-90));
+		color: color-mix(in srgb, var(--cobalt) 90%, var(--ink-90));
 	}
 	.voice-body {
 		margin: 0;
