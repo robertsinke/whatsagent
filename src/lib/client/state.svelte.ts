@@ -147,8 +147,8 @@ export class AppState {
 	hydrated = $state(false);
 	/**
 	 * PL-A1 — agent turn parts keyed by sessionId. Accumulated by
-	 * `agent-part-updated` events; the panel (or the temporary /dev/agent-trace
-	 * page) renders from this, never from the wire directly.
+	 * `agent-part-updated` events; AgentPanel.svelte renders from this, never
+	 * from the wire directly.
 	 */
 	agentSessions = $state<Record<string, AgentSessionView>>({});
 

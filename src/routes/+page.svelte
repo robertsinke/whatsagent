@@ -218,7 +218,7 @@
 			onCollapse={() => persistCollapsed(true)}
 			onExpand={() => persistCollapsed(false)}
 		>
-			<AgentPanel />
+			<AgentPanel {app} />
 		</Resizable.Pane>
 	</Resizable.PaneGroup>
 	{/if}
