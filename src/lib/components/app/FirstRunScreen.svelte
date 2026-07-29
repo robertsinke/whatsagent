@@ -18,6 +18,7 @@
 	 *    read. See `provider-setup.ts`.
 	 */
 	import { onMount } from 'svelte';
+	import { scrollActivity } from '$lib/actions/scroll-activity.svelte.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { AlertTriangle, ArrowLeft, ExternalLink, ShieldAlert, Terminal } from '@lucide/svelte';
 	import { api } from '$lib/client/api.js';
@@ -109,7 +110,7 @@
 	}
 </script>
 
-<div class="first-run" data-testid="first-run" data-step={step}>
+<div class="first-run scrollbar-contextual" data-testid="first-run" data-step={step} use:scrollActivity>
 	<div class="card neumorphic-raised">
 		<ol class="stepper" aria-label="Setup progress">
 			{#each STEPS as s, i (s.id)}

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { scrollActivity } from '$lib/actions/scroll-activity.svelte.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import * as Tabs from '$lib/components/ui/tabs/index.js';
@@ -222,7 +223,7 @@
 
 </script>
 
-<main class="page">
+<main class="page scrollbar-contextual" use:scrollActivity>
 	<header class="neumorphic-raised settings-header">
 		<Button variant="ghost" size="sm" onclick={() => goto('/')}>
 			<ArrowLeft class="size-4" /> Back
@@ -427,7 +428,7 @@
 								<dd class="voice-path">{voice.path}</dd>
 							</div>
 						</dl>
-						<pre class="voice-body">{voice.content}</pre>
+						<pre class="voice-body scrollbar-contextual" use:scrollActivity>{voice.content}</pre>
 					{:else}
 						<p class="voice-empty">
 							No voice has been learned yet. It appears after the agent has observed enough
@@ -486,7 +487,8 @@
 
 <style>
 	.page {
-		min-height: 100vh;
+		height: 100dvh;
+		overflow-y: auto;
 		max-width: 720px;
 		margin: 0 auto;
 		padding: 1.25rem;

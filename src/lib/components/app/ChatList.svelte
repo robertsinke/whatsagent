@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { flip } from 'svelte/animate';
+	import { scrollActivity } from '$lib/actions/scroll-activity.svelte.js';
 	import * as Empty from '$lib/components/ui/empty/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Inbox, Search } from '@lucide/svelte';
@@ -71,7 +72,7 @@
 		<Input bind:value={query} placeholder="Search chats" class="search-input" />
 	</div>
 
-	<div class="rows">
+	<div class="rows scrollbar-contextual" use:scrollActivity>
 		{#each visible as chat (chat.jid)}
 			<div animate:flip={{ duration: 180 }}>
 				<ChatRow {chat} {now} selected={chat.jid === selectedJid} {onselect} />

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { HTMLAttributes } from "svelte/elements";
+	import { scrollActivity } from "$lib/actions/scroll-activity.svelte.js";
 	import { cn, type WithElementRef } from "$lib/utils.js";
 
 	let {
@@ -12,10 +13,11 @@
 
 <div
 	bind:this={ref}
+	use:scrollActivity
 	data-slot="sidebar-content"
 	data-sidebar="content"
 	class={cn(
-		"no-scrollbar gap-0 flex min-h-0 flex-1 flex-col overflow-auto group-data-[collapsible=icon]:overflow-hidden",
+		"scrollbar-contextual gap-0 flex min-h-0 flex-1 flex-col overflow-auto group-data-[collapsible=icon]:overflow-hidden",
 		className
 	)}
 	{...restProps}
