@@ -197,9 +197,20 @@
 }
 
 /* ---- Paragraph ---- */
+/* overflow-wrap/word-break stop an unbreakable inline string (a long token, a
+   URL) from forcing the paragraph to its min-content width — which a flex
+   parent with min-width:auto (the .voice-editor → .page chain in Settings)
+   refuses to shrink below, blowing the document out to a horizontal scroll.
+   `.mk-doc pre` already solves the block case with `overflow-x: auto`; this
+   is the inline-prose counterpart. `overflow-wrap: anywhere` breaks only when
+   the line would otherwise overflow (normal words stay intact), and also
+   collapses min-content so a table cell can shrink. Idiom matches .voice-path
+   in settings/+page.svelte. */
 .mk-doc p {
 	margin-top: var(--mk-p-mt);
 	margin-bottom: var(--mk-p-mb);
+	overflow-wrap: anywhere;
+	word-break: break-word;
 }
 
 /* ---- Headings ---- */
@@ -361,6 +372,12 @@
 	border-bottom: 1px solid var(--mk-table-border);
 	border-right: 1px solid var(--mk-table-border);
 	padding: 0.45rem 0.5rem;
+	/* Same inline-string containment as .mk-doc p: an unbreakable token in a
+	   cell forces min-content width on the column, and `width:100%;
+	   max-width:100%` on the table cannot cap it. This lets the cell shrink
+	   and the table's own .mk-doc-scroll catch the rest. */
+	overflow-wrap: anywhere;
+	word-break: break-word;
 }
 .mk-doc th p,
 .mk-doc td p {

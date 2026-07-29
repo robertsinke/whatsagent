@@ -862,7 +862,19 @@
 <style>
 	.page {
 		height: 100dvh;
-		overflow-y: auto;
+		/* overflow: both axes — .page is a flex item of .app-shell, so the
+		   flexbox automatic minimum size on the cross axis (width) defaults to
+		   min-content and refuses to shrink below a wide child (a long
+		   unbreakable token inside the Voice Milkdown). `overflow-y: auto`
+		   alone leaves overflow-x at visible → CSS computes it to `auto` when
+		   the other axis is non-visible, BUT the flex min-width:auto still
+		   holds, so the item still grows to min-content. Declaring the
+		   shorthand sets both axes explicitly AND pairs with `min-width: 0`
+		   below to kill the flex auto-min — the same idiom as .field-select.
+		   The max-width:720px ceiling is unchanged (it is a ceiling that gets
+		   hit, not the cause). */
+		overflow: auto;
+		min-width: 0;
 		max-width: 720px;
 		margin: 0 auto;
 		padding: 1.25rem;
