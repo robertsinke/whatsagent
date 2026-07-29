@@ -200,7 +200,11 @@ describe('action registry dispatch', () => {
 		expect(toolNames).toEqual(
 			expect.arrayContaining(['mark-read', 'cancel-outbox', 'generate-draft', 'skip-draft'])
 		);
-		for (const banned of ['send', 'approve-draft', 'react', 'set-send-mode']) {
+		// `set-setting` is in this list because its run() flips the live pacer when
+		// the key is OUTBOX_DRY_RUN_SETTING — a second door onto the send mode that
+		// would defeat `set-send-mode` being frontend-only. Any action that can arm
+		// an outbound path belongs here, not only the ones that send.
+		for (const banned of ['send', 'approve-draft', 'react', 'set-send-mode', 'set-setting']) {
 			expect(toolNames).not.toContain(banned);
 		}
 

@@ -12,9 +12,28 @@ import { actionError, actionJson, parseError } from './types.js';
 
 export type SetSettingInput = { key: string; value: string };
 
+/**
+ * FRONTEND ONLY, and the reason is R9 rather than caution about settings.
+ *
+ * `run` below deliberately reacts to `OUTBOX_DRY_RUN_SETTING` by calling
+ * `setOutboxDryRun` — the same live/dry-run flip that `set-send-mode` performs.
+ * So permitting `tool` here would be a second door onto the send mode and would
+ * entirely defeat `set-send-mode` refusing tool callers: an agent blocked from
+ * the front door could simply write the setting instead. (Found and flagged by
+ * the PL-U1 worker, which correctly declined to close it unilaterally.)
+ *
+ * The fix is a caller-policy change rather than a key check inside `run`,
+ * because this registry's contract is that `callers` is enforced by the
+ * dispatcher and never re-litigated in a run function — a guard inside `run` is
+ * one refactor away from being dropped.
+ *
+ * If an agent ever legitimately needs to change settings, do NOT re-add `tool`
+ * here. Split off a separate action whose parse accepts only an allowlist of
+ * keys that cannot arm an outbound path, and leave this one frontend-only.
+ */
 export const setSettingAction: ActionDefinition<SetSettingInput> = {
 	name: 'set-setting',
-	callers: ['frontend', 'tool'],
+	callers: ['frontend'],
 	jsonSchema: {
 		type: 'object',
 		properties: {
