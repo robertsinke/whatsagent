@@ -60,7 +60,11 @@ const chrome = spawn(
 		`--user-data-dir=${profile}`,
 		'--no-first-run',
 		'--no-default-browser-check',
-		'--hide-scrollbars',
+		// Hidden by default: a scrollbar in a capture is usually noise that shifts
+		// layout between shots. But it makes this tool structurally unable to
+		// photograph scrollbar work — the visual-evidence gate then cannot see the
+		// very thing it is gating. `SHOT_SCROLLBARS=1` opts back in.
+		...(process.env.SHOT_SCROLLBARS === '1' ? [] : ['--hide-scrollbars']),
 		`--window-size=${WIDTH},${HEIGHT}`,
 		'about:blank'
 	],
