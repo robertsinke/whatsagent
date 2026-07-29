@@ -89,6 +89,14 @@ body::before {
   --shadow-raised: inset 0 1px 0 #fff, 0 1px 2px #00000014, 0 8px 20px #00000008, 0 20px 36px #00000005;
   --shadow-pressed: inset 1px 1px 4px #0000001f, inset -2px -2px 3px #ffffffb3;
   --shadow-bevel: inset 0 1px 0 #fff, inset 0 -1px 0 #0000000a;
+  /* Neumorphic focus — a cobalt-tinted inner glow + deepened inset, NOT an
+     outer ring. The shadcn ring idiom reads as pasted on top of this surface
+     language; this belongs to it (the field wells inward under the cobalt
+     light). Visible in both modes: --ring is cobalt-600 (light) / #5ab0e6
+     (dark). The 1px inset edge carries the affordance; the soft inner glow
+     deepens it without an outer halo. */
+  --shadow-focus: inset 0 0 0 1px color-mix(in srgb, var(--ring) 55%, transparent),
+    inset 0 2px 6px color-mix(in srgb, var(--ring) 22%, transparent);
 
   /* Radii — 6 / 10 / 16 / 999 per plan. */
   --radius-sm: 6px;
@@ -250,6 +258,8 @@ body::before {
 
   --shadow-raised: inset 0 1px 0 #ffffff14, 0 1px 2px #00000066, 0 8px 20px #00000044, 0 20px 36px #00000022;
   --shadow-pressed: inset 1px 1px 4px #00000099, inset -2px -2px 3px #ffffff14;
+  --shadow-focus: inset 0 0 0 1px color-mix(in srgb, var(--ring) 70%, transparent),
+    inset 0 2px 8px color-mix(in srgb, var(--ring) 35%, transparent);
 }
 
 @layer base {

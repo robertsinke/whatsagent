@@ -75,7 +75,7 @@
 	<NeedsReplyTabs {chats} bind:value={tab} />
 
 	<div class="search">
-		<Search class="size-3.5 text-ink-50" />
+		<Search class="size-3.5 text-ink-50 search-icon" />
 		<Input bind:value={query} placeholder="Search chats" class="search-input" />
 	</div>
 
@@ -118,15 +118,50 @@
 		height: 100%;
 		min-height: 0;
 	}
+	/* The search field IS the recess, not a card floating in it. It fills the
+	   full list width so its left/right edges align with the tab row above and
+	   the chat rows below — one aligned stack, no overhang. The icon sits inside
+	   the border, so the field's visible box (not just its wrapper) lines up with
+	   the tab-list box. Cut into the sunken surface: a hairline, the sunken fill
+	   and the inset shadow. Focus deepens the well with a cobalt inner glow
+	   instead of an outer ring. */
 	.search {
 		display: flex;
 		align-items: center;
 		gap: 0.4rem;
-		padding: 0 0.15rem;
+		height: 2rem;
+		padding: 0 0.5rem;
+		border: 1px solid var(--hairline);
+		border-radius: var(--radius-md);
+		background: var(--surface-sunken);
+		box-shadow: var(--shadow-pressed);
+		transition: box-shadow 140ms ease, border-color 140ms ease;
+	}
+	.search:focus-within {
+		border-color: color-mix(in srgb, var(--ring) 45%, var(--hairline));
+		box-shadow: var(--shadow-focus);
+	}
+	.search :global(svg.search-icon) {
+		flex: none;
+		pointer-events: none;
 	}
 	:global(.search-input) {
-		height: 2rem;
+		flex: 1;
+		min-width: 0;
+		height: 100%;
+		border: 0 !important;
+		background: transparent !important;
+		box-shadow: none !important;
+		padding: 0;
 		font-size: 0.82rem;
+		outline: none !important;
+	}
+	:global(.search-input:focus),
+	:global(.search-input:focus-visible) {
+		outline: none !important;
+		box-shadow: none !important;
+		border: 0 !important;
+		--tw-ring-shadow: 0 0 #0000 !important;
 	}
 	.rows {
 		display: flex;
