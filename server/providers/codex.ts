@@ -40,12 +40,19 @@ export class CodexProvider implements DraftProvider {
 		const schemaDirectory = await mkdtemp(join(tmpdir(), 'whatsagent-codex-'));
 		const schemaPath = join(schemaDirectory, 'draft-result.schema.json');
 		await writeFile(schemaPath, JSON.stringify(draftResultSchema), { mode: 0o600 });
+		// `--sandbox read-only` still leaves the shell tool enabled (it only
+		// constrains writes). Drafting only needs a prompt→JSON round-trip, so
+		// disable the shell the same way Claude's `--tools ''` does — otherwise
+		// conversation text (attacker-controlled via WhatsApp) can induce file
+		// reads whose contents land in the owner-facing draft.
 		const args = [
 			'exec',
 			'--json',
 			'--ephemeral',
 			'--sandbox',
 			'read-only',
+			'--disable',
+			'shell_tool',
 			'--skip-git-repo-check',
 			'--output-schema',
 			schemaPath
