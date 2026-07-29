@@ -101,6 +101,11 @@ describe('CodexProvider', () => {
 		expect(process.calls[0]?.args).toEqual(
 			expect.arrayContaining(['exec', '--json', '--ephemeral', 'read-only', '--output-schema', '-'])
 		);
+		// Shell must be off: read-only sandbox alone still exposes command_execution.
+		const args = process.calls[0]?.args ?? [];
+		const disableAt = args.indexOf('--disable');
+		expect(disableAt).toBeGreaterThanOrEqual(0);
+		expect(args[disableAt + 1]).toBe('shell_tool');
 	});
 });
 
