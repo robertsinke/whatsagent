@@ -5,6 +5,7 @@
 	import QRCode from 'qrcode';
 	import type { SessionView } from '$lib/client/types.js';
 	import { sessionBanner } from '$lib/client/view.js';
+	import { mode } from 'mode-watcher';
 
 	let {
 		session,
@@ -15,18 +16,26 @@
 
 	let qrDataUrl = $state<string | null>(null);
 
-	// Each QR rotation is pushed by the server (~20s); re-render on every payload.
+	// Each QR rotation is pushed by the server (~20s); re-render on every
+	// payload. QR colours are JS (QRCode.toDataURL takes hex strings, not CSS),
+	// so the token layer never reaches them — derive from mode.current instead.
+	// Contrast is functional: a phone camera must decode the code, so both modes
+	// clear 15:1 (light #0a2358 on #ffffff = 15.06:1; dark #0b0e12 on #e8ecf2 =
+	// 16.31:1), well above the 4.5:1 readability floor and the 7:1 camera floor.
 	$effect(() => {
 		const payload = session.qr;
 		if (!payload) {
 			qrDataUrl = null;
 			return;
 		}
+		const dark = mode.current === 'dark';
+		const qrDark = dark ? '#0b0e12' : '#0a2358';
+		const qrLight = dark ? '#e8ecf2' : '#ffffff';
 		let cancelled = false;
 		void QRCode.toDataURL(payload, {
 			width: 260,
 			margin: 1,
-			color: { dark: '#202020', light: '#fbfbf8' }
+			color: { dark: qrDark, light: qrLight }
 		}).then((url) => {
 			if (!cancelled) qrDataUrl = url;
 		});
