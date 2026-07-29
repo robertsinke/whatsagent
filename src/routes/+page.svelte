@@ -14,30 +14,15 @@
 	import FirstRunScreen from '$lib/components/app/FirstRunScreen.svelte';
 	import OutboxTray from '$lib/components/app/OutboxTray.svelte';
 	import PairingScreen from '$lib/components/app/PairingScreen.svelte';
-	import SendModeIndicator from '$lib/components/app/SendModeIndicator.svelte';
-	import SessionStatus from '$lib/components/app/SessionStatus.svelte';
 	import { AppState } from '$lib/client/state.svelte.js';
 	import { displayName, initialsFor, isFirstRun, sessionBanner } from '$lib/client/view.js';
 
 	const app = new AppState();
 	let composerValue = $state('');
 
-	/**
-	 * Electron's `titleBarStyle: 'hiddenInset'` drops the macOS traffic lights on
-	 * top of this header's wordmark, which starts at x=0 because in a browser tab
-	 * nothing else is there. Reserving that space is a renderer change — but it
-	 * must not shift anything in a browser, so it is opt-in: the Electron main
-	 * process sets `window.whatsagentTitleBar = 'inset'` when it adopts
-	 * hiddenInset, and this stamps the attribute the CSS keys on. Dormant until
-	 * then. (`electron/main.js` is OSS-P3.3's file — see the execution report.)
-	 */
-	let titleBarInset = $state(false);
-
 	// Never in `load()` — this route prerenders, and a load-time fetch would run
 	// at build time with no backend listening.
 	onMount(() => {
-		titleBarInset =
-			(window as Window & { whatsagentTitleBar?: string }).whatsagentTitleBar === 'inset';
 		app.start();
 		return () => app.stop();
 	});
@@ -63,14 +48,11 @@
 </script>
 
 <div class="shell">
-	<header class="topbar" data-titlebar={titleBarInset ? 'inset' : null}>
+	<header class="topbar">
 		<div class="brand">
 			<span class="brand-dot"></span>
-			<span class="brand-name">WhatsAgent</span>
 		</div>
 		<div class="topbar-right">
-			<SendModeIndicator sendsLive={app.sendsLive} pending={app.sendingMode} />
-			<SessionStatus session={app.session} socketConnected={app.connected} />
 			<OutboxTray outbox={app.outbox} chats={app.chats} oncancel={(id) => app.cancelOutbox(id)} />
 			<Button variant="ghost" size="sm" onclick={() => goto('/settings')}>
 				<Settings class="size-4" /> Settings
@@ -94,6 +76,10 @@
 						chats={app.chats}
 						selectedJid={app.selectedJid}
 						syncing={app.session.status === 'syncing'}
+						sendsLive={app.sendsLive}
+						sendingMode={app.sendingMode}
+						session={app.session}
+						socketConnected={app.connected}
 						onselect={openChat}
 					/>
 				</section>
@@ -211,11 +197,6 @@
 		align-items: center;
 		gap: 0.45rem;
 	}
-	/* Room for the macOS traffic lights under Electron's hiddenInset title bar.
-	   Never applies in a browser — see `titleBarInset` above. */
-	.topbar[data-titlebar='inset'] .brand {
-		padding-left: 4.75rem;
-	}
 	.brand-dot {
 		width: 10px;
 		height: 10px;
@@ -223,15 +204,11 @@
 		background: var(--terracotta);
 		box-shadow: var(--shadow-bevel);
 	}
-	.brand-name {
-		font-weight: 600;
-		font-size: 0.92rem;
-		color: var(--ink-90);
-	}
 	.topbar-right {
 		display: flex;
 		align-items: center;
 		gap: 0.35rem;
+		margin-left: auto;
 	}
 
 	:global(.panes) {

@@ -117,13 +117,14 @@ function createWindow(url) {
 		height: 860,
 		minWidth: 900,
 		minHeight: 600,
-		title: 'whatsagent',
+		title: '',
 		backgroundColor: '#e8ebf0',
 		// Standard title bar, deliberately. `hiddenInset` puts the traffic lights
-		// on top of the SPA's own header, where they overlap the "WhatsAgent"
-		// wordmark — the app header starts its content at x=0 because in a browser
-		// tab nothing else is there. Reserving that space is a renderer change and
-		// belongs with the first-run UI work (OSS-P3.4), not with packaging.
+		// on top of the SPA's own header, which starts its content at x=0 because
+		// in a browser tab nothing else is there. Leave titleBarStyle unset.
+		// The titlebar text is blanked below (setTitle + page-title-updated) so
+		// the chrome shows no second "WhatsAgent" — the document <title> stays
+		// intact for browser use and accessibility.
 		show: false,
 		webPreferences: {
 			// The renderer is the same SPA the browser loads over HTTP. It has no
@@ -133,6 +134,14 @@ function createWindow(url) {
 			contextIsolation: true,
 			sandbox: true
 		}
+	});
+
+	// Keep document.title (browser tab / a11y) without painting it beside the
+	// traffic lights. Electron's default page-title-updated handler would copy
+	// it onto the window otherwise.
+	window.setTitle('');
+	window.on('page-title-updated', (e) => {
+		e.preventDefault();
 	});
 
 	window.once('ready-to-show', () => window?.show());
