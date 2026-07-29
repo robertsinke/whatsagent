@@ -57,13 +57,18 @@ export function createMcpSurface(options: {
 		const transport = new StreamableHTTPServerTransport({
 			sessionIdGenerator: undefined
 		});
+		// Register the cleanup listener BEFORE awaiting handleRequest. A
+		// non-streaming JSON-RPC response can be fully written and closed inside
+		// that await, and `close` does not replay for a listener attached
+		// afterwards — so the per-request Server and transport would never be
+		// closed. `once` because a stateless request closes exactly one time.
+		res.once('close', () => {
+			void transport.close();
+			void server.close();
+		});
 		try {
 			await server.connect(transport);
 			await transport.handleRequest(req, res);
-			res.on('close', () => {
-				void transport.close();
-				void server.close();
-			});
 		} catch (error) {
 			console.error('[mcp] request error', error instanceof Error ? error.message : 'error');
 			if (!res.headersSent) {
@@ -133,9 +138,12 @@ function createRegistryServer(registry: ActionRegistry, deps: RoutesDeps): Serve
 }
 
 function toToolInputSchema(schema: Record<string, unknown>): Tool['inputSchema'] {
-	const type = schema.type === 'object' || schema.type === undefined ? 'object' : 'object';
+	// MCP requires the top-level input schema to be an object schema, and every
+	// action's `jsonSchema` already is one. Pinned rather than copied through so
+	// a future non-object action schema fails visibly here instead of shipping a
+	// tool the harness silently rejects.
 	return {
-		type,
+		type: 'object',
 		...(typeof schema.properties === 'object' && schema.properties
 			? { properties: schema.properties as Tool['inputSchema']['properties'] }
 			: {}),
