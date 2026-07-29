@@ -20,6 +20,19 @@ export const DRAFT_PROVIDER_NAMES: readonly DraftProviderName[] = ['claude', 'co
 export const DEFAULT_DRAFT_PROVIDER: DraftProviderName = 'claude';
 
 /**
+ * Per-provider honesty about what the model can do *while drafting*. These are
+ * not capability-equivalent: Claude and OpenCode (settings key `codex`) run
+ * with tools removed; Ollama is a plain HTTP call. The old Codex CLI path is
+ * gone — it could still read the filesystem under a "read-only sandbox".
+ */
+export const DRAFT_PROVIDER_CAPABILITY: Readonly<Record<DraftProviderName, string>> = {
+	claude:
+		'Claude Code with tools disabled (`--tools` empty). Subscription login only — no filesystem or network tools while drafting.',
+	codex:
+		'OpenCode with built-in tools disabled (verified empty toolset). Uses your ChatGPT / OpenAI OAuth login. Not the Codex CLI.',
+	ollama: 'Local Ollama over HTTP. No tool surface — prompt in, JSON draft out.'
+};
+/**
  * The `<option value>` the dropdown uses for the "Custom…" escape hatch. A
  * model id colliding with this sentinel would be ambiguous, so `mergeModelOptions`
  * never emits it as a model row; the UI renders it separately as "Custom…".

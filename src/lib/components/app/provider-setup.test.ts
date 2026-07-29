@@ -40,7 +40,7 @@ function snapshot(providers: ProviderInfo[]): ProvidersResponse {
 
 const ALL_DETECTED = snapshot([
 	info({ name: 'claude', installed: true, version: '2.1.220', path: '/bin/claude', unavailableReason: null }),
-	info({ name: 'codex', installed: true, version: '0.145.0', path: '/bin/codex', unavailableReason: null }),
+	info({ name: 'codex', installed: true, version: '1.18.9', path: '/bin/opencode', unavailableReason: null }),
 	info({ name: 'ollama', installed: true, version: '0.32.4', path: '/bin/ollama', unavailableReason: null })
 ]);
 
@@ -60,16 +60,17 @@ describe('providerSetupRows', () => {
 		// resolvable install URL.
 		expect(rows.map((r) => r.installUrl)).toEqual([
 			'https://docs.anthropic.com/en/docs/claude-code',
-			'https://github.com/openai/codex',
+			'https://opencode.ai',
 			'https://ollama.com'
 		]);
+		expect(rows.find((r) => r.name === 'codex')?.title).toBe('OpenCode');
 	});
 
 	it('reports a dead Ollama daemon as installed-but-not-running, with a start hint', () => {
 		const rows = providerSetupRows(
 			snapshot([
 				info({ name: 'claude', installed: true, version: '2.1.220', unavailableReason: null }),
-				info({ name: 'codex', installed: true, version: '0.145.0', unavailableReason: null }),
+				info({ name: 'codex', installed: true, version: '1.18.9', unavailableReason: null }),
 				info({
 					name: 'ollama',
 					// The real discovery shape: not installed, still has a path.

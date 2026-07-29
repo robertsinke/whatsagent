@@ -1,0 +1,3 @@
+{"type":"step_start","timestamp":1,"sessionID":"ses_fixture","part":{"id":"prt_start","messageID":"msg_fixture","sessionID":"ses_fixture","type":"step-start"}}
+{"type":"text","timestamp":2,"sessionID":"ses_fixture","part":{"id":"prt_text","messageID":"msg_fixture","sessionID":"ses_fixture","type":"text","text":"{\"kind\":\"draft\",\"text\":\"I'll check and let you know.\",\"reason\":null}"}}
+{"type":"step_finish","timestamp":3,"sessionID":"ses_fixture","part":{"id":"prt_finish","reason":"stop","messageID":"msg_fixture","sessionID":"ses_fixture","type":"step-finish"}}

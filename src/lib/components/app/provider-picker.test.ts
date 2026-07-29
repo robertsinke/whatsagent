@@ -5,6 +5,7 @@ import {
 	modelOptions,
 	modelTriggerLabel,
 	modelViewValue,
+	providerCapabilityHelp,
 	providerOptions,
 	savedDraftLabel,
 	savedModelWarning,
@@ -94,6 +95,27 @@ describe('providerOptions', () => {
 		const opts = providerOptions(null, 'claude');
 		expect(opts.map((o) => o.value)).toEqual(['claude', 'codex', 'ollama']);
 		expect(opts.every((o) => !o.disabled)).toBe(true);
+	});
+
+	it('uses discovery labels so the OpenAI slot reads as OpenCode, not Codex CLI', () => {
+		const opts = providerOptions(
+			snapshot([info({ name: 'codex', label: 'OpenCode', installed: true, version: '1.18.9', unavailableReason: null })]),
+			'codex'
+		);
+		expect(opts.find((o) => o.value === 'codex')?.label).toBe('OpenCode — installed, v1.18.9');
+	});
+});
+
+describe('providerCapabilityHelp', () => {
+	it('does not describe the three providers as capability-equivalent', () => {
+		const claude = providerCapabilityHelp('claude');
+		const codex = providerCapabilityHelp('codex');
+		const ollama = providerCapabilityHelp('ollama');
+		expect(claude).toMatch(/tools disabled/i);
+		expect(codex).toMatch(/OpenCode/i);
+		expect(codex).toMatch(/empty toolset|tools disabled/i);
+		expect(ollama).toMatch(/No tool surface/i);
+		expect(new Set([claude, codex, ollama]).size).toBe(3);
 	});
 });
 

@@ -19,6 +19,7 @@
 		modelOptions,
 		modelTriggerLabel,
 		modelViewValue,
+		providerCapabilityHelp,
 		providerOptions,
 		savedDraftLabel,
 		savedModelWarning
@@ -33,7 +34,7 @@
 		savedKey = null,
 		onsave,
 		onrescan,
-		providerHelp = 'claude · codex · ollama. Runs under your existing subscription login.',
+		providerHelp = undefined,
 		modelHelp = 'Optional model override for the selected provider. Custom… keeps the saved id and opens a text field.'
 	}: {
 		provider: string;
@@ -48,6 +49,8 @@
 		providerHelp?: string;
 		modelHelp?: string;
 	} = $props();
+
+	const resolvedProviderHelp = $derived(providerHelp ?? providerCapabilityHelp(provider));
 
 	/**
 	 * Custom is a view mode, not a value: choosing it deliberately does not touch
@@ -136,7 +139,7 @@
 			</Button>
 		{/if}
 	</span>
-	<span class="field-help">{providerHelp}</span>
+	<span class="field-help">{resolvedProviderHelp}</span>
 </label>
 
 <label class="field">

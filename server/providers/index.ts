@@ -1,5 +1,6 @@
 import { ClaudeProvider, type ClaudeProviderOptions } from './claude.js';
 import { CodexProvider, type CodexProviderOptions } from './codex.js';
+import { OpenCodeProvider, type OpenCodeProviderOptions } from './opencode.js';
 import { OllamaProvider, type OllamaProviderOptions } from './ollama.js';
 import { ProviderError, type DraftProvider } from './provider.js';
 
@@ -10,7 +11,8 @@ export type { DraftProviderName } from '../../shared/providers.js';
 
 export interface ProviderFactoryOptions {
 	claude?: ClaudeProviderOptions;
-	codex?: CodexProviderOptions;
+	/** OpenAI subscription path — spawns OpenCode, not the Codex CLI. */
+	codex?: OpenCodeProviderOptions | CodexProviderOptions;
 	ollama?: Omit<OllamaProviderOptions, 'model'>;
 }
 
@@ -25,7 +27,8 @@ export function createDraftProvider(
 		case 'claude':
 			return new ClaudeProvider({ ...options.claude, model: model ?? options.claude?.model });
 		case 'codex':
-			return new CodexProvider({ ...options.codex, model: model ?? options.codex?.model });
+			// Settings key stays `codex`; the vehicle is OpenCode (PL-S4 Route A).
+			return new OpenCodeProvider({ ...options.codex, model: model ?? options.codex?.model });
 		case 'ollama':
 			return new OllamaProvider({
 				...options.ollama,
@@ -39,4 +42,5 @@ export function createDraftProvider(
 export * from './provider.js';
 export { ClaudeProvider } from './claude.js';
 export { CodexProvider } from './codex.js';
+export { OpenCodeProvider } from './opencode.js';
 export { OllamaProvider } from './ollama.js';

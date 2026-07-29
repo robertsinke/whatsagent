@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { ClaudeProvider } from './claude.js';
-import { CodexProvider } from './codex.js';
+import { OpenCodeProvider } from './opencode.js';
 import { fakeSpawn } from './fake-spawn.js';
 import { OllamaProvider } from './ollama.js';
 import { createDraftProvider } from './index.js';
@@ -80,17 +80,19 @@ describe('ClaudeProvider', () => {
 	});
 });
 
-describe('CodexProvider', () => {
-	it('parses Codex JSONL and strips OPENAI_API_KEY', async () => {
-		const process = fakeSpawn([{ stdout: fixture('codex-success.jsonl') }]);
-		const provider = new CodexProvider({
+describe('OpenCodeProvider (settings key codex)', () => {
+	it('parses OpenCode JSONL, strips API keys, and runs with empty tools flags', async () => {
+		const process = fakeSpawn([{ stdout: fixture('opencode-success.jsonl') }]);
+		const provider = new OpenCodeProvider({
 			spawn: process.spawn,
 			env: {
 				PATH: '/usr/bin',
 				HOME: '/tmp/home',
 				OPENAI_API_KEY: 'api-secret',
-				CODEX_API_KEY: 'codex-secret'
-			}
+				CODEX_API_KEY: 'codex-secret',
+				ANTHROPIC_API_KEY: 'anthropic-secret'
+			},
+			model: 'gpt-5.4'
 		});
 
 		await expect(provider.draft(input)).resolves.toEqual({
@@ -98,14 +100,26 @@ describe('CodexProvider', () => {
 			text: "I'll check and let you know."
 		});
 		expect(process.calls[0]?.env).toEqual({ PATH: '/usr/bin', HOME: '/tmp/home' });
+		expect(process.calls[0]?.command).toBe('opencode');
 		expect(process.calls[0]?.args).toEqual(
-			expect.arrayContaining(['exec', '--json', '--ephemeral', 'read-only', '--output-schema', '-'])
+			expect.arrayContaining([
+				'run',
+				'--auto',
+				'--pure',
+				'--format',
+				'json',
+				'--dir',
+				'-m',
+				'openai/gpt-5.4'
+			])
 		);
-		// Shell must be off: read-only sandbox alone still exposes command_execution.
 		const args = process.calls[0]?.args ?? [];
-		const disableAt = args.indexOf('--disable');
-		expect(disableAt).toBeGreaterThanOrEqual(0);
-		expect(args[disableAt + 1]).toBe('shell_tool');
+		expect(args[0]).toBe('run');
+		expect(args.includes('--attach')).toBe(false);
+	});
+
+	it('createDraftProvider(codex) constructs OpenCodeProvider', () => {
+		expect(createDraftProvider({ provider: 'codex' })).toBeInstanceOf(OpenCodeProvider);
 	});
 });
 
@@ -232,7 +246,7 @@ describe('typed process failures', () => {
 describe('provider selection', () => {
 	it('creates the provider selected by persisted settings', () => {
 		expect(createDraftProvider({ provider: 'claude' })).toBeInstanceOf(ClaudeProvider);
-		expect(createDraftProvider({ provider: 'codex' })).toBeInstanceOf(CodexProvider);
+		expect(createDraftProvider({ provider: 'codex' })).toBeInstanceOf(OpenCodeProvider);
 		expect(createDraftProvider({ provider: 'ollama', provider_model: 'llama3.2' })).toBeInstanceOf(
 			OllamaProvider
 		);

@@ -10,11 +10,11 @@ Two-tier local runtime in one repo: a persistent Node backend (Baileys, SQLite, 
 
 **The only thing that ever leaves your machine is what you send to the LLM you chose**, and you choose it:
 
-| Provider setting | Where your conversation text goes |
-| --- | --- |
-| `ollama` | Nowhere. The model runs on your machine — **zero network egress**. |
-| `claude` | Anthropic, under your own Claude subscription login. |
-| `codex` | OpenAI, under your own ChatGPT/Codex subscription login. |
+| Provider setting | Where your conversation text goes | Tool surface while drafting |
+| --- | --- | --- |
+| `ollama` | Nowhere. The model runs on your machine — **zero network egress**. | None — plain HTTP call. |
+| `claude` | Anthropic, under your own Claude subscription login. | None — Claude CLI with `--tools` empty. |
+| `codex` | OpenAI, under your ChatGPT / OpenAI OAuth login via [OpenCode](https://opencode.ai) (not the Codex CLI). | None — OpenCode with built-in tools disabled (verified empty toolset). |
 
 With a cloud provider, drafting sends recent messages from the chat being drafted — including the other person's words — to that provider, under your account and their terms. That is the deal you are opting into by picking a cloud model, and it is the same deal you already accepted when you installed that CLI. If you would rather not make it on someone else's behalf, run Ollama and the app is fully airgapped from everyone, including us.
 
@@ -36,7 +36,7 @@ Read this before pairing.
 - **macOS only.** WhatsApp auth is encrypted with the login keychain; the app exits at startup on other platforms.
 - Optional draft providers (pick at least one you will use):
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI, logged in with your subscription (`claude auth status`)
-  - [Codex CLI](https://github.com/openai/codex), logged in with your subscription
+  - [OpenCode](https://opencode.ai), signed in with your ChatGPT / OpenAI account (`opencode providers list`) — this is the OpenAI subscription path (settings key `codex`)
   - [Ollama](https://ollama.com) running locally
 - Optional voice memory: Docker + `docker compose` for Hindsight (see below)
 

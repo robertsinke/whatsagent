@@ -60,10 +60,10 @@ const DESCRIPTORS: Record<DraftProviderName, Descriptor> = {
 		startHint: 'Run `claude` once in a terminal to finish signing in.'
 	},
 	codex: {
-		title: 'Codex CLI',
-		installUrl: 'https://github.com/openai/codex',
-		installLabel: 'Install Codex CLI',
-		startHint: 'Run `codex` once in a terminal to finish signing in.'
+		title: 'OpenCode',
+		installUrl: 'https://opencode.ai',
+		installLabel: 'Install OpenCode',
+		startHint: 'Run `opencode` once in a terminal and sign in with your ChatGPT / OpenAI account.'
 	},
 	ollama: {
 		title: 'Ollama',

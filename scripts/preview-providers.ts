@@ -91,7 +91,7 @@ function installed(
 
 function previewProviders(mode: Exclude<PreviewProvidersMode, 'real'>, probedAt: number): DiscoveredProvider[] {
 	const claude = base('claude', 'Claude', 'cli', probedAt);
-	const codex = base('codex', 'Codex', 'cli', probedAt);
+	const codex = base('codex', 'OpenCode', 'cli', probedAt);
 	const ollama = base('ollama', 'Ollama', 'http', probedAt);
 
 	if (mode === 'none') {
@@ -101,7 +101,7 @@ function previewProviders(mode: Exclude<PreviewProvidersMode, 'real'>, probedAt:
 	}
 
 	const claudeOk = installed(claude, '/opt/homebrew/bin/claude', '2.1.220');
-	const codexOk = installed(codex, '/opt/homebrew/bin/codex', '0.145.0');
+	const codexOk = installed(codex, '/Users/owner/.opencode/bin/opencode', '1.18.9');
 
 	if (mode === 'ollama-down') {
 		return [

@@ -20,6 +20,7 @@ import {
 	CUSTOM_MODEL_VALUE,
 	DEFAULT_MODEL_LABEL,
 	DEFAULT_MODEL_VALUE,
+	DRAFT_PROVIDER_CAPABILITY,
 	DRAFT_PROVIDER_NAMES,
 	mergeModelOptions,
 	normalizeDraftProviderName
@@ -61,21 +62,22 @@ export function providerOptions(
 	const current = normalizeDraftProviderName(currentProvider);
 	return DRAFT_PROVIDER_NAMES.map((name) => {
 		const info = byName.get(name);
+		const display = info?.label || name;
 		if (!info) {
-			return { value: name, label: name, disabled: false, reason: null };
+			return { value: name, label: display, disabled: false, reason: null };
 		}
 		const unavailable = !info.installed || info.unavailableReason !== null;
-		let label = info.label || name;
+		let label = display;
 		if (info.installed && info.version) {
-			label = `${name} — installed, v${info.version}`;
+			label = `${display} — installed, v${info.version}`;
 		} else if (info.installed) {
-			label = `${name} — installed`;
+			label = `${display} — installed`;
 		} else {
-			label = `${name} — ${unavailableReasonLabel(info)}`;
+			label = `${display} — ${unavailableReasonLabel(info)}`;
 		}
 		if (unavailable && info.unavailableReason) {
-			label = `${name} — ${unavailableReasonLabel(info)}`;
-			if (info.version) label = `${name} — v${info.version} (${unavailableReasonLabel(info)})`;
+			label = `${display} — ${unavailableReasonLabel(info)}`;
+			if (info.version) label = `${display} — v${info.version} (${unavailableReasonLabel(info)})`;
 		}
 		return {
 			value: name,
@@ -86,6 +88,12 @@ export function providerOptions(
 			reason: unavailable ? unavailableReasonLabel(info) : null
 		};
 	});
+}
+
+/** Capability-honest help for the selected provider — not interchangeable. */
+export function providerCapabilityHelp(providerValue: string | undefined): string {
+	const provider = normalizeDraftProviderName(providerValue);
+	return DRAFT_PROVIDER_CAPABILITY[provider];
 }
 
 export function catalogFor(provider: DraftProviderName): readonly CatalogModel[] {

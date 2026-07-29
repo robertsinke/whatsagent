@@ -12,7 +12,7 @@ import { PROVIDER_SECRET_ENV_KEYS } from './provider.js';
 const HOME = '/home/owner';
 const CLAUDE_ENV = '/usr/local/bin/claude';
 const CLAUDE_LOCAL = join(HOME, '.local/bin/claude');
-const CODEX_NPM = join(HOME, '.npm-global/bin/codex');
+const OPENCODE_BIN = join(HOME, '.opencode/bin/opencode');
 const OLLAMA_USR = '/usr/local/bin/ollama';
 const LOGIN_BIN = join(HOME, 'login-path/bin');
 
@@ -88,9 +88,9 @@ function versionHandler(versions: Record<string, { stdout?: string; exitCode?: n
 }
 
 describe('parseVersionLine', () => {
-	it('parses real Claude and Codex version strings', () => {
+	it('parses real Claude and OpenCode version strings', () => {
 		expect(parseVersionLine('2.1.220 (Claude Code)')).toBe('2.1.220');
-		expect(parseVersionLine('codex-cli 0.145.0')).toBe('0.145.0');
+		expect(parseVersionLine('1.18.9')).toBe('1.18.9');
 	});
 
 	it('returns null for unparseable output', () => {
@@ -100,10 +100,10 @@ describe('parseVersionLine', () => {
 
 describe('provider discovery', () => {
 	it('resolves from env PATH with source env-path and never spawns a login shell', async () => {
-		const existing = new Set([CLAUDE_ENV, CODEX_NPM, OLLAMA_USR]);
+		const existing = new Set([CLAUDE_ENV, OPENCODE_BIN, OLLAMA_USR]);
 		const process = versionHandler({
 			[CLAUDE_ENV]: { stdout: '2.1.220 (Claude Code)\n' },
-			[CODEX_NPM]: { stdout: 'codex-cli 0.145.0\n' },
+			[OPENCODE_BIN]: { stdout: '1.18.9\n' },
 			[OLLAMA_USR]: { stdout: 'ollama version is 0.32.4\n' }
 		});
 		const fetch = vi.fn(
@@ -117,13 +117,13 @@ describe('provider discovery', () => {
 			spawn: process.spawn,
 			fetch,
 			env: {
-				PATH: `/usr/local/bin:${join(HOME, '.npm-global/bin')}:/usr/bin`,
+				PATH: `/usr/local/bin:${join(HOME, '.opencode/bin')}:/usr/bin`,
 				HOME,
 				SHELL: '/bin/zsh'
 			}
 		});
-		// Put codex on PATH via the npm-global dir listed in PATH (env-path source).
-		existing.add(CODEX_NPM);
+		// Put opencode on PATH via its install dir listed in PATH (env-path source).
+		existing.add(OPENCODE_BIN);
 
 		const discovery = createProviderDiscovery(deps);
 		const snapshot = await discovery.snapshot();
@@ -136,18 +136,18 @@ describe('provider discovery', () => {
 		});
 		expect(provider(snapshot, 'codex')).toMatchObject({
 			installed: true,
-			path: CODEX_NPM,
+			path: OPENCODE_BIN,
 			pathSource: 'env-path',
-			version: '0.145.0'
+			version: '1.18.9'
 		});
 		expect(process.calls.every((call) => call.args[0] !== '-ilc')).toBe(true);
 	});
 
 	it('resolves GUI-minimal PATH binaries from home-relative known locations', async () => {
-		const existing = new Set([CLAUDE_LOCAL, CODEX_NPM, OLLAMA_USR]);
+		const existing = new Set([CLAUDE_LOCAL, OPENCODE_BIN, OLLAMA_USR]);
 		const process = versionHandler({
 			[CLAUDE_LOCAL]: { stdout: '2.1.220 (Claude Code)\n' },
-			[CODEX_NPM]: { stdout: 'codex-cli 0.145.0\n' },
+			[OPENCODE_BIN]: { stdout: '1.18.9\n' },
 			[OLLAMA_USR]: { stdout: 'ollama version is 0.32.4\n' }
 		});
 		const fetch = vi.fn(
@@ -173,7 +173,7 @@ describe('provider discovery', () => {
 		});
 		expect(provider(snapshot, 'codex')).toMatchObject({
 			installed: true,
-			path: CODEX_NPM,
+			path: OPENCODE_BIN,
 			pathSource: 'known-location'
 		});
 		expect(provider(snapshot, 'ollama')).toMatchObject({
@@ -187,11 +187,11 @@ describe('provider discovery', () => {
 
 	it('reads the npm prefix from .npmrc and never spawns npm', async () => {
 		const prefix = join(HOME, 'custom-npm');
-		const codexPath = join(prefix, 'bin', 'codex');
-		const existing = new Set([CLAUDE_LOCAL, codexPath, OLLAMA_USR]);
+		const opencodePath = join(prefix, 'bin', 'opencode');
+		const existing = new Set([CLAUDE_LOCAL, opencodePath, OLLAMA_USR]);
 		const process = versionHandler({
 			[CLAUDE_LOCAL]: { stdout: '2.1.220\n' },
-			[codexPath]: { stdout: '0.145.0\n' },
+			[opencodePath]: { stdout: '1.18.9\n' },
 			[OLLAMA_USR]: { stdout: '0.32.4\n' }
 		});
 		const deps = createDeps({
@@ -203,17 +203,17 @@ describe('provider discovery', () => {
 		});
 
 		const snapshot = await createProviderDiscovery(deps).snapshot();
-		expect(provider(snapshot, 'codex').path).toBe(codexPath);
+		expect(provider(snapshot, 'codex').path).toBe(opencodePath);
 		expect(provider(snapshot, 'codex').pathSource).toBe('known-location');
 		expect(process.calls.every((call) => call.command !== 'npm')).toBe(true);
 	});
 
 	it('uses a sentinel-wrapped login-shell PATH exactly once when known locations miss', async () => {
 		const loginClaude = join(LOGIN_BIN, 'claude');
-		const existing = new Set([loginClaude, CODEX_NPM, OLLAMA_USR]);
+		const existing = new Set([loginClaude, OPENCODE_BIN, OLLAMA_USR]);
 		const process = versionHandler({
 			[loginClaude]: { stdout: '2.1.220\n' },
-			[CODEX_NPM]: { stdout: '0.145.0\n' },
+			[OPENCODE_BIN]: { stdout: '1.18.9\n' },
 			[OLLAMA_USR]: { stdout: '0.32.4\n' }
 		});
 		const deps = createDeps({
@@ -233,7 +233,7 @@ describe('provider discovery', () => {
 	});
 
 	it('login-shell timeout resolves the snapshot and kills the child', async () => {
-		const existing = new Set([CODEX_NPM, OLLAMA_USR]);
+		const existing = new Set([OPENCODE_BIN, OLLAMA_USR]);
 		const children: FakeChild[] = [];
 		const process = fakeSpawnHandler((command, args) => {
 			if (args[0] === '-ilc') {
@@ -262,7 +262,7 @@ describe('provider discovery', () => {
 	});
 
 	it('treats login-shell output without sentinels as failure without throwing', async () => {
-		const existing = new Set([CODEX_NPM, OLLAMA_USR]);
+		const existing = new Set([OPENCODE_BIN, OLLAMA_USR]);
 		const process = fakeSpawnHandler((command, args) => {
 			if (args[0] === '-ilc') {
 				return { stdout: 'direnv: loading\n/home/owner/login-path/bin\n', exitCode: 0 };
@@ -283,10 +283,10 @@ describe('provider discovery', () => {
 	});
 
 	it('strips provider API secrets from the version-probe environment', async () => {
-		const existing = new Set([CLAUDE_LOCAL, CODEX_NPM, OLLAMA_USR]);
+		const existing = new Set([CLAUDE_LOCAL, OPENCODE_BIN, OLLAMA_USR]);
 		const process = versionHandler({
 			[CLAUDE_LOCAL]: { stdout: '2.1.220\n' },
-			[CODEX_NPM]: { stdout: '0.145.0\n' },
+			[OPENCODE_BIN]: { stdout: '1.18.9\n' },
 			[OLLAMA_USR]: { stdout: '0.32.4\n' }
 		});
 		const deps = createDeps({
@@ -316,9 +316,9 @@ describe('provider discovery', () => {
 
 	it('classifies version probe outcomes across exit codes and parseability', async () => {
 		const good = join(HOME, '.local/bin/claude');
-		const garbage = join(HOME, '.local/bin/codex');
+		const garbage = join(HOME, '.opencode/bin/opencode');
 		const bad = '/usr/local/bin/ollama';
-		// Only exercise claude/codex version rules; ollama installedness is daemon-based.
+		// Only exercise claude/opencode version rules; ollama installedness is daemon-based.
 		const existing = new Set([good, garbage]);
 		const process = versionHandler({
 			[good]: { stdout: '2.1.220 (Claude Code)\n', exitCode: 0 },
@@ -363,10 +363,10 @@ describe('provider discovery', () => {
 	});
 
 	it('enumerates live Ollama models from an injected fetch', async () => {
-		const existing = new Set([CLAUDE_LOCAL, CODEX_NPM, OLLAMA_USR]);
+		const existing = new Set([CLAUDE_LOCAL, OPENCODE_BIN, OLLAMA_USR]);
 		const process = versionHandler({
 			[CLAUDE_LOCAL]: { stdout: '2.1.220\n' },
-			[CODEX_NPM]: { stdout: '0.145.0\n' },
+			[OPENCODE_BIN]: { stdout: '1.18.9\n' },
 			[OLLAMA_USR]: { stdout: '0.32.4\n' }
 		});
 		const fetch = vi.fn(
@@ -393,10 +393,10 @@ describe('provider discovery', () => {
 	});
 
 	it('reports ollama not_running with empty models when the daemon is down', async () => {
-		const existing = new Set([CLAUDE_LOCAL, CODEX_NPM, OLLAMA_USR]);
+		const existing = new Set([CLAUDE_LOCAL, OPENCODE_BIN, OLLAMA_USR]);
 		const process = versionHandler({
 			[CLAUDE_LOCAL]: { stdout: '2.1.220\n' },
-			[CODEX_NPM]: { stdout: '0.145.0\n' },
+			[OPENCODE_BIN]: { stdout: '1.18.9\n' },
 			[OLLAMA_USR]: { stdout: '0.32.4\n' }
 		});
 		const deps = createDeps({
@@ -420,10 +420,10 @@ describe('provider discovery', () => {
 	});
 
 	it('single-flights concurrent snapshot calls into one spawn per binary', async () => {
-		const existing = new Set([CLAUDE_LOCAL, CODEX_NPM, OLLAMA_USR]);
+		const existing = new Set([CLAUDE_LOCAL, OPENCODE_BIN, OLLAMA_USR]);
 		const process = versionHandler({
 			[CLAUDE_LOCAL]: { stdout: '2.1.220\n' },
-			[CODEX_NPM]: { stdout: '0.145.0\n' },
+			[OPENCODE_BIN]: { stdout: '1.18.9\n' },
 			[OLLAMA_USR]: { stdout: '0.32.4\n' }
 		});
 		const deps = createDeps({
@@ -499,11 +499,11 @@ describe('provider discovery', () => {
 		const existing = new Set([claudeCmd]);
 		const process = fakeSpawnHandler((command, args) => {
 			if (command === 'where.exe') {
-				if (args[0] === 'codex') return { stdout: 'C:\\Tools\\codex.exe\n', exitCode: 0 };
+				if (args[0] === 'opencode') return { stdout: 'C:\\Tools\\opencode.exe\n', exitCode: 0 };
 				return { stdout: '', exitCode: 1 };
 			}
 			if (args[0] === '--version') {
-				return { stdout: '0.145.0\n', exitCode: 0 };
+				return { stdout: '1.18.9\n', exitCode: 0 };
 			}
 			if (args[0] === '-ilc') {
 				throw new Error('login shell must not run on win32');
@@ -533,7 +533,7 @@ describe('provider discovery', () => {
 			installed: true
 		});
 		expect(provider(snapshot, 'codex')).toMatchObject({
-			path: 'C:\\Tools\\codex.exe',
+			path: 'C:\\Tools\\opencode.exe',
 			pathSource: 'where',
 			installed: true
 		});
@@ -564,7 +564,7 @@ describe('provider discovery', () => {
 				},
 				{
 					name: 'codex' as const,
-					label: 'Codex',
+					label: 'OpenCode',
 					kind: 'cli' as const,
 					installed: false,
 					path: null,

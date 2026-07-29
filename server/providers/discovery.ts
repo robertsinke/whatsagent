@@ -8,7 +8,7 @@ import {
 	type PathSource
 } from './path-resolver.js';
 import type { ClaudeProviderOptions } from './claude.js';
-import type { CodexProviderOptions } from './codex.js';
+import type { OpenCodeProviderOptions } from './opencode.js';
 import type { OllamaProviderOptions } from './ollama.js';
 import {
 	PROVIDER_SECRET_ENV_KEYS,
@@ -81,15 +81,19 @@ export interface ProviderDiscovery {
 	invalidate(): void;
 }
 
+/**
+ * Settings key `codex` is the OpenAI subscription slot. The binary is OpenCode
+ * (empty-toolset drafting); the Codex CLI is no longer a draft vehicle.
+ */
 const BINARY_NAMES: Record<DraftProviderName, string> = {
 	claude: 'claude',
-	codex: 'codex',
+	codex: 'opencode',
 	ollama: 'ollama'
 };
 
 const LABELS: Record<DraftProviderName, string> = {
 	claude: 'Claude',
-	codex: 'Codex',
+	codex: 'OpenCode',
 	ollama: 'Ollama'
 };
 
@@ -152,12 +156,12 @@ export function providerFactoryOptionsFromDiscovery(
 	ollamaBaseUrl = 'http://127.0.0.1:11434'
 ): {
 	claude?: ClaudeProviderOptions;
-	codex?: CodexProviderOptions;
+	codex?: OpenCodeProviderOptions;
 	ollama?: Omit<OllamaProviderOptions, 'model'>;
 } {
 	const options: {
 		claude?: ClaudeProviderOptions;
-		codex?: CodexProviderOptions;
+		codex?: OpenCodeProviderOptions;
 		ollama?: Omit<OllamaProviderOptions, 'model'>;
 	} = {};
 	for (const provider of snapshot.providers) {
