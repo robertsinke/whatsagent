@@ -7,12 +7,13 @@
 	import * as Tabs from '$lib/components/ui/tabs/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import * as Select from '$lib/components/ui/select/index.js';
-	import { ArrowLeft, Check, Radio, RefreshCw, ShieldAlert } from '@lucide/svelte';
+	import { ArrowLeft, Check, Monitor, Moon, Radio, RefreshCw, ShieldAlert, Sun } from '@lucide/svelte';
 	import { api } from '$lib/client/api.js';
 	import type { ProvidersResponse } from '$lib/client/types.js';
 	// OSS-P3.4 — the provider + model control is shared with first-run setup.
 	// Do not re-implement it here; the two screens must not drift apart.
 	import ProviderPicker from '$lib/components/app/ProviderPicker.svelte';
+	import { resetMode, setMode, userPrefersMode } from 'mode-watcher';
 
 	type TextField = {
 		kind: 'text';
@@ -107,6 +108,26 @@
 	let voice = $state<VoiceView | null>(null);
 	let voiceLoading = $state(true);
 	let voiceError = $state<string | null>(null);
+
+	/**
+	 * PL-P1.3 — appearance mode lives in localStorage (mode-watcher's key), not
+	 * the DB. The reason is FOUC: a DB-backed preference needs an async
+	 * api.settings() round-trip after hydration, which guarantees a
+	 * light-then-dark flash on every launch. mode-watcher applies the class via
+	 * an inline head script before first paint, so there is no flash. Do not
+	 * route this through save(key)/api.setSetting.
+	 */
+	type Mode = 'light' | 'dark' | 'system';
+	const APPEARANCE_OPTIONS: { value: Mode; label: string; icon: typeof Sun }[] = [
+		{ value: 'light', label: 'Light', icon: Sun },
+		{ value: 'dark', label: 'Dark', icon: Moon },
+		{ value: 'system', label: 'System', icon: Monitor }
+	];
+
+	function chooseMode(next: Mode) {
+		if (next === 'system') resetMode();
+		else setMode(next);
+	}
 
 	async function loadProviders(refresh = false) {
 		providersLoading = true;
@@ -244,6 +265,7 @@
 				<Tabs.Trigger value="agent">Agent</Tabs.Trigger>
 				<Tabs.Trigger value="safety">Safety</Tabs.Trigger>
 				<Tabs.Trigger value="voice">Voice</Tabs.Trigger>
+				<Tabs.Trigger value="appearance">Appearance</Tabs.Trigger>
 			</Tabs.List>
 
 			<Tabs.Content value="agent" class="panel-content">
@@ -436,6 +458,46 @@
 							run after a handful of conversations.
 						</p>
 					{/if}
+				</div>
+			</Tabs.Content>
+
+			<Tabs.Content value="appearance" class="panel-content">
+				<div class="appearance-card">
+					<div class="appearance-head">
+						<span class="field-label">Theme</span>
+						<p class="appearance-help">
+							Light, Dark, or follow the OS. Stored in your browser, not the app
+							database, so it applies before first paint with no flash. Changing it
+							takes effect immediately across the whole app.
+						</p>
+					</div>
+
+					<div class="appearance-options">
+						{#each APPEARANCE_OPTIONS as opt (opt.value)}
+							<button
+								type="button"
+								class="appearance-option"
+								data-active={userPrefersMode.current === opt.value}
+								aria-pressed={userPrefersMode.current === opt.value}
+								onclick={() => chooseMode(opt.value)}
+							>
+								<opt.icon class="size-4" />
+								<span>{opt.label}</span>
+								{#if userPrefersMode.current === opt.value}
+									<Check class="size-3.5 appearance-check" />
+								{/if}
+							</button>
+						{/each}
+					</div>
+					<p class="muted">
+						{#if userPrefersMode.current === 'system'}
+							Following your OS setting. Switching your OS theme updates this
+							automatically.
+						{:else}
+							Manual override — takes priority over the OS. Switching your OS theme
+							will not change the app until you set this back to System.
+						{/if}
+					</p>
 				</div>
 			</Tabs.Content>
 		</Tabs.Root>
@@ -729,5 +791,59 @@
 		margin: 0;
 		line-height: 1.45;
 		padding: 0.4rem 0;
+	}
+
+	/* PL-P1.3 — appearance tab */
+	.appearance-card {
+		display: flex;
+		flex-direction: column;
+		gap: 0.7rem;
+		padding: 0.7rem 0.8rem;
+		border-radius: var(--radius-md);
+		border: 1px solid var(--hairline);
+		background: var(--surface-raised);
+	}
+	.appearance-head {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+	}
+	.appearance-help {
+		font-size: 0.72rem;
+		color: var(--ink-50);
+		margin: 0;
+		line-height: 1.4;
+	}
+	.appearance-options {
+		display: flex;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+	}
+	.appearance-option {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		padding: 0.5rem 0.75rem;
+		border-radius: var(--radius-md);
+		border: 1px solid var(--hairline);
+		background: var(--surface-sunken);
+		color: var(--ink-80);
+		font-size: 0.82rem;
+		cursor: pointer;
+		transition:
+			border-color 0.15s ease,
+			background 0.15s ease;
+	}
+	.appearance-option:hover {
+		border-color: color-mix(in srgb, var(--accent) 40%, var(--hairline));
+	}
+	.appearance-option[data-active='true'] {
+		border-color: var(--accent);
+		background: color-mix(in srgb, var(--accent) 12%, var(--surface-raised));
+		color: var(--ink-solid);
+		font-weight: 500;
+	}
+	:global(.appearance-check) {
+		color: var(--accent);
 	}
 </style>

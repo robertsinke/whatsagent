@@ -16,7 +16,7 @@
  *      checkout, so `assertNotLiveDbFromWorktree()` takes its "installed copy"
  *      exit and would open the owner's live credentials without complaint.
  */
-import { app, BrowserWindow, shell } from 'electron';
+import { app, BrowserWindow, nativeTheme, shell } from 'electron';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -111,6 +111,27 @@ let window;
 /** Cancels the periodic update check; set once the first window is up. */
 let stopUpdateChecks = () => {};
 
+/**
+ * The window's launch-flash background colour. The main process cannot read
+ * localStorage (the renderer owns the mode preference), so this follows the
+ * OS theme instead: `nativeTheme.shouldUseDarkColors` picks dark (#101418,
+ * matching the token-layer canvas) or light (#e8ebf0) at window creation, and
+ * the 'updated' subscription below keeps it in sync while the app runs.
+ *
+ * Known limitation: a manual appearance override inside the app that disagrees
+ * with the OS gets one frame of the wrong colour at cold start, because the
+ * renderer's inline head script has not applied the class yet when this colour
+ * is set. Adding a preload bridge to read localStorage here would defeat the
+ * no-preload design (the renderer is a sandboxed SPA with no Node access by
+ * design), so we accept the one-frame mismatch rather than compromise the
+ * Origin-validation boundary.
+ */
+// Must track `--bg` in src/app.css for both modes, or the launch frame flashes a
+// colour the app never uses. `#e8ebf0` here was left over from before the
+// neutrals were cooled and did not match any canvas.
+const LIGHT_BG = '#f5f6f8';
+const DARK_BG = '#101418';
+
 function createWindow(url) {
 	window = new BrowserWindow({
 		width: 1280,
@@ -118,7 +139,7 @@ function createWindow(url) {
 		minWidth: 900,
 		minHeight: 600,
 		title: '',
-		backgroundColor: '#e8ebf0',
+		backgroundColor: nativeTheme.shouldUseDarkColors ? DARK_BG : LIGHT_BG,
 		// Standard title bar, deliberately. `hiddenInset` puts the traffic lights
 		// on top of the SPA's own header, which starts its content at x=0 because
 		// in a browser tab nothing else is there. Leave titleBarStyle unset.
@@ -157,6 +178,20 @@ function createWindow(url) {
 
 	void window.loadURL(url);
 }
+
+/**
+ * Keep every window's launch-flash background in sync with the OS theme while
+ * the app runs. When the OS switches light/dark, update the backgroundColor of
+ * any live window so the next cold start (and any resize flash) matches. This
+ * only follows the OS; a manual renderer-side override that disagrees still
+ * gets one frame of the OS colour — see the createWindow limitation note.
+ */
+nativeTheme.on('updated', () => {
+	const bg = nativeTheme.shouldUseDarkColors ? DARK_BG : LIGHT_BG;
+	for (const w of BrowserWindow.getAllWindows()) {
+		w.setBackgroundColor(bg);
+	}
+});
 
 app.whenReady().then(async () => {
 	// Imported here rather than at module scope so the single-instance loser
