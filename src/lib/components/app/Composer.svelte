@@ -139,7 +139,7 @@
 		</div>
 	{/if}
 	<form class="composer-input w-full" onsubmit={handleSubmit}>
-		<InputGroup.Root class="overflow-hidden has-[>textarea]:h-auto">
+		<InputGroup.Root class="composer-field">
 			<div class="contents">
 				<InputGroup.Textarea
 					class="field-sizing-content max-h-48 min-h-16"
@@ -184,6 +184,26 @@
 	}
 	.composer-input :global(textarea) {
 		font-size: 0.88rem;
+	}
+	/* The composer field is cut into the raised conversation surface — a shallow
+	   well (sunken fill + hairline + inset shadow), not a bordered card floating
+	   on it. Focus deepens the well with the cobalt inner glow instead of the
+	   shadcn outer ring, which reads as pasted on top of this surface language.
+	   The InputGroup's own border/ring classes are neutralised here. */
+	.composer-input :global(.composer-field) {
+		background: var(--surface-sunken);
+		border: 1px solid var(--hairline);
+		border-radius: var(--radius-md);
+		box-shadow: var(--shadow-pressed);
+		transition: box-shadow 140ms ease, border-color 140ms ease;
+	}
+	.composer-input :global(.composer-field:focus-within) {
+		border-color: color-mix(in srgb, var(--ring) 45%, var(--hairline));
+		box-shadow: var(--shadow-focus);
+		--tw-ring-shadow: 0 0 #0000;
+	}
+	.composer-input :global(.composer-field[data-slot='input-group']:focus-within) {
+		outline: none;
 	}
 	/* P1.2: the one hero control gets a cobalt-700→600 gradient so the brand
 	   appears on the single most-touched affordance. The class is handed to a
