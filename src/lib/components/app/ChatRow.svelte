@@ -25,6 +25,7 @@
 	type="button"
 	class="chat-row"
 	class:selected
+	data-jid={row.jid}
 	aria-current={selected ? 'true' : undefined}
 	onclick={() => onselect?.(row.jid)}
 >

@@ -3,7 +3,9 @@
 	import * as InputGroup from '$lib/components/ui/input-group/index.js';
 	import { Spinner } from '$lib/components/ui/spinner/index.js';
 	import { senderLabel } from '$lib/client/view.js';
-	import type { Message } from '$lib/client/types.js';
+	import type { Draft, Message, RefinementIntent } from '$lib/client/types.js';
+	import type { StalePrompt } from '$lib/client/state.svelte.js';
+	import DraftStatus from './DraftStatus.svelte';
 
 	let {
 		value = $bindable(''),
@@ -11,7 +13,20 @@
 		placeholder = 'Write a reply…',
 		replyTo = null,
 		ondismissreply,
-		onsend
+		onsend,
+		draft = null,
+		stalePrompt = null,
+		agentEligible = false,
+		refining = false,
+		refineError = null,
+		generating = false,
+		generateError = null,
+		onapprove,
+		onskip,
+		onconfirmstale,
+		ondismissstale,
+		onrefine,
+		ongenerate
 	}: {
 		value?: string;
 		disabled?: boolean;
@@ -19,6 +34,19 @@
 		replyTo?: Message | null;
 		ondismissreply?: () => void;
 		onsend?: (text: string) => boolean | void | Promise<boolean | void>;
+		draft?: Draft | null;
+		stalePrompt?: StalePrompt | null;
+		agentEligible?: boolean;
+		refining?: boolean;
+		refineError?: string | null;
+		generating?: boolean;
+		generateError?: string | null;
+		onapprove?: (text?: string) => boolean | void | Promise<boolean | void>;
+		onskip?: () => void;
+		onconfirmstale?: (text?: string) => boolean | void | Promise<boolean | void>;
+		ondismissstale?: () => void;
+		onrefine?: (intent: RefinementIntent, text?: string) => Promise<Draft | null>;
+		ongenerate?: () => void | Promise<unknown>;
 	} = $props();
 
 	let busy = $state(false);
@@ -73,7 +101,27 @@
 	}
 </script>
 
+<!--
+  One composer surface: draft state is the upper extension, input is the lower
+  region. DraftStatus keeps approve / skip / refine / stale re-confirm / generate
+  behaviour; this shell only owns the shared border.
+-->
 <div class="composer neumorphic-raised">
+	<DraftStatus
+		{draft}
+		{stalePrompt}
+		{agentEligible}
+		{refining}
+		{refineError}
+		{generating}
+		{generateError}
+		{onapprove}
+		{onskip}
+		{onconfirmstale}
+		{ondismissstale}
+		{onrefine}
+		{ongenerate}
+	/>
 	{#if replyTo}
 		<div class="reply-context" role="note" aria-label={`Replying to ${replyAuthor}: ${replyBody}`}>
 			<div class="reply-copy">

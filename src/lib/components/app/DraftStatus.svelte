@@ -8,12 +8,13 @@
 	import type { Draft, RefinementIntent } from '$lib/client/types.js';
 	import type { StalePrompt } from '$lib/client/state.svelte.js';
 	import { canApprove, canRefine, draftBadge, isVisibleDraftStatus } from '$lib/client/view.js';
+	import { draftPanelBranch } from './draft-panel.js';
 	import { refineControlsState } from './refine-controls.js';
 
 	let {
 		draft,
 		stalePrompt = null,
-		/** True for 1:1 chats with no draft — the empty-draft hint is only meaningful where the agent is allowed to act. */
+		/** True for 1:1 chats — generate / empty-draft UI only where the agent may act. */
 		agentEligible = false,
 		/** True while a preview-only refinement request is in flight. */
 		refining = false,
@@ -47,6 +48,7 @@
 
 	const badge = $derived(draft ? draftBadge(draft.status) : null);
 	const visibleDraft = $derived(draft && isVisibleDraftStatus(draft.status) ? draft : null);
+	const branch = $derived(draftPanelBranch({ draft, stalePrompt, agentEligible }));
 	let editing = $state(false);
 	let editedText = $state('');
 	let editingBasis = $state<string | null>(null);
@@ -169,11 +171,11 @@
 
 <svelte:window onkeydown={(event) => event.key === 'Escape' && editing && void closeEditor()} />
 
-{#if stalePrompt}
+{#if branch === 'stale'}
 	<!--
 	  The server returned 409: newer inbound arrived after the draft's basis
 	  message. Approval must be re-confirmed against the refreshed conversation —
-	  the client never decides this itself.
+	  the client never decides this itself. This is a safety gate, not decoration.
 	-->
 	<div class="draft stale">
 		<div class="draft-head">
@@ -194,7 +196,7 @@
 			</Button>
 		</div>
 	</div>
-{:else if visibleDraft}
+{:else if branch === 'visible' && visibleDraft}
 	<div class="draft" class:editing>
 		<div class="draft-head">
 			{#if editing}
@@ -395,11 +397,11 @@
 			</div>
 		{/if}
 	</div>
-{:else if agentEligible && !draft}
+{:else if branch === 'generate'}
 	<div class="draft muted">
 		<div class="draft-head">
-			<Pencil class="size-3.5" />
-			<span class="draft-title">No draft</span>
+			<Sparkles class="size-3.5" />
+			<span class="draft-title">No draft yet</span>
 		</div>
 		<p class="draft-note">
 			The agent will draft here once the latest inbound settles (about a minute after the last
@@ -408,11 +410,13 @@
 		<!--
 		  W4-U15: the automatic path above is a promise, not a gate. The owner can
 		  ask for a draft right now — including in chats the classifier declined
-		  (they spoke last, or the chat was skipped, muted, or went quiet). Asking
-		  for a draft writes a draft row and nothing else; it never sends.
+		  (they spoke last, or the chat was skipped, muted, or went quiet), and
+		  including chats whose prior draft row is already terminal (sent /
+		  skipped / approved). Asking for a draft writes a draft row and nothing
+		  else; it never sends.
 		-->
 		<div class="draft-actions">
-			<Button size="sm" variant="outline" onclick={() => ongenerate?.()} disabled={generating}>
+			<Button size="sm" class="generate-hero" onclick={() => ongenerate?.()} disabled={generating}>
 				<Sparkles class="size-3.5" />
 				{generating ? 'Asking the agent…' : 'Generate draft'}
 			</Button>
@@ -425,29 +429,26 @@
 {/if}
 
 <style>
+	/*
+	  Embedded in Composer: no own card chrome. The composer shell owns the
+	  single border; this region is the upper extension with a soft divider.
+	*/
 	.draft {
 		position: relative;
 		z-index: 2;
-		border-radius: var(--radius-md);
-		border: 1px solid color-mix(in srgb, var(--lime) 35%, var(--hairline));
-		background: color-mix(in srgb, var(--lime) 10%, var(--surface-raised));
-		padding: 0.55rem 0.7rem;
+		padding: 0.15rem 0.15rem 0.55rem;
+		margin: 0 0 0.35rem;
+		border-bottom: 1px solid var(--hairline-soft);
 		display: flex;
 		flex-direction: column;
 		gap: 0.35rem;
 	}
 	.draft.editing {
-		border-color: color-mix(in srgb, var(--lime) 65%, var(--hairline));
-		box-shadow: var(--shadow-bevel);
 		gap: 0;
-	}
-	.draft.muted {
-		border-color: var(--hairline-soft);
-		background: var(--surface-raised);
+		border-bottom-color: color-mix(in srgb, var(--lime) 45%, var(--hairline-soft));
 	}
 	.draft.stale {
-		border-color: color-mix(in srgb, var(--cobalt) 45%, var(--hairline));
-		background: color-mix(in srgb, var(--cobalt) 8%, var(--surface-raised));
+		border-bottom-color: color-mix(in srgb, var(--cobalt) 40%, var(--hairline-soft));
 	}
 	.draft-head {
 		display: flex;
@@ -471,6 +472,10 @@
 		color: var(--ink-90);
 		white-space: pre-wrap;
 		line-height: 1.45;
+		padding: 0.35rem 0.45rem;
+		border-radius: var(--radius-sm);
+		background: color-mix(in srgb, var(--lime) 10%, var(--surface-sunken));
+		border: 1px solid color-mix(in srgb, var(--lime) 28%, var(--hairline));
 	}
 	.draft-note {
 		margin: 0;
@@ -485,6 +490,13 @@
 		align-items: center;
 		gap: 0.35rem;
 		flex-wrap: wrap;
+	}
+	/* Primary action — stays a labelled button, never collapses to an icon. */
+	:global(.generate-hero) {
+		background-image: linear-gradient(135deg, var(--cobalt-700), var(--cobalt-600));
+	}
+	:global(.generate-hero:disabled) {
+		background-image: none;
 	}
 	/* Refinement is visually subordinate to approval: smaller, ghosted, and
 	   separated by a hairline so it never competes with Approve & queue. It
@@ -522,8 +534,8 @@
 		border-top: none;
 		padding-top: 0;
 	}
-	/* Opens upward, over the conversation: the draft card sits directly above the
-	   composer at the bottom of the pane, so a downward panel would render off
+	/* Opens upward, over the conversation: the draft region sits directly above
+	   the input at the bottom of the pane, so a downward panel would render off
 	   screen. Height is capped against the viewport and the textarea — not the
 	   action row — absorbs the overflow, so cancel/approve stay reachable
 	   without scrolling the shell. */
