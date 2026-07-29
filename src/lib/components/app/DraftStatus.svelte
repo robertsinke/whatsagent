@@ -491,9 +491,19 @@
 		gap: 0.35rem;
 		flex-wrap: wrap;
 	}
-	/* Primary action — stays a labelled button, never collapses to an icon. */
+	/* Primary action — stays a labelled button, never collapses to an icon.
+	   Keyboard focus uses the approved neumorphic cobalt inner glow: the
+	   catalog Button's focus-visible:ring paints as transparent no-ops here
+	   (computed box-shadow of three zero rings), so without this override the
+	   control is focusable with no visible indicator. */
 	:global(.generate-hero) {
 		background-image: linear-gradient(135deg, var(--cobalt-700), var(--cobalt-600));
+	}
+	:global(.generate-hero:focus-visible) {
+		outline: none;
+		border-color: color-mix(in srgb, var(--ring) 55%, transparent);
+		box-shadow: var(--shadow-focus) !important;
+		--tw-ring-shadow: 0 0 #0000;
 	}
 	:global(.generate-hero:disabled) {
 		background-image: none;

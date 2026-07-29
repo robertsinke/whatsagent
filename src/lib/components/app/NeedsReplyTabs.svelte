@@ -68,20 +68,23 @@
 	/* Keyboard focus shows the same cobalt inner glow as the search field and
 	   the textarea. :focus-visible (not :focus) so a mouse-clicked tab keeps
 	   its raised bevel and does not light up — the selected state is the
-	   affordance there. The headless capture harness cannot trigger
-	   :focus-visible (it needs real keyboard input), so this is verified by
-	   the structurally identical search-field and textarea focus shots, which
-	   use the same --shadow-focus token. */
-	:global(.tab-trigger:focus-visible) {
-		outline: none;
-		border-color: color-mix(in srgb, var(--ring) 45%, transparent);
-		box-shadow: var(--shadow-focus);
-		--tw-ring-shadow: 0 0 #0000;
-	}
+	   affordance there. Arrow-key navigation both focuses AND activates a tab
+	   (bits-ui roving tabindex), so the focused tab is always [data-state=active]
+	   too: the combined selector must outrank the bare active rule AND the
+	   catalog trigger's data-active:shadow-sm utility, or the bevel/sm shadow
+	   wins and the focus glow never paints. !important is the reliable beat
+	   against Tailwind utilities on the same property. */
 	:global(.tab-trigger[data-state='active']) {
 		background: var(--surface-raised);
 		border-color: var(--hairline);
 		box-shadow: var(--shadow-bevel);
+	}
+	:global(.tab-trigger:focus-visible),
+	:global(.tab-trigger[data-state='active']:focus-visible) {
+		outline: none;
+		border-color: color-mix(in srgb, var(--ring) 45%, transparent);
+		box-shadow: var(--shadow-focus) !important;
+		--tw-ring-shadow: 0 0 #0000;
 	}
 	.tab-label {
 		overflow: hidden;
