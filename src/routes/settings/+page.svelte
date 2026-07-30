@@ -1172,11 +1172,25 @@
 		   holds, so the item still grows to min-content. Declaring the
 		   shorthand sets both axes explicitly AND pairs with `min-width: 0`
 		   below to kill the flex auto-min — the same idiom as .field-select.
-		   The max-width:720px ceiling is unchanged (it is a ceiling that gets
-		   hit, not the cause). */
+
+		   PANEL-S9 raised this ceiling from 720px to 1100px. The old 720px cap
+		   forced a tall single column that hit a vertical scroll almost
+		   immediately on a typical 1400px+ window; 1100px keeps a comfortable
+		   margin on a 27" display (not full-bleed) while leaving room for the
+		   two-column field layout below to actually engage. The overflow /
+		   min-width guards below are unchanged — they protect the Voice tab's
+		   Milkdown from horizontal blow-out, and removing them would regress
+		   that even at the new width. */
 		overflow: auto;
 		min-width: 0;
-		max-width: 720px;
+		/* `width: 100%` makes the cross-axis actually fill before the ceiling
+		   caps it. Without it, `margin: 0 auto` on a flex column item collapses
+		   the page to its content's intrinsic width (auto margins absorb the
+		   extra space instead of stretching) — so raising max-width alone did
+		   nothing, and the form stayed narrow regardless of the ceiling. The
+		   auto margins still center once width hits the cap. */
+		width: 100%;
+		max-width: 1100px;
 		margin: 0 auto;
 		padding: 1.25rem;
 		display: flex;
@@ -1212,8 +1226,16 @@
 		   page background, rounded bottom edge and all. Pre-existing (the Voice
 		   tab already overflowed by ~90px); PANEL-S1 made it obvious because the
 		   Agent tab grew past the viewport too. `.page` already scrolls, so the
-		   fix is to stop shrinking and let it. */
+		   fix is to stop shrinking and let it.
+
+		   PANEL-S9: this is also the container-query anchor for the two-column
+		   field layout (control left, help right). Container query — not a
+		   media query — because what matters is the width the panel actually
+		   has, not the window: same precedent and reason as NeedsReplyTabs /
+		   ChatList. `inline-size` (not `size`) so height overflow does not
+		   suppress the query. */
 		flex-shrink: 0;
+		container-type: inline-size;
 	}
 	:global(.settings-tabs) {
 		width: 100%;
@@ -1235,9 +1257,57 @@
 		border-bottom: 1px solid var(--hairline);
 	}
 	.field {
-		display: flex;
-		flex-direction: column;
+		/* PANEL-S9 — grid so the field can switch from a single tall stack
+		   (label / control / help) to a two-column layout (control left, help
+		   right) inside the .settings-body container query. Grid areas let
+		   the source order stay as-is; only the template moves. Default is the
+		   narrow single-column stack, matching the pre-PANEL-S9 layout
+		   exactly so a 720px panel collapses cleanly rather than breaking. */
+		display: grid;
+		grid-template-columns: 1fr;
+		grid-template-areas: 'label' 'row' 'help';
 		gap: 0.25rem;
+	}
+	.field > .field-label {
+		grid-area: label;
+	}
+	.field > .field-row {
+		grid-area: row;
+	}
+	.field > .field-help {
+		grid-area: help;
+	}
+	/* At ~720px+ of panel width the help text moves to the right column and
+	   the control takes the left. That — not the ceiling alone — is what
+	   removes the scroll: the tallest sections were label/row/help stacks,
+	   and sitting help beside the control instead of under it roughly halves
+	   their height. The break point is on the *container* (the settings body),
+	   so a panel that gets narrowed (split view, small window) collapses back
+	   to one column without a media query that only knows the window width. */
+	@container (min-width: 720px) {
+		.field {
+			grid-template-columns: minmax(0, 1fr) minmax(0, 0.92fr);
+			grid-template-areas:
+				'label help'
+				'row   help';
+			column-gap: 1.1rem;
+			/* Keep the label/control stack tight; the gap to the help column
+			   comes from column-gap. The row gap between label and row stays
+			   the narrow 0.25rem so the control still reads as belonging to
+			   its label. */
+			row-gap: 0.25rem;
+			align-items: start;
+		}
+		.field > .field-help {
+			/* Help sits at the top of its column, aligned with the label,
+		   rather than centered against the combined label+row height —
+		   which would push it down and read as detached. */
+			align-self: start;
+			/* Slight top inset so the help baseline roughly meets the label
+		   baseline rather than the label's taller icon box; matches the
+		   optical offset .field-label's inline-flex icon gap implies. */
+			padding-top: 0.1rem;
+		}
 	}
 	.field-label {
 		font-size: 0.8rem;
