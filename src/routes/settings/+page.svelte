@@ -730,7 +730,12 @@
 										{/each}
 									</Select.Content>
 								</Select.Root>
-								<Button size="sm" variant="outline" onclick={() => save('panel_harness')}>
+								<Button
+									size="sm"
+									variant="outline"
+									data-testid="panel-harness-save"
+									onclick={() => save('panel_harness')}
+								>
 									{#if saved === 'panel_harness'}
 										<Check class="size-3.5" /> Saved
 									{:else}
@@ -752,7 +757,12 @@
 									placeholder="harness default"
 									class="field-input"
 								/>
-								<Button size="sm" variant="outline" onclick={() => save('panel_model')}>
+								<Button
+									size="sm"
+									variant="outline"
+									data-testid="panel-model-save"
+									onclick={() => save('panel_model')}
+								>
 									{#if saved === 'panel_model'}
 										<Check class="size-3.5" /> Saved
 									{:else}
