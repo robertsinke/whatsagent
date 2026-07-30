@@ -32,6 +32,11 @@ export type AgentTurn = {
 	parts: AgentPart[];
 	/** True until a matching `step-finish` has been seen. */
 	inFlight: boolean;
+	/**
+	 * PANEL-S3 — correlation id for the owner echo. Taken from the opening
+	 * `step-start` when present, otherwise from the first body part.
+	 */
+	messageId: string | null;
 };
 
 /**
@@ -49,10 +54,20 @@ export function groupTurns(parts: readonly AgentPart[]): AgentTurn[] {
 			// Flush any stray parts collected before this step into their own turn
 			// so they are not silently merged into the step that follows.
 			if (stray.length > 0) {
-				turns.push({ id: `stray-${stray[0]!.partId}`, parts: stray, inFlight: false });
+				turns.push({
+					id: `stray-${stray[0]!.partId}`,
+					parts: stray,
+					inFlight: false,
+					messageId: stray[0]!.messageId
+				});
 				stray = [];
 			}
-			current = { id: part.partId, parts: [], inFlight: true };
+			current = {
+				id: part.partId,
+				parts: [],
+				inFlight: true,
+				messageId: part.messageId
+			};
 			turns.push(current);
 			continue;
 		}
@@ -63,19 +78,30 @@ export function groupTurns(parts: readonly AgentPart[]): AgentTurn[] {
 			} else {
 				// A finish with no open step — render it as a closed stray turn so
 				// the boundary is visible rather than swallowed.
-				turns.push({ id: part.partId, parts: [part], inFlight: false });
+				turns.push({
+					id: part.partId,
+					parts: [part],
+					inFlight: false,
+					messageId: part.messageId
+				});
 			}
 			continue;
 		}
 		if (current) {
 			current.parts.push(part);
+			if (!current.messageId) current.messageId = part.messageId;
 		} else {
 			stray.push(part);
 		}
 	}
 
 	if (stray.length > 0) {
-		turns.push({ id: `stray-${stray[0]!.partId}`, parts: stray, inFlight: false });
+		turns.push({
+			id: `stray-${stray[0]!.partId}`,
+			parts: stray,
+			inFlight: false,
+			messageId: stray[0]!.messageId
+		});
 	}
 	return turns;
 }
@@ -212,4 +238,62 @@ export function panelEmptyState(status: { available: boolean }): PanelEmptyState
 		body: 'Turn it on in Settings → Agent and pick a harness. It can read your chats and draft replies for you; it can never send.',
 		placeholder: 'Enable the agent panel in Settings'
 	};
+}
+
+/**
+ * PANEL-S3 — the owner's prompt for one turn, echoed locally at submit time.
+ * Panel history is in-memory only; nothing persists across reload.
+ */
+export type OwnerEcho = {
+	messageId: string;
+	text: string;
+};
+
+/**
+ * One row in the panel transcript: the owner's message for a turn, then that
+ * turn's agent parts. Built so ordering is owner → reply → owner → reply across
+ * turns, never all owners stacked above all replies.
+ */
+export type PanelTimelineEntry =
+	| { kind: 'owner'; messageId: string; text: string }
+	| { kind: 'turn'; messageId: string; turn: AgentTurn };
+
+/**
+ * Interleave owner echoes with the agent turns that share their messageId.
+ * Echoes with no parts yet still render (optimistic). Turns whose messageId was
+ * never echoed (dev emitter, older sessions) still render so nothing is dropped.
+ */
+export function panelTimeline(
+	parts: readonly AgentPart[],
+	ownerEchoes: readonly OwnerEcho[]
+): PanelTimelineEntry[] {
+	const turns = groupTurns(parts);
+	const turnsByMessage = new Map<string, AgentTurn[]>();
+	for (const turn of turns) {
+		const messageId = turn.messageId ?? turn.id;
+		const list = turnsByMessage.get(messageId) ?? [];
+		list.push(turn);
+		turnsByMessage.set(messageId, list);
+	}
+
+	const out: PanelTimelineEntry[] = [];
+	const seen = new Set<string>();
+
+	for (const echo of ownerEchoes) {
+		out.push({ kind: 'owner', messageId: echo.messageId, text: echo.text });
+		seen.add(echo.messageId);
+		for (const turn of turnsByMessage.get(echo.messageId) ?? []) {
+			out.push({ kind: 'turn', messageId: echo.messageId, turn });
+		}
+	}
+
+	// Turns that never got an owner echo (scripted demos) still need a home.
+	for (const [messageId, group] of turnsByMessage) {
+		if (seen.has(messageId)) continue;
+		for (const turn of group) {
+			out.push({ kind: 'turn', messageId, turn });
+		}
+	}
+
+	return out;
 }

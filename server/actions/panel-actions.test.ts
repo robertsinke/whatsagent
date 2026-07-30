@@ -74,6 +74,7 @@ function fakePanel(
 			cancelled += 1;
 			return true;
 		},
+		clearHistory: () => ({ cancelled: cancelled > 0, sessionId: 'panel-cleared' }),
 		status: () => ({ running: false, sessionId: null, messageId: null, harness: null }),
 		...overrides
 	} as PanelSessionRuntime & { started: string[]; cancelled: number };
@@ -488,6 +489,43 @@ describe('cancel-agent-turn is frontend only', () => {
 	});
 });
 
+describe('clear-agent-panel is frontend only', () => {
+	it('refuses a tool caller', async () => {
+		const panel = fakePanel();
+		const deps = makeDeps({ panelSession: panel });
+		expect(
+			await dispatch(actionRegistry, 'clear-agent-panel', {}, { caller: 'tool', deps })
+		).toMatchObject({ kind: 'error', status: 403 });
+	});
+
+	it('is absent from the tool list', () => {
+		const names = listActionsForCaller(actionRegistry, 'tool').map((a) => a.name);
+		expect(names).not.toContain('clear-agent-panel');
+	});
+
+	it('clears for the frontend and reports the new session id', async () => {
+		let cleared = 0;
+		const deps = makeDeps({
+			panelSession: fakePanel({
+				clearHistory: () => {
+					cleared += 1;
+					return { cancelled: false, sessionId: 'panel-fresh' };
+				}
+			})
+		});
+		const result = await dispatch(actionRegistry, 'clear-agent-panel', {}, {
+			caller: 'frontend',
+			deps
+		});
+		expect(result).toMatchObject({ kind: 'json', status: 200 });
+		expect((result as { body: Record<string, unknown> }).body).toMatchObject({
+			cleared: true,
+			nextSessionId: 'panel-fresh'
+		});
+		expect(cleared).toBe(1);
+	});
+});
+
 describe('the caller policies U7 must not have weakened', () => {
 	it('still refuses every outbound and owner-only action for a tool caller', () => {
 		// Three of these were deliberate owner decisions; if U7 had needed to relax
@@ -507,7 +545,8 @@ describe('the caller policies U7 must not have weakened', () => {
 			'discard-voice-suggestion',
 			'agent-demo',
 			'agent-turn',
-			'cancel-agent-turn'
+			'cancel-agent-turn',
+			'clear-agent-panel'
 		]) {
 			expect(toolNames.has(refused), `${refused} must not be tool-callable`).toBe(false);
 		}

@@ -78,15 +78,114 @@ describe('AppState agent panel', () => {
 		expect(state.agentError).toBe('A turn is already running.');
 	});
 
-	it('refuses to send when the panel is unavailable or already running', async () => {
+	it('refuses to send when the panel is unavailable or the text is empty', async () => {
 		const state = new AppState();
 		const fetchSpy = vi.spyOn(globalThis, 'fetch');
-		expect(await state.sendAgentTurn('x')).toBe(false);
-		state.agent = { ...AVAILABLE, running: true };
 		expect(await state.sendAgentTurn('x')).toBe(false);
 		state.agent = AVAILABLE;
 		expect(await state.sendAgentTurn('   ')).toBe(false);
 		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it('cancels a running turn then starts when the owner submits again (steering)', async () => {
+		const state = new AppState();
+		state.agent = { ...AVAILABLE, running: true, messageId: 'm-old', sessionId: 's1' };
+		const calls: string[] = [];
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.endsWith('/agent/cancel')) {
+				calls.push('cancel');
+				return jsonResponse({
+					cancelled: true,
+					running: false,
+					sessionId: null,
+					messageId: null,
+					harness: 'opencode'
+				});
+			}
+			if (url.endsWith('/agent/turn')) {
+				calls.push('turn');
+				return jsonResponse(
+					{ status: 'running', session_id: 's1', message_id: 'm-new', harness: 'opencode' },
+					202
+				);
+			}
+			throw new Error(`unexpected ${url}`);
+		});
+
+		expect(await state.sendAgentTurn('steer me')).toBe(true);
+		expect(calls).toEqual(['cancel', 'turn']);
+		expect(state.agent.messageId).toBe('m-new');
+		expect(state.agentOwnerEchoes).toEqual([{ messageId: 'm-new', text: 'steer me' }]);
+	});
+
+	it('echoes the owner prompt keyed by the started message id', async () => {
+		const state = new AppState();
+		state.agent = AVAILABLE;
+		vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+			jsonResponse(
+				{ status: 'running', session_id: 's1', message_id: 'm1', harness: 'opencode' },
+				202
+			)
+		);
+		expect(await state.sendAgentTurn('hello')).toBe(true);
+		expect(state.agentOwnerEchoes).toEqual([{ messageId: 'm1', text: 'hello' }]);
+	});
+
+	it('ignores a finished event from a cancelled turn after a new one started', () => {
+		const state = new AppState();
+		state.agent = {
+			...AVAILABLE,
+			running: true,
+			sessionId: 's1',
+			messageId: 'm-new'
+		};
+		state.applyEvent({
+			type: 'agent-turn',
+			phase: 'finished',
+			sessionId: 's1',
+			messageId: 'm-old',
+			harness: 'opencode',
+			reason: 'Turn cancelled.'
+		});
+		expect(state.agent.running).toBe(true);
+		expect(state.agent.messageId).toBe('m-new');
+		expect(state.agentError).toBeNull();
+	});
+
+	it('clearAgentPanel empties sessions and owner echoes', async () => {
+		const state = new AppState();
+		state.agent = { ...AVAILABLE, running: true, sessionId: 's1', messageId: 'm1' };
+		state.agentOwnerEchoes = [{ messageId: 'm1', text: 'hi' }];
+		state.agentSessions = {
+			s1: {
+				sessionId: 's1',
+				parts: [
+					{
+						kind: 'text',
+						sessionId: 's1',
+						messageId: 'm1',
+						partId: 'p1',
+						text: 'hello'
+					}
+				]
+			}
+		};
+		vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+			jsonResponse({
+				cleared: true,
+				cancelled: true,
+				nextSessionId: 'panel-new',
+				running: false,
+				sessionId: null,
+				messageId: null,
+				harness: 'opencode'
+			})
+		);
+		expect(await state.clearAgentPanel()).toBe(true);
+		expect(state.agentSessions).toEqual({});
+		expect(state.agentOwnerEchoes).toEqual([]);
+		expect(state.agent.running).toBe(false);
 	});
 
 	it('takes running state from the agent-turn lifecycle event, not from the parts', () => {

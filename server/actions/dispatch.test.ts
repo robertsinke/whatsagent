@@ -253,7 +253,9 @@ describe('action registry dispatch', () => {
 			// guarded, and this assertion is the only thing that fails if a future
 			// change widens them.
 			'agent-turn',
-			'cancel-agent-turn'
+			'cancel-agent-turn',
+			// PANEL-S3: an agent that could wipe the transcript could hide what it did.
+			'clear-agent-panel'
 		]) {
 			expect(toolNames).not.toContain(banned);
 		}

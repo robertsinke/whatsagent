@@ -5,6 +5,7 @@ import { agentTurnAction } from './agent-turn.js';
 import { approveDraftAction } from './approve-draft.js';
 import { cancelAgentTurnAction } from './cancel-agent-turn.js';
 import { cancelOutboxAction } from './cancel-outbox.js';
+import { clearAgentPanelAction } from './clear-agent-panel.js';
 import { confirmProposalAction } from './confirm-proposal.js';
 import { deepenHistoryAction } from './deepen-history.js';
 import { discardVoiceSuggestionAction } from './discard-voice-suggestion.js';
@@ -37,6 +38,7 @@ const actions: ActionDefinition<unknown>[] = [
 	approveDraftAction as ActionDefinition<unknown>,
 	cancelAgentTurnAction as ActionDefinition<unknown>,
 	cancelOutboxAction as ActionDefinition<unknown>,
+	clearAgentPanelAction as ActionDefinition<unknown>,
 	confirmProposalAction as ActionDefinition<unknown>,
 	deepenHistoryAction as ActionDefinition<unknown>,
 	discardVoiceSuggestionAction as ActionDefinition<unknown>,

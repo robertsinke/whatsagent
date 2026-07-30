@@ -208,9 +208,36 @@ describe('PanelSessionManager', () => {
 		manager.start('long one');
 		await vi.waitFor(() => expect(manager.status().running).toBe(true));
 		expect(manager.cancel()).toBe(true);
-		await vi.waitFor(() => expect(manager.status().running).toBe(false));
+		// PANEL-S3 — slot is free immediately so steering can start without waiting
+		// for the aborted turn to finish unwinding.
+		expect(manager.status().running).toBe(false);
+		await vi.waitFor(() => expect(seen.at(-1)).toMatchObject({ phase: 'finished' }));
 		expect(sawAbort).toBe(true);
 		expect(seen.at(-1)).toMatchObject({ phase: 'finished', reason: 'Turn cancelled.' });
+	});
+
+	it('allows start immediately after cancel (owner steering)', async () => {
+		const seenTurns: string[] = [];
+		const { manager } = makeManager(
+			fakeHarness(async function* (turn, signal) {
+				seenTurns.push(turn.text);
+				if (turn.text === 'first') {
+					await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve()));
+					throw new PanelTurnError('cancelled', 'Turn cancelled');
+				}
+				yield {
+					kind: 'text',
+					sessionId: turn.sessionId,
+					messageId: turn.messageId,
+					partId: 'p',
+					text: 'ok'
+				};
+			})
+		);
+		manager.start('first');
+		expect(manager.cancel()).toBe(true);
+		expect(() => manager.start('second')).not.toThrow();
+		await vi.waitFor(() => expect(seenTurns).toContain('second'));
 	});
 
 	it('cancel with nothing running is false, not an error', () => {

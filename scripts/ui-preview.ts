@@ -62,6 +62,12 @@
  *     an empty pane. Requires PREVIEW_AGENT_PANEL. PREVIEW_AGENT_TURN_DELAY_MS
  *     (default 2500) is how long after boot it fires. It still cannot send: the
  *     agent's only route toward one is a proposal the owner must confirm.
+ *   PREVIEW_PANEL_FIXTURE=1
+ *     PANEL-S3 — arms the panel with an in-process fixture harness (no real model
+ *     binary). Yields a markdown capability list so screenshots can prove list
+ *     rendering, owner-echo ordering, and a live composer. Optional
+ *     PREVIEW_PANEL_FIXTURE_DELAY_MS holds the turn mid-flight for the Stop +
+ *     enabled-composer capture.
  *
  * It also covers what live data cannot. The owner's real database holds four
  * quoted messages — all of them plain text — and zero reactions, because
@@ -91,6 +97,8 @@ import type { DraftProvider, DraftResult } from '../server/providers/provider.js
 import { createDefaultProviderDiscovery } from '../server/providers/discovery.js';
 import { createPreviewChannel, isPreviewSessionMode } from './preview-channel.js';
 import { isPanelHarnessId } from '../server/agent/panel/index.js';
+import type { PanelHarness } from '../server/agent/panel/harness.js';
+import type { AgentPart } from '../shared/agent-events.js';
 import {
 	createPreviewProviderDiscovery,
 	isPreviewProvidersMode
@@ -577,6 +585,65 @@ if (panelHarness && !isPanelHarnessId(panelHarness)) {
 }
 
 /**
+ * PANEL-S3 — in-process fixture harness for visual evidence. No binary, no
+ * subscription call. Yields the capability-list markdown the owner first saw as
+ * raw asterisks, so a capture proves the renderer.
+ */
+const panelFixture = process.env.PREVIEW_PANEL_FIXTURE === '1';
+const panelFixtureDelayMs = Number(process.env.PREVIEW_PANEL_FIXTURE_DELAY_MS ?? 0);
+const CAPABILITY_MARKDOWN = `I can help with WhatsApp chats. Here's what I can do:
+
+- **Open a chat** and catch you up
+- **Draft a reply** in your voice
+- **Shorten or refine** a draft
+- List chats that need a reply`;
+
+function createPanelFixtureHarness(): PanelHarness {
+	return {
+		id: 'opencode',
+		async *run(turn, signal): AsyncGenerator<AgentPart> {
+			yield {
+				kind: 'step-start',
+				sessionId: turn.sessionId,
+				messageId: turn.messageId,
+				partId: `${turn.messageId}-start`
+			};
+			if (panelFixtureDelayMs > 0 && !signal.aborted) {
+				await new Promise<void>((resolve) => {
+					const t = setTimeout(resolve, panelFixtureDelayMs);
+					signal.addEventListener(
+						'abort',
+						() => {
+							clearTimeout(t);
+							resolve();
+						},
+						{ once: true }
+					);
+				});
+				if (signal.aborted) return;
+			}
+			const reply =
+				turn.history.length === 0
+					? CAPABILITY_MARKDOWN
+					: `Got it — you said: **${turn.text}**.`;
+			yield {
+				kind: 'text',
+				sessionId: turn.sessionId,
+				messageId: turn.messageId,
+				partId: `${turn.messageId}-text`,
+				text: reply
+			};
+			yield {
+				kind: 'step-finish',
+				sessionId: turn.sessionId,
+				messageId: turn.messageId,
+				partId: `${turn.messageId}-end`
+			};
+		}
+	};
+}
+
+/**
  * PANEL-S2 removed the state a `PREVIEW_AGENT_PANEL_SAVED` switch used to
  * photograph: "saved in Settings but this process started without it" cannot
  * happen now that the write reconciles the runtime. The two remaining states
@@ -626,17 +693,25 @@ const app = createApp({
   providerDiscovery: discovery,
   // Both or neither: the panel is unusable with /mcp off, and enabling /mcp
   // without a harness would only advertise a surface nothing drives.
-  ...(panelHarness && isPanelHarnessId(panelHarness)
+  ...(panelFixture
     ? {
         mcp: true as const,
         panel: {
-          harness: panelHarness,
-          ...(process.env.PREVIEW_AGENT_MODEL
-            ? { model: process.env.PREVIEW_AGENT_MODEL }
-            : {})
+          harness: 'opencode' as const,
+          harnessImpl: createPanelFixtureHarness()
         }
       }
-    : {})
+    : panelHarness && isPanelHarnessId(panelHarness)
+      ? {
+          mcp: true as const,
+          panel: {
+            harness: panelHarness,
+            ...(process.env.PREVIEW_AGENT_MODEL
+              ? { model: process.env.PREVIEW_AGENT_MODEL }
+              : {})
+          }
+        }
+      : {})
 });
 
 // PL-U3 — a pending proposal to photograph. Inserted directly rather than
@@ -692,7 +767,7 @@ if (process.env.PREVIEW_AGENT_EDIT === '1' && !sessionMode) {
  * not by reaching into the session manager, so what is photographed is the same
  * path the composer uses.
  */
-if (process.env.PREVIEW_AGENT_TURN && panelHarness) {
+if (process.env.PREVIEW_AGENT_TURN && (panelHarness || panelFixture)) {
 	const text = process.env.PREVIEW_AGENT_TURN;
 	setTimeout(() => {
 		void fetch(`http://127.0.0.1:${app.port}/api/agent/turn`, {
