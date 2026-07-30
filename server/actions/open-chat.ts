@@ -6,7 +6,7 @@ import { actionError, actionJson, parseError } from './types.js';
 export type OpenChatInput = { chatJid: string };
 
 /**
- * PANEL-S4 — both callers. Owner principle: user and agent are both
+ * PANEL-S4/S7 — both callers. Owner principle: user and agent are both
  * first-class, so any action a user can take an agent can take — defined ONCE
  * here, exposed through both the UI and the agent tool surface. This is the
  * single definition of "focus a chat"; it changes UI focus and nothing else.
@@ -22,22 +22,14 @@ export type OpenChatInput = { chatJid: string };
  *
  * `markRead` is deliberately false on the client side of this event. Opening a
  * chat by looking at it must not silently clear the unread badge; `mark-read`
- * is already its own explicit action.
+ * is already its own explicit action. PANEL-S7 split `AppState.openChat` into
+ * load-only (`openChat`) plus an explicit `markRead`, so the owner's chat-list
+ * click now dispatches this action (via REST) and then `mark-read` — two
+ * registry actions, both available to either caller. The agent dispatches this
+ * action alone, never `mark-read`.
  *
  * Groups are allowed. R8 excludes groups from *drafting*, not from the shell;
  * the owner can open a group chat by hand and so may the agent.
- *
- * ENTANGLEMENT NOTE (reported to orchestrator): the chat-list UI click does
- * NOT currently route through this action. It calls `app.openChat(jid)`
- * directly client-side, which marks read by default — that mark-read IS the
- * owner's explicit "I'm reading this now" action, and it is entangled with
- * message loading and the read cursor in `AppState.openChat`. Forcing the UI
- * click through this action would change the owner's click to no longer mark
- * read, which is a behavior change for the owner, not a refactor. So the UI
- * path is left as-is; this action is the single *server* definition, available
- * to both callers, and the agent is the first consumer. A future task that
- * wants the UI click to go through the registry should split "open" (load) from
- * "mark read" (the owner action) first — see the execution report.
  */
 export const openChatAction: ActionDefinition<OpenChatInput> = {
 	name: 'open-chat',

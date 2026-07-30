@@ -91,6 +91,19 @@ export const api = {
 		request<Chat>(`/chats/${encodeURIComponent(jid)}/read`, { method: 'POST' }),
 
 	/**
+	 * PANEL-S7 — dispatch the `open-chat` registry action. The server emits a
+	 * `focus-chat` event over the WebSocket, which the client reducer routes
+	 * into `AppState.openChat` (load-only, never marks read). The owner's click
+	 * then dispatches `mark-read` separately, so loading and marking read are
+	 * two independent registry actions rather than one fused client call.
+	 */
+	openChat: (jid: string) =>
+		request<{ jid: string; name: string | null }>(
+			`/chats/${encodeURIComponent(jid)}/open`,
+			{ method: 'POST' }
+		),
+
+	/**
 	 * Owner-triggered on-demand history deepen. Asks the phone for older
 	 * messages via Baileys `fetchMessageHistory` (server route POST
 	 * `/api/chats/:jid/history/deepen`). Returns 202 on acceptance; the rows are

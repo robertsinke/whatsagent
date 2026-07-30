@@ -14,7 +14,7 @@
  * `agent-part-updated` and `client-command` events through the real EventBus so
  * a human (or screenshot harness) can watch the client react.
  */
-import type { AgentPart, ClientCommand } from '../../shared/agent-events.js';
+import type { AgentPart } from '../../shared/agent-events.js';
 import type { EventBus, ServerEvent } from './events.js';
 
 /** Preview fixture chat — seeded by `scripts/ui-preview.ts`. */
@@ -29,8 +29,14 @@ function partEvent(part: AgentPart, delta?: string): ServerEvent {
 		: { type: 'agent-part-updated', part, delta };
 }
 
-function commandEvent(command: ClientCommand): ServerEvent {
-	return { type: 'client-command', command };
+/**
+ * PANEL-S7 — the harness now emits `focus-chat`, the same event production
+ * uses (the `open-chat` registry action emits it). The old `client-command`
+ * `open-chat` duplicate was retired: it was emitted only from here, and a demo
+ * that exercises a path production does not take is worse than no demo.
+ */
+function focusChatEvent(jid: string, name: string | null = null): ServerEvent {
+	return { type: 'focus-chat', jid, name };
 }
 
 export type AgentDemoOptions = {
@@ -145,8 +151,10 @@ export function startAgentDemoSequence(
 		partEvent({ kind: 'step-finish', sessionId: SESSION, messageId: MESSAGE, partId: 'part-step-1-end' })
 	);
 
-	// Drive the real shell: open the preview chat via the client-command channel.
-	schedule(next(), commandEvent({ type: 'open-chat', jid: openChatJid }));
+	// Drive the real shell: focus the preview chat via the same event the
+	// `open-chat` registry action emits in production. PANEL-S7 retired the
+	// `client-command` `open-chat` duplicate that used to live here.
+	schedule(next(), focusChatEvent(openChatJid));
 
 	return () => {
 		cancelled = true;

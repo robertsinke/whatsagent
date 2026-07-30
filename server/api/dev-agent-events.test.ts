@@ -18,7 +18,7 @@ describe('dev agent event emitter', () => {
 		expect(isDevAgentEventsEnabled()).toBe(false);
 	});
 
-	it('emits agent parts then an open-chat command through the EventBus', async () => {
+	it('emits agent parts then a focus-chat event through the EventBus', async () => {
 		const bus = new EventBus();
 		const types: string[] = [];
 		bus.subscribe((e) => types.push(e.type));
@@ -28,8 +28,11 @@ describe('dev agent event emitter', () => {
 		cancel();
 
 		expect(types.filter((t) => t === 'agent-part-updated').length).toBeGreaterThanOrEqual(4);
-		expect(types).toContain('client-command');
+		// PANEL-S7 — the harness now emits focus-chat (the production event the
+		// open-chat registry action emits), not the retired client-command
+		// open-chat duplicate.
+		expect(types).toContain('focus-chat');
 		const last = types.at(-1);
-		expect(last).toBe('client-command');
+		expect(last).toBe('focus-chat');
 	});
 });

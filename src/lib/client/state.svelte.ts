@@ -351,26 +351,35 @@ export class AppState {
 			this.agent = agent;
 			// Session and chats have now both been seen — first-run can be decided.
 			this.hydrated = true;
-			if (this.selectedJid) {
-				await this.openChat(this.selectedJid, {
-					markRead: false,
-					preserveDeepenStatus: options.preserveDeepenStatus
-				});
-			}
+		if (this.selectedJid) {
+			await this.openChat(this.selectedJid, {
+				preserveDeepenStatus: options.preserveDeepenStatus
+			});
+		}
 		} catch (err) {
 			this.error = describeError(err);
 		}
 	}
 
+	/**
+	 * PANEL-S7 — load a conversation into the pane. This is focus-only: it
+	 * fetches the message window, snapshots the unread boundary, and loads the
+	 * draft. It NEVER marks the chat read. Marking read is a separate act
+	 * (`markRead`) — the owner's explicit "I have seen this", which is also
+	 * visible to the contact as a read receipt once that path is wired. An
+	 * agent looking at a chat must not clear the unread badge as a side effect,
+	 * so loading and marking read are reachable independently rather than
+	 * fused behind a boolean that changes what this method does.
+	 */
 	async openChat(
 		jid: string,
-		options: { markRead?: boolean; preserveDeepenStatus?: boolean } = {}
+		options: { preserveDeepenStatus?: boolean } = {}
 	): Promise<void> {
 		const epoch = ++this.#conversationEpoch;
 		// A same-chat reopen (refresh, deepen, post-409 reload) must not restate the
 		// unread snapshot — by then the chat is already read and the count is 0.
 		const chatChanged = this.selectedJid !== jid;
-		const resnapshotUnread = chatChanged || options.markRead !== false;
+		const resnapshotUnread = chatChanged;
 		const chatBeforeOpen = this.chats.find((c) => c.jid === jid);
 		const unreadBeforeOpen = chatBeforeOpen?.unread ?? 0;
 		const cursorBeforeOpen = chatBeforeOpen?.last_read_msg_id ?? null;
@@ -427,8 +436,8 @@ export class AppState {
 				// placement for chats that have never been opened locally since
 				// migration 010 — the boundary never regresses.
 				// When preserving the window, resnapshotUnread is false on the
-				// resync path (markRead: false) so the boundary stays put; a
-				// chat switch still derives against the fresh page below.
+				// resync path so the boundary stays put; a chat switch still
+				// derives against the fresh page below.
 				this.unreadBoundary = cursorBeforeOpen
 					? deriveUnreadBoundaryFromCursor(messages, cursorBeforeOpen, unreadBeforeOpen)
 					: deriveUnreadBoundary(messages, unreadBeforeOpen);
@@ -437,15 +446,30 @@ export class AppState {
 			if (epoch !== this.#conversationEpoch || this.selectedJid !== jid) return;
 			this.draft = draft;
 			this.#observeDraft(draft);
-			if (options.markRead !== false) {
-				const updated = await api.markRead(jid);
-				if (epoch !== this.#conversationEpoch || this.selectedJid !== jid) return;
-				this.#mergeChat(updated);
-			}
 		} catch (err) {
 			this.error = describeError(err);
 		} finally {
 			if (epoch === this.#conversationEpoch) this.loadingMessages = false;
+		}
+	}
+
+	/**
+	 * PANEL-S7 — the owner's explicit "I have seen this" act. Advances the
+	 * server-side read cursor (the `mark-read` registry action) and merges the
+	 * returned chat so the unread badge clears. Separate from `openChat` so an
+	 * agent focusing a chat (via the `open-chat` action's `focus-chat` event)
+	 * never clears the badge as a side effect of looking.
+	 *
+	 * Safe to call on its own — the chat need not be the selected one, and a
+	 * missing jid is a no-op. The `chat-updated` event the action also emits is
+	 * an idempotent merge, so a duplicate from the WebSocket is harmless.
+	 */
+	async markRead(jid: string): Promise<void> {
+		try {
+			const updated = await api.markRead(jid);
+			this.#mergeChat(updated);
+		} catch (err) {
+			this.error = describeError(err);
 		}
 	}
 
@@ -804,7 +828,7 @@ export class AppState {
 			basisMsgId: (err.body.basis_msg_id as string) ?? null,
 			latestInboundId: (err.body.latest_inbound_id as string) ?? null
 		};
-		await this.openChat(jid, { markRead: false });
+		await this.openChat(jid);
 		if (this.selectedJid === jid) this.stalePrompt = stalePrompt;
 		return false;
 	}
@@ -922,10 +946,10 @@ export class AppState {
 				// running. Preserve the visible preview and reload current state
 				// rather than applying the late result.
 				this.refineError = 'Draft changed while refining — your text is preserved. Try again.';
-				await this.openChat(jid, { markRead: false });
+				await this.openChat(jid);
 			} else if (err instanceof ApiError && err.status === 404) {
 				this.refineError = 'Draft is no longer available.';
-				await this.openChat(jid, { markRead: false });
+				await this.openChat(jid);
 			} else {
 				this.refineError = describeError(err);
 			}
@@ -1029,7 +1053,7 @@ export class AppState {
 			this.deepenStatus = { kind: 'success', at: Date.now() };
 			// The phone delivers older messages asynchronously; refresh once to
 			// surface anything that landed between request and response.
-			await this.openChat(jid, { markRead: false, preserveDeepenStatus: true });
+			await this.openChat(jid, { preserveDeepenStatus: true });
 		} catch (err) {
 			this.deepenStatus = { kind: 'error', at: Date.now() };
 			this.error = describeError(err);
@@ -1085,7 +1109,7 @@ export class AppState {
 				this.#reviewedDraftHash.delete(event.jid);
 				if (this.textConflict?.chatJid === event.jid) this.textConflict = null;
 				if (this.selectedJid === event.jid) {
-					void this.openChat(event.merged_into, { markRead: false });
+					void this.openChat(event.merged_into);
 				}
 				return;
 			case 'message-new':
@@ -1195,15 +1219,16 @@ export class AppState {
 					harness: event.harness
 				};
 				return;
-			case 'focus-chat':
-				// PANEL-S4 — open the chat the agent pointed at, but never mark it
-				// read. A tool that clears the unread badge as a side effect of
-				// looking would surprise the owner; `mark-read` is the explicit
-				// action for that. Fire-and-forget like `client-command`'s
-				// `open-chat`: `openChat` owns its own epoch guards so a late
-				// completion for a chat the owner already left cannot corrupt state.
-				void this.openChat(event.jid, { markRead: false });
-				return;
+		case 'focus-chat':
+			// PANEL-S4/S7 — focus the chat the agent (or the owner's click,
+			// dispatched through the `open-chat` registry action) pointed at.
+			// `openChat` is load-only and never marks read: a tool that clears
+			// the unread badge as a side effect of looking would surprise the
+			// owner, and `mark-read` is the explicit action for that.
+			// Fire-and-forget: `openChat` owns its own epoch guards so a late
+			// completion for a chat the owner already left cannot corrupt state.
+			void this.openChat(event.jid);
+			return;
 			case 'client-command':
 				this.#applyClientCommand(event.command);
 				return;
@@ -1348,9 +1373,6 @@ export class AppState {
 	 */
 	#applyClientCommand(command: import('./types.js').ClientCommand): void {
 		switch (command.type) {
-			case 'open-chat':
-				void this.openChat(command.jid);
-				return;
 			case 'select-reply': {
 				const message = this.messages.find((m) => m.id === command.messageId);
 				if (message) this.selectReply(message);
