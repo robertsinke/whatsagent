@@ -1,6 +1,7 @@
 import {
 	ApiError,
 	type AgentCancelResult,
+	type AgentClearResult,
 	type AgentStatus,
 	type CancellationNotice,
 	type Chat,
@@ -163,6 +164,9 @@ export const api = {
 
 	/** PL-U7 — stop the running turn. Idempotent: no turn is a 200, not an error. */
 	cancelAgentTurn: () => request<AgentCancelResult>('/agent/cancel', { method: 'POST' }),
+
+	/** PANEL-S3 — wipe the panel transcript (cancels first if a turn is running). */
+	clearAgentPanel: () => request<AgentClearResult>('/agent/clear', { method: 'POST' }),
 
 	/** PL-U3 — pending proposals, for the first paint after a reload. */
 	proposals: () => request<{ items: SendProposal[] }>('/proposals'),

@@ -55,8 +55,8 @@ export class PanelSessionManager {
 	private readonly events: EventBus;
 	private readonly harness: PanelHarness;
 	private readonly newId: () => string;
-	/** Stable across turns so the panel keeps one transcript per app lifetime. */
-	private readonly sessionId: string;
+	/** Stable across turns so the panel keeps one transcript per app lifetime — until clear. */
+	private sessionId: string;
 	/**
 	 * RETENTION IS BOUNDED BY THE RENDER BOUND, deliberately the same constant.
 	 * `renderHistory` never looks past the last {@link MAX_HISTORY_TURNS} entries,
@@ -71,6 +71,11 @@ export class PanelSessionManager {
 	 */
 	private history: PanelTurnSummary[] = [];
 	private current: { start: PanelTurnStart; controller: AbortController } | null = null;
+	/**
+	 * PANEL-S3 — messageIds whose parts must not reach the EventBus. Set when the
+	 * owner clears mid-turn so the aborted turn cannot repopulate an emptied pane.
+	 */
+	private suppressedMessageIds = new Set<string>();
 
 	constructor(options: PanelSessionManagerOptions) {
 		this.events = options.events;
@@ -109,16 +114,34 @@ export class PanelSessionManager {
 		return start;
 	}
 
-	/** Cancel the running turn, if any. Returns whether there was one. */
+	/**
+	 * Cancel the running turn, if any. Returns whether there was one.
+	 *
+	 * PANEL-S3 — frees the single-flight slot immediately so a follow-up
+	 * `start()` (owner steering) is not refused while the aborted turn is still
+	 * unwinding. `drive`'s finally already refuses to wipe a newer turn.
+	 */
 	cancel(): boolean {
 		if (!this.current) return false;
-		this.current.controller.abort();
+		const { controller } = this.current;
+		this.current = null;
+		controller.abort();
 		return true;
 	}
 
-	/** Owner-visible reset: drop the rendered history so the next turn starts cold. */
-	clearHistory(): void {
+	/**
+	 * Owner-visible reset: drop the rendered history so the next turn starts cold.
+	 * Cancels any in-flight turn first, suppresses its leftover parts, and rotates
+	 * the session id so the client can empty its transcript without the abort
+	 * stream writing back into it.
+	 */
+	clearHistory(): { cancelled: boolean; sessionId: string } {
+		const running = this.current;
+		const cancelled = this.cancel();
+		if (running) this.suppressedMessageIds.add(running.start.messageId);
 		this.history = [];
+		this.sessionId = `panel-${this.newId()}`;
+		return { cancelled, sessionId: this.sessionId };
 	}
 
 	async stop(): Promise<void> {
@@ -155,10 +178,15 @@ export class PanelSessionManager {
 			failure = describeTurnError(error);
 		} finally {
 			if (failure !== undefined) this.emitFailure(start, failure);
-			this.history = [
-				...this.history,
-				{ prompt: text, reply: [...replies.values()].filter(Boolean).join('\n').trim() }
-			].slice(-MAX_HISTORY_TURNS);
+			// A cleared transcript must not keep the aborted prompt in the next
+			// turn's history — skip retention when this message was suppressed.
+			if (!this.suppressedMessageIds.has(start.messageId)) {
+				this.history = [
+					...this.history,
+					{ prompt: text, reply: [...replies.values()].filter(Boolean).join('\n').trim() }
+				].slice(-MAX_HISTORY_TURNS);
+			}
+			this.suppressedMessageIds.delete(start.messageId);
 			// Only clear if this is still the current turn — a cancel followed by a
 			// fast new start must not have its state wiped by the old turn unwinding.
 			if (this.current?.start.messageId === start.messageId) this.current = null;
@@ -172,6 +200,7 @@ export class PanelSessionManager {
 	}
 
 	private emit(part: AgentPart): void {
+		if (this.suppressedMessageIds.has(part.messageId)) return;
 		this.events.emit({ type: 'agent-part-updated', part });
 	}
 

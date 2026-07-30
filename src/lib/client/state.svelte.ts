@@ -219,6 +219,11 @@ export class AppState {
 	 */
 	agentSessions = $state<Record<string, AgentSessionView>>({});
 	/**
+	 * PANEL-S3 — owner prompts echoed at submit time, keyed in insertion order.
+	 * Panel history is in-memory only; nothing persists across reload.
+	 */
+	agentOwnerEchoes = $state<{ messageId: string; text: string }[]>([]);
+	/**
 	 * PL-U7 — whether the panel has a runtime, and whether a turn is in flight.
 	 * `available: false` is the shipped default (the MCP surface is off), and the
 	 * composer must stay disabled in that case rather than look wired.
@@ -227,10 +232,16 @@ export class AppState {
 	 * owner's own submit, before any part has arrived — otherwise the composer
 	 * would stay enabled for the second or two a harness takes to spawn, and a
 	 * fast second Enter would earn a 409 the owner did nothing to deserve.
+	 *
+	 * PANEL-S3 — submitting while running cancels then starts (steering). The
+	 * optimistic lock still covers the spawn window; it no longer blocks typing
+	 * or a replacement submit.
 	 */
 	agent = $state<AgentStatus>(UNAVAILABLE_AGENT);
 	/** Last panel failure, shown in the composer rather than as a global error. */
 	agentError = $state<string | null>(null);
+	/** Session ids discarded by clear — ignore late parts from an aborted turn. */
+	#discardedAgentSessions = new Set<string>();
 
 	#realtime: Realtime | undefined;
 	#conversationEpoch = 0;
@@ -1149,17 +1160,40 @@ export class AppState {
 				// PL-U7 — the only authoritative "is a turn running?" signal; the parts
 				// cannot answer it (see the event's own comment). `available` is not
 				// touched: it is a configuration fact, not turn state.
+				//
+				// PANEL-S3 — a cancel-then-start leaves the aborted turn's `finished`
+				// event in flight. Applying it would unlock the composer (and paint a
+				// "Turn cancelled" error) under the new turn — ignore mismatched ids.
+				if (event.phase === 'finished') {
+					if (this.agent.messageId && event.messageId !== this.agent.messageId) {
+						return;
+					}
+					// After cancel frees the slot immediately, status already cleared
+					// messageId. A trailing "Turn cancelled." must not paint as an error
+					// when the owner stopped (or cleared) on purpose.
+					if (!this.agent.running && !this.agent.messageId) {
+						if (event.reason && event.reason !== 'Turn cancelled.') {
+							this.agentError = event.reason;
+						}
+						return;
+					}
+					this.agent = {
+						...this.agent,
+						running: false,
+						sessionId: event.sessionId,
+						messageId: event.messageId,
+						harness: event.harness
+					};
+					this.agentError = event.reason ?? null;
+					return;
+				}
 				this.agent = {
 					...this.agent,
-					running: event.phase === 'started',
+					running: true,
 					sessionId: event.sessionId,
 					messageId: event.messageId,
 					harness: event.harness
 				};
-				if (event.phase === 'finished') {
-					// A normal finish clears the last error; a failed one names itself.
-					this.agentError = event.reason ?? null;
-				}
 				return;
 			case 'client-command':
 				this.#applyClientCommand(event.command);
@@ -1183,10 +1217,24 @@ export class AppState {
 	 * a 409 from the server we trust the server and stay running; on any other
 	 * failure we release, because a turn that never started must not leave the
 	 * composer locked.
+	 *
+	 * PANEL-S3 — submitting while a turn is running cancels that turn first, then
+	 * starts the new one. The client serialises this; the server still refuses a
+	 * second concurrent turn (no queue).
 	 */
 	async sendAgentTurn(text: string): Promise<boolean> {
 		const trimmed = text.trim();
-		if (!trimmed || !this.agent.available || this.agent.running) return false;
+		if (!trimmed || !this.agent.available) return false;
+
+		if (this.agent.running) {
+			await this.cancelAgentTurn();
+			// Cancel frees the server slot immediately; if the response still claimed
+			// running we would only get a 409 — release locally so steering can proceed.
+			if (this.agent.running) {
+				this.agent = { ...this.agent, running: false };
+			}
+		}
+
 		this.agentError = null;
 		this.agent = { ...this.agent, running: true };
 		try {
@@ -1204,6 +1252,10 @@ export class AppState {
 				messageId: started.message_id,
 				harness: started.harness
 			};
+			this.agentOwnerEchoes = [
+				...this.agentOwnerEchoes,
+				{ messageId: started.message_id, text: trimmed }
+			];
 			return true;
 		} catch (err) {
 			if (err instanceof ApiError && err.status === 409) {
@@ -1230,6 +1282,36 @@ export class AppState {
 	}
 
 	/**
+	 * PANEL-S3 — wipe the panel transcript. Cancels any in-flight turn first
+	 * (server-side) and drops local echoes / parts so the pane empties.
+	 */
+	async clearAgentPanel(): Promise<boolean> {
+		if (!this.agent.available) return false;
+		try {
+			const result = await api.clearAgentPanel();
+			for (const id of Object.keys(this.agentSessions)) {
+				this.#discardedAgentSessions.add(id);
+			}
+			// Also discard the pre-clear session id if we still know it.
+			if (this.agent.sessionId) this.#discardedAgentSessions.add(this.agent.sessionId);
+			this.agentSessions = {};
+			this.agentOwnerEchoes = [];
+			this.agentError = null;
+			this.agent = {
+				...this.agent,
+				running: false,
+				sessionId: null,
+				messageId: null,
+				...(result.harness !== undefined ? { harness: result.harness } : {})
+			};
+			return true;
+		} catch (err) {
+			this.agentError = describeError(err);
+			return false;
+		}
+	}
+
+	/**
 	 * Accumulate a streaming agent part. Unknown kinds are ignored so a future
 	 * server can ship a new kind without crashing older clients. Text rules:
 	 * see {@link upsertAgentPart} / {@link mergeAgentText} in shared/.
@@ -1237,6 +1319,7 @@ export class AppState {
 	#applyAgentPart(part: AgentPart | { kind: string }, delta?: string): void {
 		if (!isKnownAgentPartKind(part.kind)) return;
 		const known = part as AgentPart;
+		if (this.#discardedAgentSessions.has(known.sessionId)) return;
 		const existing = this.agentSessions[known.sessionId];
 		const parts = upsertAgentPart(existing?.parts ?? [], known, delta);
 		this.agentSessions = {

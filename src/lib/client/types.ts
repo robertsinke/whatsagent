@@ -184,6 +184,13 @@ export type AgentCancelResult = Omit<AgentStatus, 'available'> & {
 	cancelled: boolean;
 };
 
+/** PANEL-S3 — wipe the in-memory panel transcript. */
+export type AgentClearResult = Omit<AgentStatus, 'available'> & {
+	cleared: boolean;
+	cancelled: boolean;
+	nextSessionId: string;
+};
+
 /**
  * PL-U3 — a send the agent asked for. It is not queued and never will be
  * unless the owner confirms it; `confirm-proposal` is frontend-only precisely

@@ -175,6 +175,8 @@ export type PanelSessionRuntime = {
 		messageId: string | null;
 		harness: string | null;
 	};
+	/** PANEL-S3 — wipe history (and cancel any in-flight turn). */
+	clearHistory: () => { cancelled: boolean; sessionId: string };
 };
 
 const MIME: Record<string, string> = {
@@ -454,6 +456,11 @@ async function handleApi(
 
 	if (path === '/api/agent/cancel' && method === 'POST') {
 		await dispatchAction(deps, res, 'cancel-agent-turn', {});
+		return;
+	}
+
+	if (path === '/api/agent/clear' && method === 'POST') {
+		await dispatchAction(deps, res, 'clear-agent-panel', {});
 		return;
 	}
 

@@ -3,15 +3,18 @@
 	import MessageContent from '$lib/components/ai-elements/message-content.svelte';
 	import Shimmer from '$lib/components/ai-elements/shimmer.svelte';
 	import { scrollActivity } from '$lib/actions/scroll-activity.svelte.js';
-	import { CornerDownLeft, Sparkles, Square, Wrench, TriangleAlert } from '@lucide/svelte';
+	import { CornerDownLeft, Eraser, Sparkles, Square, Wrench, TriangleAlert } from '@lucide/svelte';
 	import * as InputGroup from '$lib/components/ui/input-group/index.js';
 	import { Spinner } from '$lib/components/ui/spinner/index.js';
+	import * as Dialog from '$lib/components/ui/dialog/index.js';
+	import { Button } from '$lib/components/ui/button/index.js';
 	import type { AppState } from '$lib/client/state.svelte.js';
+	import AgentMarkdown from './AgentMarkdown.svelte';
 	import {
-		groupTurns,
 		hasActiveSessions,
 		isTurnInFlight,
 		panelEmptyState,
+		panelTimeline,
 		toolArgSummary,
 		toolResultSummary,
 		toolStateLabel
@@ -36,56 +39,43 @@
 	 *
 	 * RENDERING. The scroll region renders `AppState.agentSessions` — the real
 	 * event stream accumulated by `state.svelte.ts` from `agent-part-updated`
-	 * WS events. The placeholder transcript is gone. Sessions are grouped into
-	 * turns by `step-start` / `step-finish` markers; text parts stream as
-	 * prose; tool parts render as a compact, legible line each with their
-	 * result available. The tool trace IS the interesting output for a meta
-	 * agent whose job is taking actions, so it reads like "opened Boris chat,
-	 * generated a draft, shortened it" as it happens — not a wall of raw JSON
-	 * and not a spinner that hides what is happening.
+	 * WS events. Sessions are grouped into turns; PANEL-S3 interleaves the
+	 * owner's local-echo prompts so ordering is owner → reply across turns.
+	 * Agent text is markdown (safe node render, never raw HTML).
 	 *
-	 * THE INPUT IS WIRED (PL-U7). `submit` below calls `app.sendAgentTurn`,
-	 * which POSTs the owner's text to the frontend-only `agent-turn` action; the
-	 * reply streams back through the same `agent-part-updated` channel this pane
-	 * already renders, so nothing about the rendering path changed.
-	 *
-	 * It is still disabled when there is nothing to send to. `app.agent.available`
-	 * is false whenever the `/mcp` surface is off, which is the shipped default:
-	 * the panel is opt-in, and PANEL-S1 made the opt-in a Settings toggle rather
-	 * than an env var no packaged app could ever receive. PANEL-S2 made that
-	 * toggle take effect immediately, so "off" is the only disabled state left
-	 * and `panelEmptyState` says where to switch it on. It is not left looking
-	 * broken, and the old "(not wired)" placeholder is gone: it would now be a
-	 * lie in the configured case.
+	 * THE INPUT IS WIRED (PL-U7). `submit` below calls `app.sendAgentTurn`.
+	 * PANEL-S3: the composer stays typable while a turn runs; submitting then
+	 * cancels and starts (steering). Stop still works alone.
 	 */
 
 	let { app }: { app: AppState } = $props();
 
-	// Sessions in stable insertion order; the most recent session last (matches
-	// how the dev emitter and a future runtime append).
 	const sessions = $derived(Object.values(app.agentSessions));
-	const anyActive = $derived(hasActiveSessions(app.agentSessions));
-	// True while any turn is mid-flight — drives the header shimmer so a glance
-	// at the rail tells the owner the agent is working.
+	const anyActive = $derived(
+		hasActiveSessions(app.agentSessions) || app.agentOwnerEchoes.length > 0
+	);
 	const working = $derived(
-		sessions.some((s) => groupTurns(s.parts).some((t) => isTurnInFlight(t)))
+		sessions.some((s) =>
+			panelTimeline(s.parts, []).some((e) => e.kind === 'turn' && isTurnInFlight(e.turn))
+		)
 	);
 
+	/** Flat timeline across sessions (normally one) with owner echoes interleaved. */
+	const timeline = $derived.by(() => {
+		const parts = sessions.flatMap((s) => s.parts);
+		return panelTimeline(parts, app.agentOwnerEchoes);
+	});
+
 	let value = $state('');
+	let clearConfirmOpen = $state(false);
 
 	const available = $derived(app.agent.available);
 	const running = $derived(app.agent.running);
-	/**
-	 * PANEL-S1 — empty-state and placeholder copy for the three configuration
-	 * states. Selected by a pure function so the wording is asserted in a test
-	 * rather than only ever read off a screenshot.
-	 */
 	const emptyState = $derived(panelEmptyState(app.agent));
-	// `working` (derived from the parts) and `running` (the turn lifecycle event)
-	// are different facts: a turn is running from the moment the owner submits,
-	// but there are no parts to shimmer over until the harness produces one.
 	const busy = $derived(running || working);
-	const canSubmit = $derived(available && !running && value.trim().length > 0);
+	/** PANEL-S3 — always submittable when there is text; running no longer blocks. */
+	const canSubmit = $derived(available && value.trim().length > 0);
+	const canClear = $derived(available && (anyActive || running));
 
 	function handleKeydown(e: KeyboardEvent) {
 		if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
@@ -93,12 +83,6 @@
 		(e.currentTarget as HTMLTextAreaElement).form?.requestSubmit();
 	}
 
-	/**
-	 * PL-U7 — the join point PL-U4 left marked. The text is cleared optimistically
-	 * so the composer is ready for the next instruction, and restored if the turn
-	 * was refused: retyping a rejected instruction is a worse outcome than a
-	 * briefly-repopulated field.
-	 */
 	async function submit(e: Event) {
 		e.preventDefault();
 		const text = value.trim();
@@ -110,6 +94,11 @@
 
 	function cancel() {
 		void app.cancelAgentTurn();
+	}
+
+	async function confirmClear() {
+		const ok = await app.clearAgentPanel();
+		if (ok) clearConfirmOpen = false;
 	}
 </script>
 
@@ -126,28 +115,56 @@
 				{app.agent.harness ?? 'ready'}
 			{/if}
 		</span>
+		{#if canClear}
+			<button
+				type="button"
+				class="agent-clear"
+				aria-label="Clear conversation"
+				data-testid="agent-clear"
+				onclick={() => (clearConfirmOpen = true)}
+			>
+				<Eraser class="size-3.5" />
+			</button>
+		{/if}
 	</header>
 
 	<div class="agent-scroll scrollbar-contextual" use:scrollActivity>
 		{#if !anyActive}
-			<!-- The normal resting state: no session yet. Not an error. -->
 			<div class="agent-empty" data-testid="agent-empty">
 				<Sparkles class="size-5 empty-icon" />
-				<!-- Honest, and specific enough to act on: every not-running variant
-				     names Settings → Agent, which is somewhere a double-clicked .app
-				     can actually go. Copy lives in `panelEmptyState`. -->
 				<p class="empty-title" data-panel-state={emptyState.state}>{emptyState.title}</p>
 				<p class="empty-body">{emptyState.body}</p>
 			</div>
 		{:else}
-			{#each sessions as session (session.sessionId)}
-				{@const turns = groupTurns(session.parts)}
-				{#each turns as turn (turn.id)}
-					<div class="turn" class:in-flight={isTurnInFlight(turn)} data-testid="agent-turn">
+			{#each timeline as entry, i (entry.kind === 'owner' ? `owner-${entry.messageId}` : entry.turn.id)}
+				{#if entry.kind === 'owner'}
+					{@const prev = timeline[i - 1]}
+					<div
+						class="turn owner-turn"
+						class:turn-sep={prev !== undefined}
+						data-testid="agent-owner-message"
+						data-message-id={entry.messageId}
+					>
+						<Message from="user">
+							<MessageContent>{entry.text}</MessageContent>
+						</Message>
+					</div>
+				{:else}
+					{@const turn = entry.turn}
+					{@const prev = timeline[i - 1]}
+					<div
+						class="turn"
+						class:in-flight={isTurnInFlight(turn)}
+						class:turn-sep={prev !== undefined && prev.kind === 'turn'}
+						data-testid="agent-turn"
+						data-message-id={entry.messageId}
+					>
 						{#each turn.parts as part (part.partId)}
 							{#if part.kind === 'text'}
 								<Message from="assistant">
-									<MessageContent>{part.text}</MessageContent>
+									<MessageContent>
+										<AgentMarkdown source={part.text} />
+									</MessageContent>
 								</Message>
 							{:else if part.kind === 'tool'}
 								{@const result = toolResultSummary(part)}
@@ -189,24 +206,11 @@
 							</Message>
 						{/if}
 					</div>
-				{/each}
+				{/if}
 			{/each}
 		{/if}
 	</div>
 
-	<!--
-	  Panel input — pinned to the bottom of the pane and grows upward. A fixed
-	  flex child below the scroll viewport (the same shape as .conv-foot), so it
-	  stays on screen at any viewport height and never drifts up the column.
-	  The textarea auto-grows with field-sizing-content up to a max, then
-	  scrolls internally — the conversation composer's approach.
-
-	  PL-U7: live. Disabled only when there is genuinely nothing to send to
-	  (`available` false — the panel is switched off) or while a turn is in flight,
-	  in which case the submit button becomes a stop button. One turn runs at a
-	  time and a second is refused rather than queued, so offering send during a
-	  turn would only produce a 409.
-	-->
 	<form class="agent-input" onsubmit={submit}>
 		{#if app.agentError}
 			<p class="agent-error" role="status" data-testid="agent-error">
@@ -222,7 +226,8 @@
 					placeholder={emptyState.placeholder}
 					bind:value
 					onkeydown={handleKeydown}
-					disabled={!available || running}
+					disabled={!available}
+					data-testid="agent-composer"
 				/>
 			</div>
 			<InputGroup.Addon align="block-end" class="justify-end gap-1">
@@ -233,35 +238,46 @@
 						type="button"
 						variant="default"
 						class="agent-hero"
+						data-testid="agent-stop"
 						onclick={cancel}
 					>
 						<Square class="size-3.5" />
 					</InputGroup.Button>
-				{:else}
-					<InputGroup.Button
-						aria-label="Submit"
-						size="icon-sm"
-						type="submit"
-						variant="default"
-						class="agent-hero"
-						disabled={!canSubmit}
-					>
-						<CornerDownLeft class="size-4" />
-					</InputGroup.Button>
 				{/if}
+				<InputGroup.Button
+					aria-label="Submit"
+					size="icon-sm"
+					type="submit"
+					variant="default"
+					class="agent-hero"
+					data-testid="agent-submit"
+					disabled={!canSubmit}
+				>
+					<CornerDownLeft class="size-4" />
+				</InputGroup.Button>
 			</InputGroup.Addon>
 		</InputGroup.Root>
 	</form>
 </section>
 
+<Dialog.Root bind:open={clearConfirmOpen}>
+	<Dialog.Content class="agent-clear-dialog" data-testid="agent-clear-dialog">
+		<Dialog.Header>
+			<Dialog.Title>Clear conversation?</Dialog.Title>
+			<Dialog.Description>
+				This removes the panel transcript. Nothing is saved — there is no undo.
+			</Dialog.Description>
+		</Dialog.Header>
+		<Dialog.Footer>
+			<Button variant="outline" onclick={() => (clearConfirmOpen = false)}>Cancel</Button>
+			<Button variant="destructive" data-testid="agent-clear-confirm" onclick={confirmClear}>
+				Clear
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
 <style>
-	/* Owns the full pane layout. The `.pane` flex-column rules live in
-	   +page.svelte's scoped styles and do not cross into this component, so
-	   this is the structural mirror of `.pane` + `.list` from ChatList.svelte:
-	   position relative, container-type inline-size, flex column, full height,
-	   the same surround (0.6rem) and gap (0.5rem) as the other panes. The
-	   recessed surface (sunken fill + inset shadow) is kept from PL-A2 — two
-	   recessed rails flank one raised conversation. */
 	.agent-pane {
 		position: relative;
 		container-type: inline-size;
@@ -298,12 +314,24 @@
 	.agent-sub.working {
 		color: var(--cobalt);
 	}
-	/* The flexible scrolling middle — mirrors .rows in ChatList.svelte: flex 1,
-	   min-height 0, overflow-y auto. Absorbs all spare height and scrolls
-	   internally when the transcript is long, so a long conversation never
-	   pushes the input off screen and a short one never leaves it floating.
-	   Uses the scrollbar-contextual utility like every other scroller in the
-	   app, so the bar is hidden at rest. */
+	.agent-clear {
+		flex: none;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 1.5rem;
+		height: 1.5rem;
+		margin-left: 0.15rem;
+		border: none;
+		border-radius: var(--radius-md);
+		background: transparent;
+		color: var(--ink-50);
+		cursor: pointer;
+	}
+	.agent-clear:hover {
+		color: var(--ink-90);
+		background: color-mix(in srgb, var(--ink-50) 12%, transparent);
+	}
 	.agent-scroll {
 		flex: 1;
 		min-height: 0;
@@ -313,7 +341,6 @@
 		gap: 0.55rem;
 		padding: 0.75rem 0.9rem;
 	}
-	/* Empty state — the normal resting state, not an error. Centred and quiet. */
 	.agent-empty {
 		flex: 1;
 		display: flex;
@@ -341,24 +368,16 @@
 		margin: 0;
 		max-width: 22rem;
 	}
-	/* A turn is a run of parts bounded by step markers. The gap between turns
-	   is wider than the gap between parts inside one, so the reader sees step
-	   boundaries as rhythm, not as noise. */
 	.turn {
 		display: flex;
 		flex-direction: column;
 		gap: 0.35rem;
 	}
-	.turn + .turn {
+	.turn.turn-sep {
 		margin-top: 0.35rem;
 		padding-top: 0.55rem;
 		border-top: 1px solid var(--hairline-soft);
 	}
-	/* The compact tool line — the point most likely to be underdone. One row,
-	   readable at a glance: icon · name · arg · state · result. The state
-	   carries colour so a glance distinguishes done from running from failed
-	   without reading the word. The result sits at the right when there is one,
-	   available but not shouted. */
 	.tool-line {
 		display: flex;
 		align-items: center;
@@ -423,10 +442,6 @@
 	.tool-line[data-state='error'] .tool-icon {
 		color: var(--destructive);
 	}
-	/* The input is a fixed flex child below the scroll viewport — the same
-	   shape as .conv-foot in the conversation pane — so it stays pinned to the
-	   bottom of the pane at all times and never drifts up the column. The top
-	   hairline matches the left rail's .list-footer treatment. */
 	.agent-input {
 		flex: none;
 		padding: 0.5rem 0.5rem 0.35rem;
@@ -435,9 +450,6 @@
 	.agent-input :global(textarea) {
 		font-size: 0.82rem;
 	}
-	/* Turn failures belong next to the input that caused them, not in the global
-	   error banner — a harness that is not installed is a panel problem, not an
-	   app problem. */
 	.agent-error {
 		display: flex;
 		align-items: center;
@@ -447,7 +459,6 @@
 		line-height: 1.35;
 		color: var(--destructive);
 	}
-	/* Same well treatment as the composer field, cut into the sunken surface. */
 	.agent-input :global(.agent-field) {
 		background: var(--surface-sunken);
 		border: 1px solid var(--hairline);

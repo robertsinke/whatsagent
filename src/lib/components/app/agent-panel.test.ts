@@ -8,6 +8,7 @@ import {
 	hasActiveSessions,
 	isTurnInFlight,
 	panelEmptyState,
+	panelTimeline,
 	toolArgSummary,
 	toolResultSummary,
 	toolStateLabel
@@ -200,6 +201,36 @@ describe('hasActiveSessions', () => {
 		expect(hasActiveSessions({ s: { parts: [stepStart('s')] } })).toBe(true);
 	});
 });
+
+describe('panelTimeline (PANEL-S3)', () => {
+	it('interleaves owner echoes with each turn in submission order', () => {
+		const parts: AgentPart[] = [
+			{ kind: 'step-start', sessionId: 's', messageId: 'm1', partId: 's1' },
+			{ kind: 'text', sessionId: 's', messageId: 'm1', partId: 't1', text: 'First reply' },
+			{ kind: 'step-finish', sessionId: 's', messageId: 'm1', partId: 's1e' },
+			{ kind: 'step-start', sessionId: 's', messageId: 'm2', partId: 's2' },
+			{ kind: 'text', sessionId: 's', messageId: 'm2', partId: 't2', text: 'Second reply' },
+			{ kind: 'step-finish', sessionId: 's', messageId: 'm2', partId: 's2e' }
+		];
+
+		const timeline = panelTimeline(parts, [
+			{ messageId: 'm1', text: 'first ask' },
+			{ messageId: 'm2', text: 'second ask' }
+		]);
+
+		expect(timeline.map((e) => e.kind)).toEqual(['owner', 'turn', 'owner', 'turn']);
+		expect(timeline[0]).toMatchObject({ kind: 'owner', text: 'first ask', messageId: 'm1' });
+		expect(timeline[1]).toMatchObject({ kind: 'turn', messageId: 'm1' });
+		expect(timeline[2]).toMatchObject({ kind: 'owner', text: 'second ask', messageId: 'm2' });
+		expect(timeline[3]).toMatchObject({ kind: 'turn', messageId: 'm2' });
+	});
+
+	it('shows an owner echo before any agent parts arrive', () => {
+		const timeline = panelTimeline([], [{ messageId: 'm1', text: 'go' }]);
+		expect(timeline).toEqual([{ kind: 'owner', messageId: 'm1', text: 'go' }]);
+	});
+});
+
 /**
  * PANEL-S1 — the copy is the feature here. The shipped empty state told the
  * owner to "start the app with WHATSAGENT_MCP=1", which a double-clicked .app
