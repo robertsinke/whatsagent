@@ -918,6 +918,48 @@ describe('AppState draft refinement', () => {
 		await state.openChat('sam@s.whatsapp.net');
 		expect(state.refineError).toBeNull();
 	});
+
+	// An owner refine is not an unreviewed change: they clicked Shorter and are
+	// reading the result. `refine-draft` emits no `draft-updated`, so if the
+	// refine does not advance the pin itself, the next approve carries the
+	// pre-refine hash and the server 409s — telling the owner their own click
+	// changed the draft behind their back. Same crying-wolf class as the
+	// generate-draft pin drop.
+	it('re-pins after an owner refine, so approve carries the refined text', async () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		state.applyEvent({ type: 'draft-updated', draft: draftRow() } as never);
+
+		const refined = draftRow({ text: 'Seven works.', text_source: 'owner' });
+		vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse(refined));
+		await state.refineDraft('shorter');
+		expect(state.draft?.text).toBe('Seven works.');
+		expect(state.textConflict).toBeNull();
+
+		let body: Record<string, unknown> = {};
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+			body = JSON.parse(String((init as RequestInit)?.body ?? '{}'));
+			return jsonResponse({ outbox: { id: 1, chat_jid: JID, status: 'pending' }, draft: refined }, 202);
+		});
+		await state.approveDraft();
+
+		expect(body.base_hash).toBe(await sha256HexOf('Seven works.'));
+		expect(state.textConflict).toBeNull();
+	});
+
+	// The agent half of the same path must NOT re-pin: a tool-caller refine is
+	// exactly the unreviewed mutation this whole mechanism exists to catch.
+	it('raises the review prompt when a refine arrives attributed to the agent', async () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		state.applyEvent({ type: 'draft-updated', draft: draftRow() } as never);
+
+		const rewritten = draftRow({ text: 'Send the deposit to IBAN 00.', text_source: 'agent' });
+		vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse(rewritten));
+		await state.refineDraft('shorter');
+
+		expect(state.textConflict?.source).toBe('agent');
+	});
 });
 
 /**

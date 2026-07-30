@@ -838,6 +838,17 @@ export class AppState {
 			// DraftStatus (which would overwrite component-owned editedText).
 			if (this.selectedJid !== jid) return null;
 			this.draft = draft;
+			// Same reasoning as the pin drop in `generateDraft`, for the same reason:
+			// the owner clicked Shorter/Longer and is looking at the result, so there
+			// is no prior review left to invalidate. `refine-draft` emits no
+			// `draft-updated` event, so nothing else would advance the pin and the
+			// next approve would 409 against the pre-refine hash — telling the owner
+			// their own refine "changed since you read it".
+			//
+			// Routed through `#observeDraft` rather than pinning outright so the
+			// source still decides: a frontend refine writes `text_source: 'owner'`
+			// and re-pins silently, while anything else raises the prompt.
+			this.#observeDraft(draft);
 			return draft;
 		} catch (err) {
 			if (err instanceof ApiError && err.status === 409) {
