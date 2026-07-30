@@ -626,13 +626,33 @@ function createPanelFixtureHarness(): PanelHarness {
 				turn.history.length === 0
 					? CAPABILITY_MARKDOWN
 					: `Got it — you said: **${turn.text}**.`;
-			yield {
-				kind: 'text',
-				sessionId: turn.sessionId,
-				messageId: turn.messageId,
-				partId: `${turn.messageId}-text`,
-				text: reply
-			};
+			// Growing snapshots (production text parts re-arrive as they lengthen).
+			// PANEL-S8 scroll-follow must tolerate this without yanking a detached reader.
+			const steps = Math.min(16, Math.max(4, Math.ceil(reply.length / 24)));
+			for (let i = 1; i <= steps; i++) {
+				if (signal.aborted) return;
+				const end = Math.ceil((reply.length * i) / steps);
+				yield {
+					kind: 'text',
+					sessionId: turn.sessionId,
+					messageId: turn.messageId,
+					partId: `${turn.messageId}-text`,
+					text: reply.slice(0, end)
+				};
+				if (i < steps) {
+					await new Promise<void>((resolve) => {
+						const t = setTimeout(resolve, 70);
+						signal.addEventListener(
+							'abort',
+							() => {
+								clearTimeout(t);
+								resolve();
+							},
+							{ once: true }
+						);
+					});
+				}
+			}
 			yield {
 				kind: 'step-finish',
 				sessionId: turn.sessionId,

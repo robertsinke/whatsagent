@@ -7,11 +7,15 @@ import {
 	groupTurns,
 	hasActiveSessions,
 	isTurnInFlight,
+	panelContentSignature,
 	panelEmptyState,
+	panelScrollFollowDecision,
 	panelTimeline,
 	toolArgSummary,
 	toolResultSummary,
-	toolStateLabel
+	toolStateLabel,
+	type AgentTurn,
+	type PanelTimelineEntry
 } from './agent-panel.js';
 
 function text(partId: string, text: string): AgentPart {
@@ -275,5 +279,82 @@ describe('panelEmptyState (PANEL-S1)', () => {
 		const placeholders = [idle, off].map((v) => v.placeholder);
 		expect(new Set(placeholders).size).toBe(2);
 		for (const placeholder of placeholders) expect(placeholder.length).toBeGreaterThan(0);
+	});
+});
+
+describe('panelContentSignature / panelScrollFollowDecision (PANEL-S8)', () => {
+	function turnEntry(id: string, body: string, inFlight = false): PanelTimelineEntry {
+		const turn: AgentTurn = {
+			id,
+			parts: [text(`${id}-txt`, body)],
+			inFlight,
+			messageId: id
+		};
+		return { kind: 'turn', messageId: id, turn };
+	}
+
+	it('changes the signature when a text snapshot grows in place', () => {
+		const short = panelContentSignature([turnEntry('t1', 'Hi')]);
+		const longer = panelContentSignature([turnEntry('t1', 'Hi there')]);
+		expect(short).not.toBe(longer);
+	});
+
+	it('pins on first paint and on a new timeline row even when detached', () => {
+		expect(
+			panelScrollFollowDecision({
+				prevEntryCount: 0,
+				entryCount: 1,
+				prevContentSig: '',
+				contentSig: 'x',
+				isAtBottom: false,
+				firstPaint: true
+			})
+		).toBe('pin');
+		expect(
+			panelScrollFollowDecision({
+				prevEntryCount: 1,
+				entryCount: 2,
+				prevContentSig: 'a',
+				contentSig: 'a|b',
+				isAtBottom: false,
+				firstPaint: false
+			})
+		).toBe('pin');
+	});
+
+	it('follows in-place growth only while pinned', () => {
+		expect(
+			panelScrollFollowDecision({
+				prevEntryCount: 2,
+				entryCount: 2,
+				prevContentSig: 'short',
+				contentSig: 'longer',
+				isAtBottom: true,
+				firstPaint: false
+			})
+		).toBe('follow');
+		expect(
+			panelScrollFollowDecision({
+				prevEntryCount: 2,
+				entryCount: 2,
+				prevContentSig: 'short',
+				contentSig: 'longer',
+				isAtBottom: false,
+				firstPaint: false
+			})
+		).toBe('none');
+	});
+
+	it('is idle when nothing changed', () => {
+		expect(
+			panelScrollFollowDecision({
+				prevEntryCount: 1,
+				entryCount: 1,
+				prevContentSig: 'same',
+				contentSig: 'same',
+				isAtBottom: true,
+				firstPaint: false
+			})
+		).toBe('none');
 	});
 });
