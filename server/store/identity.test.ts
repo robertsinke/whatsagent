@@ -9,6 +9,7 @@ import { MIGRATIONS } from './migrations.generated.js';
 import { getDraft, upsertDraft } from './drafts.js';
 import { canonicalChatJid, linkIdentityAndMergeChats, mergeChats } from './identity.js';
 import { listMessages, upsertMessage, upsertMessageReaction } from './messages.js';
+import { getProposal, insertProposal } from './proposals.js';
 import { enqueueOutbox, listOutbox } from './outbox.js';
 import {
 	FIXTURE_SPLIT_LID_JID,
@@ -280,6 +281,33 @@ describe('migration 011', () => {
 		expect(
 			database.prepare('SELECT chat_jid FROM message_reactions').all()
 		).toEqual([{ chat_jid: PHONE }]);
+	});
+
+	it('carries a pending proposal onto the survivor instead of aborting the merge', () => {
+		// `send_proposals.chat_jid` references `chats(jid)` and foreign keys are
+		// ON, so a proposal left on the losing jid would make the merge's
+		// `DELETE FROM chats` throw — a live path that has already bitten the
+		// owner once.
+		const database = openTempDb();
+		linkContactIdentity(database, { lidJid: LID, phoneJid: PHONE, name: FIXTURE_SPLIT_NAME });
+		upsertChat(database, { jid: PHONE, kind: '1:1', last_msg_at: 3_000 });
+		upsertChat(database, { jid: LID, kind: '1:1', last_msg_at: 4_000 });
+		seedMessage(database, { id: 'lid-1', chatJid: LID, ts: 4_000 });
+		const id = insertProposal(database, {
+			chatJid: LID,
+			text: 'Yes — seven works.',
+			basisMsgId: 'lid-1',
+			now: 4_100
+		});
+
+		expect(mergeChats(database, LID, PHONE)).toBe(true);
+
+		expect(listChats(database).map((c) => c.jid)).toEqual([PHONE]);
+		expect(getProposal(database, id)).toMatchObject({
+			chat_jid: PHONE,
+			status: 'pending',
+			basis_msg_id: 'lid-1'
+		});
 	});
 
 	it('renames mapped LID chats that have no phone twin, and leaves unmapped ones alone', () => {

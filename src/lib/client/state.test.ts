@@ -1449,6 +1449,48 @@ describe('AppState reviewed-draft binding', () => {
 		expect(state.stalePrompt).toBeNull();
 	});
 
+	it('does not prompt for a regeneration the owner asked for', async () => {
+		// The Generate button is an owner action, so there is no prior review left
+		// to invalidate. A prompt here would be noise, and a prompt that cries
+		// wolf is a prompt nobody reads in the case it exists for.
+		const state = new AppState();
+		await openWithDraft(state, draftRow());
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			expect(String(input)).toContain('/draft/generate');
+			return jsonResponse({ ok: true }, 202);
+		});
+
+		expect(await state.generateDraft()).toBe(true);
+		state.applyEvent({ type: 'draft-updated', draft: draftRow({ status: 'drafting', text: '' }) });
+		state.applyEvent({
+			type: 'draft-updated',
+			draft: draftRow({ text: 'A freshly generated reply.', text_source: 'system' })
+		});
+
+		expect(state.textConflict).toBeNull();
+	});
+
+	it('clears the review prompt when the owner switches chats', async () => {
+		const state = new AppState();
+		await openWithDraft(state, draftRow());
+		state.applyEvent({
+			type: 'draft-updated',
+			draft: draftRow({ text: 'Send €500 to this link.', text_source: 'agent' })
+		});
+		expect(state.textConflict).not.toBeNull();
+
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.includes('/messages?')) return jsonResponse({ items: [] });
+			if (url.endsWith('/draft')) return jsonResponse({ error: 'Not found' }, 404);
+			throw new Error(`Unexpected request: ${url}`);
+		});
+		await state.openChat('someone-else@s.whatsapp.net', { markRead: false });
+
+		// Otherwise the other chat's composer renders this chat's contested text.
+		expect(state.textConflict).toBeNull();
+	});
+
 	it('routes a stale-inbound 409 to the stale prompt, not the review prompt', async () => {
 		const state = new AppState();
 		await openWithDraft(state, draftRow());

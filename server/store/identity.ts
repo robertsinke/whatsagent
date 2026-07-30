@@ -150,6 +150,13 @@ export function mergeChats(db: AppDatabase, from: string, to: string): boolean {
 		// the owner is silently lost or made undeliverable.
 		db.prepare('UPDATE outbox SET chat_jid = ? WHERE chat_jid = ?').run(to, from);
 		db.prepare('UPDATE draft_feedback SET chat_jid = ? WHERE chat_jid = ?').run(to, from);
+		// PL-U3: same treatment, and it is not optional — `send_proposals.chat_jid`
+		// references `chats(jid)` and foreign keys are ON, so leaving rows behind
+		// would make the `DELETE FROM chats` below throw and abort the whole merge.
+		// Moving is also the honest answer: the two jids are one person, the basis
+		// message moved with `messages` above, and the proposal still cannot send
+		// without a click.
+		db.prepare('UPDATE send_proposals SET chat_jid = ? WHERE chat_jid = ?').run(to, from);
 
 		db.prepare('DELETE FROM chats WHERE jid = ?').run(from);
 	});

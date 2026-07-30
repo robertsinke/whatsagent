@@ -330,6 +330,10 @@ export class AppState {
 		const preserveWindow = !chatChanged && this.messages.length > 0;
 		if (!preserveWindow) this.loadingMessages = true;
 		this.stalePrompt = null;
+		// Chat-scoped like the stale prompt: without this the contested text from
+		// another chat would render over this one's composer. `#observeDraft` at
+		// the end of this method re-raises it when the pin still disagrees.
+		this.textConflict = null;
 		// Refinement error is chat-scoped: a new selection (or same-chat reload)
 		// clears it. `refining` is left untouched — an in-flight request is not
 		// canceled by a UI reload, and its finally-block clears the flag.
@@ -767,6 +771,13 @@ export class AppState {
 		if (!jid || this.generating) return false;
 		this.generating = true;
 		this.generateError = null;
+		// The owner asked for new text, so there is no prior review left to
+		// invalidate. Dropping the pin lets whatever arrives pin itself; a change
+		// *after* that still raises the review prompt. Without this, an owner's
+		// own Generate click comes back as "this draft was regenerated after you
+		// read it", and a prompt that cries wolf is a prompt nobody reads.
+		this.#reviewedDraftHash.delete(jid);
+		this.textConflict = null;
 		try {
 			await api.generateDraft(jid);
 			// Accepted, not finished: hold the flag until the first draft event for
@@ -986,6 +997,16 @@ export class AppState {
 				// leaves them staring at a conversation whose messages have just
 				// moved elsewhere. Follow the merge into the survivor.
 				this.chats = this.chats.filter((c) => c.jid !== event.jid);
+				// PL-U3: the server moved this chat's proposals onto the survivor
+				// (see `mergeChats`), and no proposal event announces that. Drop the
+				// dead jid's rows and refetch rather than leaving cards keyed to a
+				// chat that no longer exists.
+				if (this.proposals.some((p) => p.chat_jid === event.jid)) {
+					this.proposals = this.proposals.filter((p) => p.chat_jid !== event.jid);
+					void this.refreshProposals();
+				}
+				this.#reviewedDraftHash.delete(event.jid);
+				if (this.textConflict?.chatJid === event.jid) this.textConflict = null;
 				if (this.selectedJid === event.jid) {
 					void this.openChat(event.merged_into, { markRead: false });
 				}
