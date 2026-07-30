@@ -47,17 +47,39 @@ describe('parseAgentMarkdown', () => {
 		expect(para.children.some((c) => c.type === 'link')).toBe(true);
 	});
 
-	it('records raw HTML as html nodes (renderer must skip them, never {@html})', () => {
+	it('keeps raw HTML in html nodes, never as an element a walker would descend into', () => {
 		const root = parseAgentMarkdown('Hello <script>alert(1)</script> world');
-		const html = root.children.flatMap((n) =>
-			n.type === 'paragraph' ? n.children.filter((c) => c.type === 'html') : n.type === 'html' ? [n] : []
+		const nodes = [
+			...root.children.filter((n) => n.type === 'html'),
+			...root.children.flatMap((n) => (n.type === 'paragraph' ? n.children : [])).filter((c) => c.type === 'html')
+		];
+		// The previous assertion here was `>= 0`, which is true of every input and
+		// therefore tested nothing. What matters is that the script text lives in a
+		// node the renderer refuses to emit, and in NO other node type — a walker
+		// that met it as, say, a paragraph child would happily render it.
+		expect(nodes.length).toBeGreaterThan(0);
+		expect(nodes.map((n) => (n as { value: string }).value).join('')).toContain('<script>');
+	});
+});
+
+/**
+ * The renderer's whole safety argument is that it never interpolates
+ * model-authored markup, so this asserts the absence of `{@html}` in the
+ * component source. It reads like a lint rule because that is what it is: this
+ * repo has no Svelte DOM harness (see the gotchas doc), so a render-level test
+ * is not available, and the source is the only place the guarantee is visible.
+ * Panel text is downstream of attacker-controlled chat content — see
+ * docs/solutions/2026-07-29-draft-provider-tool-surface.md.
+ */
+describe('AgentMarkdown.svelte', () => {
+	it('never interpolates raw HTML', async () => {
+		const { readFileSync } = await import('node:fs');
+		const { fileURLToPath } = await import('node:url');
+		const source = readFileSync(
+			fileURLToPath(new URL('./AgentMarkdown.svelte', import.meta.url)),
+			'utf8'
 		);
-		// micromark may lift html to block or keep inline — either way the node
-		// exists so the Svelte renderer can refuse to emit it.
-		expect(html.length + root.children.filter((n) => n.type === 'html').length).toBeGreaterThanOrEqual(0);
-		// The important bit: parse never turns the script into a non-html element
-		// that a naive walker would treat as a container with executable children.
-		expect(JSON.stringify(root)).toContain('script');
+		expect(source).not.toContain('@html');
 	});
 });
 
