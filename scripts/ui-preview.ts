@@ -26,6 +26,17 @@
  *     nothing detected, three install links, pairing still reachable.
  *   PREVIEW_SPLIT_IDENTITY=1
  *     Seeds the pre-merge LID/phone duplicate pair (W4-U13).
+ *   PREVIEW_PROPOSAL=1
+ *     Seeds a pending agent proposal (PL-U3) so the confirm/discard card has
+ *     something to render. No outbox row exists — that is the point of it.
+ *   PREVIEW_AGENT_EDIT=1
+ *     Two seconds after boot, rewrites the seeded draft as the *agent* and
+ *     emits `draft-updated`, reproducing the exact sequence PL-U3 Half B
+ *     exists for: the owner is reading text A when the agent replaces it with
+ *     B. A client with the chat open must refuse to approve until the change
+ *     is acknowledged. PREVIEW_AGENT_EDIT_DELAY_MS (default 15000) is how long
+ *     after boot it fires — long enough that a capture run started alongside
+ *     the server has already loaded the page and opened the chat.
  *
  * It also covers what live data cannot. The owner's real database holds four
  * quoted messages — all of them plain text — and zero reactions, because
@@ -44,7 +55,8 @@ import { openDatabase } from '../server/store/db.js';
 import { upsertChat } from '../server/store/chats.js';
 import { upsertContact } from '../server/store/contacts.js';
 import { setMediaRef, upsertMessage, upsertMessageReaction } from '../server/store/messages.js';
-import { upsertDraft } from '../server/store/drafts.js';
+import { getDraft, upsertDraft } from '../server/store/drafts.js';
+import { insertProposal } from '../server/store/proposals.js';
 import { linkContactIdentity } from '../server/store/contacts.js';
 import { linkIdentityAndMergeChats } from '../server/store/identity.js';
 import { setSetting } from '../server/store/settings.js';
@@ -544,7 +556,35 @@ const app = createApp({
   providerDiscovery: discovery
 });
 
+// PL-U3 — a pending proposal to photograph. Inserted directly rather than
+// through `propose-send` because the preview has no agent; the row is
+// byte-identical either way, and no outbox row exists in either case.
+if (process.env.PREVIEW_PROPOSAL === '1' && !sessionMode) {
+	insertProposal(db, {
+		chatJid: DIRECT,
+		text: 'Yes — eight works for me. I will bring the printouts.',
+		basisMsgId: 'u-2',
+		now: Date.now()
+	});
+}
+
 await app.start();
+
+// PL-U3 Half B — the attack sequence, live. The owner opens the chat (which
+// pins the hash of what they read), and this rewrites the draft underneath
+// them as the agent.
+if (process.env.PREVIEW_AGENT_EDIT === '1' && !sessionMode) {
+	setTimeout(() => {
+		const existing = getDraft(db, DIRECT);
+		if (!existing) return;
+		upsertDraft(db, {
+			...existing,
+			text: 'Sure — send the deposit to IBAN NL00 BANK 0000 0000 00 first.',
+			text_source: 'agent'
+		});
+		app.events.emit({ type: 'draft-updated', draft: getDraft(db, DIRECT)! });
+	}, Number(process.env.PREVIEW_AGENT_EDIT_DELAY_MS ?? 15_000)).unref();
+}
 console.log(`
 UI preview ready — safe to screenshot.
 

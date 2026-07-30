@@ -46,8 +46,16 @@ const clicks = [];
 const keys = [];
 let evalBeforeExpr;
 let evalExpr;
+/**
+ * Settle time after the clicks and keys, before `--eval` and the capture. For
+ * states that arrive over the WebSocket on the server's schedule rather than in
+ * response to an input — a pushed `draft-updated`, a sync batch — there is
+ * nothing to click, so waiting is the only way to photograph them.
+ */
+let waitMs = 0;
 for (let i = 0; i < argv.length; i += 1) {
 	if (argv[i] === '--click') clicks.push(argv[++i]);
+	else if (argv[i] === '--wait') waitMs = Number(argv[++i]);
 	else if (argv[i] === '--key') keys.push(argv[++i]);
 	else if (argv[i] === '--eval-before') evalBeforeExpr = argv[++i];
 	else if (argv[i] === '--eval') evalExpr = argv[++i];
@@ -56,7 +64,7 @@ for (let i = 0; i < argv.length; i += 1) {
 const [url, out] = positional;
 if (!url || !out) {
 	console.error(
-		'usage: node scripts/screenshot.mjs <url> <out.png> [--eval-before <js>] [--click <sel>]... [--key <KeySpec>]... [--eval <js>]'
+		'usage: node scripts/screenshot.mjs <url> <out.png> [--eval-before <js>] [--click <sel>]... [--key <KeySpec>]... [--wait <ms>] [--eval <js>]'
 	);
 	process.exit(2);
 }
@@ -256,6 +264,11 @@ try {
 	for (const spec of keys) {
 		await dispatchKey(send, spec);
 		await sleep(Number(process.env.SHOT_KEY_WAIT ?? 200));
+	}
+
+	if (waitMs > 0) {
+		console.log(`waiting ${waitMs}ms for server-pushed state`);
+		await sleep(waitMs);
 	}
 
 	if (evalExpr) {
