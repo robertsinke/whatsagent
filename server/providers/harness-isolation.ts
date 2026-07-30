@@ -58,7 +58,23 @@ export type IsolationVerdict = 'pass' | 'fail' | 'inconclusive' | 'unavailable';
 export type IsolationFinding = {
 	code: string;
 	detail: string;
+	/**
+	 * `problem` (the default) fails the verdict. `note` does not.
+	 *
+	 * A `note` is for something genuinely reachable that this app cannot remove —
+	 * today only the `advisor` tool from the owner's own Claude settings. It must
+	 * still be shown: the owner's question is "what can reach my data", and a
+	 * check that filters an unremovable disclosure surface out of its own output
+	 * answers a different, easier question. Failing on it instead would make the
+	 * check red forever, which ends with the check being ignored.
+	 */
+	severity?: 'problem' | 'note';
 };
+
+/** A verdict fails only on findings that are actually problems. */
+export function isolationOk(findings: IsolationFinding[]): boolean {
+	return findings.every((f) => f.severity === 'note');
+}
 
 export type HarnessIsolationReport = {
 	harness: IsolationHarness;
@@ -244,7 +260,7 @@ export function evaluateOpenCodeResolvedConfig(
 		}
 	}
 
-	return { ok: findings.length === 0, findings };
+	return { ok: isolationOk(findings), findings };
 }
 
 export type ClaudeInitSurface = {
@@ -284,7 +300,7 @@ export function evaluateClaudeInitEvent(
 				detail: `Drafting mcp_servers=${JSON.stringify(mcpServers)}; expected []`
 			});
 		}
-		return { ok: findings.length === 0, findings };
+		return { ok: isolationOk(findings), findings };
 	}
 
 	// Panel: our server must be listed; built-in-looking tools must stay out.
@@ -295,17 +311,41 @@ export function evaluateClaudeInitEvent(
 			detail: `Panel init listed neither mcp_servers entry nor tools for ${MCP_SERVER_NAME}`
 		});
 	}
-	const builtins = tools.filter(
-		(t) =>
-			!t.includes(MCP_SERVER_NAME) &&
-			!t.toLowerCase().includes('advisor') // known disclosure residual — see claude-harness header
-	);
+	// KNOWN RESIDUALS ARE REPORTED, NOT FILTERED AWAY.
+	//
+	// `advisor` comes from the owner's own `~/.claude/settings.json`
+	// (`advisorModel`) and cannot be removed with any flag this app can use —
+	// `--tools ''`, `--strict-mcp-config` and `--disallowedTools advisor` were all
+	// tried; see the caveats in `server/agent/panel/claude-harness.ts`. So it must
+	// not fail the check, or the check fails permanently and gets ignored.
+	//
+	// But it must not vanish either. It forwards the transcript to a model, which
+	// makes it a disclosure surface on the owner's machine, and a card whose whole
+	// job is saying what is reachable must say so. Reported as a residual instead.
+	//
+	// Matched EXACTLY rather than by substring: `includes('advisor')` would also
+	// wave through `advisor-exec` or `file-advisor`, and an allowlist that grows
+	// by accident is the failure mode this whole module exists to catch.
+	const KNOWN_RESIDUAL_TOOLS = new Set(['advisor']);
+	const nonOurs = tools.filter((t) => !t.includes(MCP_SERVER_NAME));
+	const residual = nonOurs.filter((t) => KNOWN_RESIDUAL_TOOLS.has(t.toLowerCase()));
 	// Built-ins show up as bare names (Read, Bash, …). MCP tools are prefixed.
-	const suspicious = builtins.filter((t) => !t.includes('__') && !t.includes('mcp'));
+	const suspicious = nonOurs.filter(
+		(t) => !KNOWN_RESIDUAL_TOOLS.has(t.toLowerCase()) && !t.includes('__') && !t.includes('mcp')
+	);
 	if (suspicious.length > 0) {
 		findings.push({
 			code: 'builtin_present',
 			detail: `Panel realized unexpected built-in-like tools: ${suspicious.join(', ')}`
+		});
+	}
+	if (residual.length > 0) {
+		findings.push({
+			code: 'known_residual',
+			severity: 'note',
+			detail:
+				`Known residual from your own Claude settings, not removable by this app: ${residual.join(', ')}. ` +
+				'It reads no files and sends no messages, but it does forward the transcript to a model.'
 		});
 	}
 	for (const name of mcpServers) {
@@ -317,7 +357,7 @@ export function evaluateClaudeInitEvent(
 		}
 	}
 
-	return { ok: findings.length === 0, findings };
+	return { ok: isolationOk(findings), findings };
 }
 
 function plainSummary(
