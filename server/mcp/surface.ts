@@ -187,3 +187,24 @@ export function isMcpEnabled(
 	if (typeof options?.mcp === 'object' && options.mcp.enabled === false) return false;
 	return env.WHATSAGENT_MCP === '1';
 }
+
+/**
+ * PANEL-S1 — the caller's explicit answer, or `undefined` when they did not
+ * give one.
+ *
+ * `isMcpEnabled` collapses "the caller said no" and "the caller said nothing"
+ * into the same `false`, which is right for its own question and wrong for the
+ * settings fallback: `createApp` must let a `panel_enabled` row switch the
+ * surface on when nobody asked, and must never let it override a caller who
+ * asked for `mcp: false`. Kept separate rather than folded in so the shipped
+ * `isMcpEnabled` semantics and its unit tests stay exactly as they were.
+ */
+export function mcpOptionOverride(
+	options: { mcp?: boolean | { enabled?: boolean } } | undefined
+): boolean | undefined {
+	if (typeof options?.mcp === 'boolean') return options.mcp;
+	if (typeof options?.mcp === 'object' && typeof options.mcp.enabled === 'boolean') {
+		return options.mcp.enabled;
+	}
+	return undefined;
+}

@@ -163,10 +163,27 @@ export type Draft = {
  */
 export type AgentStatus = {
 	available: boolean;
+	/**
+	 * PANEL-S1 — the panel is enabled in Settings but this process did not boot
+	 * with it (or booted with a different harness/model). Only ever true while
+	 * `available` is the stale half of the picture; the two together give the
+	 * three states the panel has to distinguish. See `panelEmptyState`.
+	 */
+	restartRequired: boolean;
 	running: boolean;
 	sessionId: string | null;
 	messageId: string | null;
 	harness: string | null;
+};
+
+/**
+ * PANEL-S1 — what `POST /api/agent/cancel` actually returns: turn state only.
+ * `available` and `restartRequired` are boot-time facts the cancel action has
+ * no access to, so they are absent here rather than typed and undefined at
+ * runtime — the caller preserves the ones it already holds.
+ */
+export type AgentCancelResult = Omit<AgentStatus, 'available' | 'restartRequired'> & {
+	cancelled: boolean;
 };
 
 /**

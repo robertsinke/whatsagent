@@ -7,6 +7,7 @@ import {
 	groupTurns,
 	hasActiveSessions,
 	isTurnInFlight,
+	panelEmptyState,
 	toolArgSummary,
 	toolResultSummary,
 	toolStateLabel
@@ -197,5 +198,57 @@ describe('hasActiveSessions', () => {
 
 	it('is true for a session whose parts list is empty (a step-start with no body yet)', () => {
 		expect(hasActiveSessions({ s: { parts: [stepStart('s')] } })).toBe(true);
+	});
+});
+/**
+ * PANEL-S1 — the copy is the feature here. The shipped empty state told the
+ * owner to "start the app with WHATSAGENT_MCP=1", which a double-clicked .app
+ * can never receive and which would not have been sufficient anyway. These
+ * assertions are the regression guard on that: no variant may point at an env
+ * var, and every not-running variant must name the place the owner can act.
+ */
+describe('panelEmptyState (PANEL-S1)', () => {
+	const idle = panelEmptyState({ available: true, restartRequired: false });
+	const restart = panelEmptyState({ available: false, restartRequired: true });
+	const off = panelEmptyState({ available: false, restartRequired: false });
+
+	it('shows the idle copy when the panel is running', () => {
+		expect(idle.state).toBe('idle');
+		expect(idle.title).toBe('Agent is idle');
+		expect(idle.placeholder).toMatch(/Ask the agent/);
+	});
+
+	it('asks for a restart when the setting is on but this process is not', () => {
+		expect(restart.state).toBe('restart-required');
+		expect(restart.title).toMatch(/[Rr]estart/);
+		expect(restart.body).toMatch(/Settings/);
+		expect(restart.body).toMatch(/[Rr]estart|reopen/);
+	});
+
+	it('points an unconfigured owner at Settings, not at a harness they have to guess', () => {
+		expect(off.state).toBe('not-configured');
+		expect(off.body).toMatch(/Settings/);
+		// R9 is worth restating exactly where the owner decides to turn this on.
+		expect(off.body).toMatch(/never send/);
+	});
+
+	it('`available` wins over a stale restart flag', () => {
+		// Both true is reachable for one paint: the status refetch that clears
+		// restartRequired can land after the panel is already running.
+		expect(panelEmptyState({ available: true, restartRequired: true }).state).toBe('idle');
+	});
+
+	it('never mentions the env var again, in any variant', () => {
+		for (const variant of [idle, restart, off]) {
+			const all = `${variant.title} ${variant.body} ${variant.placeholder}`;
+			expect(all).not.toMatch(/WHATSAGENT_MCP/);
+			expect(all).not.toMatch(/MCP/);
+		}
+	});
+
+	it('gives every variant a distinct, non-empty composer placeholder', () => {
+		const placeholders = [idle, restart, off].map((v) => v.placeholder);
+		expect(new Set(placeholders).size).toBe(3);
+		for (const placeholder of placeholders) expect(placeholder.length).toBeGreaterThan(0);
 	});
 });

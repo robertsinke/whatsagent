@@ -29,10 +29,12 @@ import { chatViewFor } from './api/chat-view.js';
 import { createRequestHandler, type RoutesDeps } from './api/routes.js';
 import { createSessionState } from './api/session.js';
 import { buildAllowedOrigins, validateOriginAndHost } from './api/security.js';
-import { createMcpSurface, isMcpEnabled } from './mcp/surface.js';
+import { createMcpSurface, isMcpEnabled, mcpOptionOverride } from './mcp/surface.js';
 import { ensureMcpToken } from './mcp/token.js';
 import {
 	createPanelHarness,
+	isPanelHarnessId,
+	PANEL_HARNESS_PROVIDERS,
 	PanelSessionManager,
 	type PanelHarness,
 	type PanelHarnessId
@@ -61,9 +63,12 @@ import {
 import { getDraft } from './store/drafts.js';
 import { getChat } from './store/chats.js';
 import {
+	getPanelSettings,
 	getSetting,
 	listSettings,
 	OUTBOX_DRY_RUN_SETTING,
+	PANEL_ENABLED_SETTING,
+	PANEL_HARNESS_SETTING,
 	resolveOutboxDryRun,
 	setSetting
 } from './store/settings.js';
@@ -120,14 +125,19 @@ export type CreateAppOptions = {
 	 */
 	mcp?: boolean | { enabled?: boolean; token?: string };
 	/**
-	 * PL-U7 — run the agent panel with this harness. Off by default.
+	 * PL-U7 — run the agent panel with this harness. Off by default. This is the
+	 * DEVELOPER path; owners turn the panel on from Settings (PANEL-S1), which
+	 * writes `panel_enabled` / `panel_harness` / `panel_model` instead. An
+	 * explicit option here wins over those rows.
 	 *
 	 * THE MCP RELATIONSHIP, decided rather than left implicit: the panel needs
-	 * `/mcp` and this does NOT switch it on. `isMcpEnabled` is read once at boot
-	 * and the token is minted only while enabled, so "enable it implicitly" would
-	 * mean a UI feature quietly turning on a network surface that ships off by
-	 * default — and the owner would have no way to tell it had happened. So with
-	 * MCP off the panel reports itself unavailable (`GET /api/agent/status`
+	 * `/mcp`, and this option does NOT switch it on — a caller passing an object
+	 * literal is a developer who can pass `mcp: true` in the same breath, and the
+	 * PL-U7 rule that no code path opens a network surface behind the caller's
+	 * back is worth keeping for them. The settings rows are the deliberate
+	 * exception: an owner ticking "enable the agent panel" HAS explicitly opted
+	 * in, so `createApp` mints the surface for them (see `resolvePanelConfig`).
+	 * With MCP off the panel reports itself unavailable (`GET /api/agent/status`
 	 * `available: false`, and `agent-turn` 503s) and the composer stays visibly
 	 * disabled. It never silently no-ops.
 	 *
@@ -197,6 +207,91 @@ function defaultStaticDir(): string {
 		dir = parent;
 	}
 	return join(here, '..', 'build');
+}
+
+/** PANEL-S1 — the panel configuration this process will actually run with. */
+export type ResolvedPanelConfig = {
+	harness: PanelHarnessId;
+	model: string | null;
+	timeoutMs?: number;
+	harnessImpl?: PanelHarness;
+	/**
+	 * True when the owner's settings rows produced this, false for an explicit
+	 * `options.panel`. Two things hang off the distinction: only a settings-born
+	 * panel implies the MCP surface, and only a settings-born panel takes part
+	 * in the restart-required comparison.
+	 */
+	fromSettings: boolean;
+};
+
+/**
+ * PANEL-S1 — reconcile the developer option with the owner's settings rows.
+ *
+ * Precedence is explicit-option-wins, so a `WHATSAGENT_MCP=1` dev run is never
+ * silently re-pointed at whatever the owner last saved. An enabled row naming a
+ * harness this build does not have is a configuration mistake, not a crash: it
+ * returns no config and a warning the caller logs, which leaves the panel
+ * reporting itself unavailable — and, because the surface follows the panel,
+ * leaves `/mcp` closed rather than minting a token for tools nothing can reach.
+ */
+export function resolvePanelConfig(
+	options: Pick<CreateAppOptions, 'panel'>,
+	settings: { enabled: boolean; harness: string | null; model: string | null }
+): { config: ResolvedPanelConfig | null; warning: string | null } {
+	if (options.panel) {
+		const explicit = options.panel;
+		return {
+			config: {
+				harness: explicit.harness,
+				model: explicit.model ?? null,
+				...(explicit.timeoutMs === undefined ? {} : { timeoutMs: explicit.timeoutMs }),
+				...(explicit.harnessImpl === undefined ? {} : { harnessImpl: explicit.harnessImpl }),
+				fromSettings: false
+			},
+			warning: null
+		};
+	}
+	if (!settings.enabled) return { config: null, warning: null };
+	if (!isPanelHarnessId(settings.harness)) {
+		return {
+			config: null,
+			warning:
+				`[panel] ${PANEL_ENABLED_SETTING} is on but ${PANEL_HARNESS_SETTING} is ` +
+				`${settings.harness === null ? 'not set' : JSON.stringify(settings.harness)} — ` +
+				'expected "opencode" or "claude". The agent panel stays unavailable; ' +
+				'pick a harness in Settings → Agent and restart.'
+		};
+	}
+	return {
+		config: { harness: settings.harness, model: settings.model, fromSettings: true },
+		warning: null
+	};
+}
+
+/**
+ * PANEL-S1 — the discovered absolute path for a harness binary, as a spreadable
+ * fragment (`{}` when discovery has nothing, so the harness keeps its bare-name
+ * default rather than being handed `undefined`).
+ *
+ * Shares `providerFactoryOptionsFromDiscovery` with the drafting providers on
+ * purpose: the panel spawns the same two binaries, and a second resolution path
+ * is a second thing to drift. Discovery failure is never fatal — a bare name on
+ * PATH still works in a terminal-launched dev run, which is exactly where the
+ * probe is most likely to be the thing that broke.
+ */
+async function discoveredHarnessCommand(
+	discovery: ProviderDiscovery | undefined,
+	harness: PanelHarnessId
+): Promise<{ command?: string }> {
+	if (!discovery) return {};
+	try {
+		const options = providerFactoryOptionsFromDiscovery(await discovery.snapshot());
+		const command = options[PANEL_HARNESS_PROVIDERS[harness]]?.command;
+		return command ? { command } : {};
+	} catch (err) {
+		console.warn(`[panel] provider discovery failed; spawning ${harness} off PATH`, err);
+		return {};
+	}
 }
 
 export function createApp(options: CreateAppOptions = {}): App {
@@ -312,12 +407,32 @@ export function createApp(options: CreateAppOptions = {}): App {
 		providerDiscovery: options.providerDiscovery
 	};
 
-	// MCP is off by default. Token is minted only while enabled — an unused
-	// token file would be pure attack surface. Env WHATSAGENT_MCP=1 or
-	// options.mcp flips it on (process-scoped; not a settings row the SPA
-	// can flip by accident).
+	/**
+	 * MCP is off by default. The token is minted only while enabled — an unused
+	 * token file would be pure attack surface.
+	 *
+	 * PANEL-S1 CHANGED THE THIRD INPUT. This used to be process-scoped only
+	 * (`options.mcp` or `WHATSAGENT_MCP=1`), explicitly "not a settings row the
+	 * SPA can flip by accident". A settings row can now switch it on — but only
+	 * the `panel_enabled` row, and only once it names a usable harness, which is
+	 * why the surface is resolved *after* the panel config rather than before.
+	 * That is still an explicit opt-in, just an owner-facing one: the panel is
+	 * unusable without the surface, so a toggle that enabled the panel and left
+	 * `/mcp` closed would be a toggle that does nothing. The accident this
+	 * comment guarded against was a *generic* settings write reaching a network
+	 * surface; `set-setting` remains frontend-only, so the agent still cannot
+	 * enable its own tools.
+	 *
+	 * Precedence: explicit option, else env, else the row.
+	 */
+	const panelSettings = getPanelSettings(db);
+	const { config: panelConfig, warning: panelWarning } = resolvePanelConfig(options, panelSettings);
+	if (panelWarning) console.warn(panelWarning);
+	const mcpEnabled =
+		mcpOptionOverride(options) ?? (isMcpEnabled(options) || (panelConfig?.fromSettings ?? false));
+
 	let mcpInfo: { token: string; tokenPath: string } | null = null;
-	if (isMcpEnabled(options)) {
+	if (mcpEnabled) {
 		const override =
 			typeof options.mcp === 'object' && typeof options.mcp.token === 'string'
 				? options.mcp.token
@@ -342,33 +457,77 @@ export function createApp(options: CreateAppOptions = {}): App {
 	 * requested one.
 	 */
 	let panelSession: PanelSessionManager | undefined;
-	if (options.panel && mcpInfo) {
+	if (panelConfig && mcpInfo) {
 		const token = mcpInfo.token;
-		const panelOptions = options.panel;
+		const panelOptions = panelConfig;
+		const discovery = options.providerDiscovery;
 		let built: PanelHarness | undefined = panelOptions.harnessImpl;
 		const harness: PanelHarness = {
 			get id() {
 				return panelOptions.harness;
 			},
 			run(turn, signal) {
-				built ??= createPanelHarness({
-					harness: panelOptions.harness,
-					port: listeningPort,
-					token,
-					registry: actionRegistry,
-					...(panelOptions.model === undefined ? {} : { model: panelOptions.model }),
-					...(panelOptions.timeoutMs === undefined ? {} : { timeoutMs: panelOptions.timeoutMs })
-				});
-				return built.run(turn, signal);
+				// An async generator so the first turn can AWAIT discovery and still
+				// hand back an AsyncIterable synchronously — the laziness above is
+				// about the bound port, and resolving the binary has the same shape:
+				// it must not run at boot, and it must run exactly once.
+				return (async function* () {
+					if (!built) {
+						built = createPanelHarness({
+							harness: panelOptions.harness,
+							port: listeningPort,
+							token,
+							registry: actionRegistry,
+							...(panelOptions.model === null ? {} : { model: panelOptions.model }),
+							...(panelOptions.timeoutMs === undefined
+								? {}
+								: { timeoutMs: panelOptions.timeoutMs }),
+							...(await discoveredHarnessCommand(discovery, panelOptions.harness))
+						});
+					}
+					yield* built.run(turn, signal);
+				})();
 			}
 		};
 		panelSession = new PanelSessionManager({ events, harness });
 		routeDeps.panelSession = panelSession;
-	} else if (options.panel) {
+	} else if (panelConfig) {
+		// Two ways to land here, and they need different advice: a developer who
+		// passed `panel` without `mcp`, or a caller who explicitly shut the
+		// surface while the owner's rows ask for a panel. The second is the
+		// override working as intended, so it is stated as such rather than as a
+		// mistake to fix.
 		console.warn(
-			'[panel] agent panel requested but the MCP surface is off — the panel has no tools and will report itself unavailable. Enable it with WHATSAGENT_MCP=1.'
+			panelConfig.fromSettings
+				? '[panel] the agent panel is enabled in Settings but this process was started with the MCP surface explicitly off — the panel has no tools and reports itself unavailable.'
+				: '[panel] agent panel requested but the MCP surface is off — the panel has no tools and will report itself unavailable. Pass `mcp: true` (or WHATSAGENT_MCP=1) alongside the explicit panel option; the Settings toggle enables both together.'
 		);
 	}
+
+	/**
+	 * PANEL-S1 — is what is saved different from what is running? Evaluated per
+	 * request, not captured at boot, because the whole point of the toggle is
+	 * that it changes under a live process.
+	 *
+	 * An explicit `options.panel` opts out entirely: it is a developer flag, not
+	 * a saved preference, so comparing it against rows it never wrote would make
+	 * the dev path claim "restart required" forever.
+	 */
+	const panelRestartRequired = (): boolean => {
+		if (options.panel) return false;
+		const saved = getPanelSettings(db);
+		const wanted =
+			saved.enabled && isPanelHarnessId(saved.harness)
+				? { harness: saved.harness as string, model: saved.model }
+				: null;
+		const running = panelSession
+			? { harness: panelConfig?.harness as string, model: panelConfig?.model ?? null }
+			: null;
+		if (wanted === null && running === null) return false;
+		if (wanted === null || running === null) return true;
+		return wanted.harness !== running.harness || wanted.model !== running.model;
+	};
+	routeDeps.panelRestartRequired = panelRestartRequired;
 
 	const handleRequest = createRequestHandler(routeDeps);
 

@@ -11,6 +11,7 @@
 		groupTurns,
 		hasActiveSessions,
 		isTurnInFlight,
+		panelEmptyState,
 		toolArgSummary,
 		toolResultSummary,
 		toolStateLabel
@@ -49,11 +50,13 @@
 	 * already renders, so nothing about the rendering path changed.
 	 *
 	 * It is still disabled when there is nothing to send to. `app.agent.available`
-	 * is false whenever the `/mcp` surface is off — which is the shipped default,
-	 * because the panel deliberately does NOT switch a network surface on for the
-	 * owner. That state is labelled honestly ("agent panel not enabled") rather
-	 * than left looking broken, and the previous "(not wired)" placeholder is
-	 * gone: it would now be a lie in the configured case.
+	 * is false whenever the `/mcp` surface is off, which is the shipped default:
+	 * the panel is opt-in, and PANEL-S1 made the opt-in a Settings toggle rather
+	 * than an env var no packaged app could ever receive. Because the toggle only
+	 * takes effect at startup, the disabled state has to distinguish "never
+	 * configured" from "saved, needs a restart" — `panelEmptyState` owns that
+	 * copy. Neither is left looking broken, and the old "(not wired)" placeholder
+	 * is gone: it would now be a lie in the configured case.
 	 */
 
 	let { app }: { app: AppState } = $props();
@@ -72,6 +75,12 @@
 
 	const available = $derived(app.agent.available);
 	const running = $derived(app.agent.running);
+	/**
+	 * PANEL-S1 — empty-state and placeholder copy for the three configuration
+	 * states. Selected by a pure function so the wording is asserted in a test
+	 * rather than only ever read off a screenshot.
+	 */
+	const emptyState = $derived(panelEmptyState(app.agent));
 	// `working` (derived from the parts) and `running` (the turn lifecycle event)
 	// are different facts: a turn is running from the moment the owner submits,
 	// but there are no parts to shimmer over until the harness produces one.
@@ -112,7 +121,7 @@
 			{#if busy}
 				<Shimmer children="working…" as="span" />
 			{:else if !available}
-				not enabled
+				{app.agent.restartRequired ? 'restart needed' : 'not enabled'}
 			{:else}
 				{app.agent.harness ?? 'ready'}
 			{/if}
@@ -124,22 +133,11 @@
 			<!-- The normal resting state: no session yet. Not an error. -->
 			<div class="agent-empty" data-testid="agent-empty">
 				<Sparkles class="size-5 empty-icon" />
-				{#if available}
-					<p class="empty-title">Agent is idle</p>
-					<p class="empty-body">
-						Ask for something below — open a chat, draft a reply, make it shorter. Tool
-						calls and reasoning stream here as they happen.
-					</p>
-				{:else}
-					<!-- Honest, and specific enough to act on. The panel needs the local MCP
-					     surface and does not turn it on by itself. -->
-					<p class="empty-title">Agent panel not enabled</p>
-					<p class="empty-body">
-						The panel reaches the app through the local MCP surface, which is off by
-						default. Start the app with <code>WHATSAGENT_MCP=1</code> and a configured
-						panel harness to use it.
-					</p>
-				{/if}
+				<!-- Honest, and specific enough to act on: every not-running variant
+				     names Settings → Agent, which is somewhere a double-clicked .app
+				     can actually go. Copy lives in `panelEmptyState`. -->
+				<p class="empty-title" data-panel-state={emptyState.state}>{emptyState.title}</p>
+				<p class="empty-body">{emptyState.body}</p>
 			</div>
 		{:else}
 			{#each sessions as session (session.sessionId)}
@@ -204,7 +202,8 @@
 	  scrolls internally — the conversation composer's approach.
 
 	  PL-U7: live. Disabled only when there is genuinely nothing to send to
-	  (`available` false — the MCP surface is off) or while a turn is in flight,
+	  (`available` false — the panel is off, or saved but not yet restarted into)
+	  or while a turn is in flight,
 	  in which case the submit button becomes a stop button. One turn runs at a
 	  time and a second is refused rather than queued, so offering send during a
 	  turn would only produce a 409.
@@ -221,9 +220,7 @@
 				<InputGroup.Textarea
 					class="field-sizing-content max-h-40 min-h-12"
 					name="agent-message"
-					placeholder={available
-						? 'Ask the agent to do something…'
-						: 'Agent panel not enabled'}
+					placeholder={emptyState.placeholder}
 					bind:value
 					onkeydown={handleKeydown}
 					disabled={!available || running}
@@ -450,13 +447,6 @@
 		font-size: 0.7rem;
 		line-height: 1.35;
 		color: var(--destructive);
-	}
-	.empty-body code {
-		font-family: ui-monospace, SFMono-Regular, monospace;
-		font-size: 0.72rem;
-		padding: 0.05rem 0.25rem;
-		border-radius: var(--radius-sm);
-		background: color-mix(in srgb, var(--ink-50) 14%, transparent);
 	}
 	/* Same well treatment as the composer field, cut into the sunken surface. */
 	.agent-input :global(.agent-field) {

@@ -569,6 +569,23 @@ const panelHarness = process.env.PREVIEW_AGENT_PANEL;
 if (panelHarness && !isPanelHarnessId(panelHarness)) {
 	throw new Error(`PREVIEW_AGENT_PANEL must be opencode or claude, got ${panelHarness}`);
 }
+
+/**
+ * PANEL-S1 — the third panel state. `available` and `restartRequired` are both
+ * boot facts, so "saved in Settings but this process started without it" is not
+ * something a screenshot run can click into: it needs settings rows that say
+ * yes and a process that says no. `mcp: false` is exactly that disagreement,
+ * and it is the same shape as the real case — the owner ticked the box after
+ * the app was already running.
+ *
+ * It also seeds the Settings card into its enabled state, which is the half a
+ * reviewer actually has to look at.
+ */
+const panelSavedOnly = process.env.PREVIEW_AGENT_PANEL_SAVED === '1';
+if (panelSavedOnly) {
+	setSetting(db, 'panel_enabled', 'true');
+	setSetting(db, 'panel_harness', process.env.PREVIEW_AGENT_PANEL_SAVED_HARNESS ?? 'opencode');
+}
 const app = createApp({
   db,
   dataDir,
@@ -599,7 +616,10 @@ const app = createApp({
             : {})
         }
       }
-    : {})
+    // PANEL-S1: rows on, surface explicitly off — the restart-required state.
+    : panelSavedOnly
+      ? { mcp: false as const }
+      : {})
 });
 
 // PL-U3 — a pending proposal to photograph. Inserted directly rather than

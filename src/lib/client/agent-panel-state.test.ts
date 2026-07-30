@@ -11,6 +11,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 const AVAILABLE: AgentStatus = {
 	available: true,
+	restartRequired: false,
 	running: false,
 	sessionId: null,
 	messageId: null,
@@ -27,6 +28,9 @@ describe('AppState agent panel', () => {
 		// `available: false` is the shipped default, not an error path — the panel
 		// needs the /mcp surface and that is off unless the owner turns it on.
 		expect(state.agent.available).toBe(false);
+		// PANEL-S1: pessimistic on both halves. Claiming a restart would help,
+		// before any status call has landed, would be a guess.
+		expect(state.agent.restartRequired).toBe(false);
 		expect(state.agent.running).toBe(false);
 	});
 
@@ -143,6 +147,21 @@ describe('AppState agent panel', () => {
 		expect(state.agent.available).toBe(false);
 	});
 
+	it('never lets a lifecycle event flip restartRequired either', () => {
+		const state = new AppState();
+		// PANEL-S1 — same reasoning as `available`: both are boot-time
+		// configuration facts, and only the status endpoint may set them.
+		state.agent = { ...AVAILABLE, available: false, restartRequired: true };
+		state.applyEvent({
+			type: 'agent-turn',
+			phase: 'started',
+			sessionId: 's1',
+			messageId: 'm1',
+			harness: 'opencode'
+		});
+		expect(state.agent.restartRequired).toBe(true);
+	});
+
 	it('cancel is a no-op when the panel is unavailable', async () => {
 		const state = new AppState();
 		const fetchSpy = vi.spyOn(globalThis, 'fetch');
@@ -150,12 +169,14 @@ describe('AppState agent panel', () => {
 		expect(fetchSpy).not.toHaveBeenCalled();
 	});
 
-	it('cancel applies the server status and keeps available true', async () => {
+	it('cancel applies the server status and keeps the boot-time facts', async () => {
 		const state = new AppState();
-		state.agent = { ...AVAILABLE, running: true };
+		state.agent = { ...AVAILABLE, running: true, restartRequired: true };
+		// PANEL-S1: this is the real shape of the cancel response — turn state
+		// only. The cancel action cannot observe `available` or
+		// `restartRequired`, so a naive spread would blank both.
 		vi.spyOn(globalThis, 'fetch').mockResolvedValue(
 			jsonResponse({
-				available: true,
 				cancelled: true,
 				running: false,
 				sessionId: null,
@@ -166,6 +187,7 @@ describe('AppState agent panel', () => {
 		await state.cancelAgentTurn();
 		expect(state.agent.running).toBe(false);
 		expect(state.agent.available).toBe(true);
+		expect(state.agent.restartRequired).toBe(true);
 	});
 
 	it('accumulates agent parts independently of the turn lifecycle', () => {

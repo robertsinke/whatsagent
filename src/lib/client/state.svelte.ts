@@ -62,6 +62,9 @@ const GENERATE_SETTLE_TIMEOUT_MS = 30_000;
  */
 const UNAVAILABLE_AGENT: AgentStatus = {
 	available: false,
+	// PANEL-S1: the pessimistic half too. A failed status call must not claim a
+	// restart would fix anything — it has no idea what is saved.
+	restartRequired: false,
 	running: false,
 	sessionId: null,
 	messageId: null,
@@ -1219,7 +1222,10 @@ export class AppState {
 	async cancelAgentTurn(): Promise<void> {
 		if (!this.agent.available) return;
 		try {
-			this.agent = { ...(await api.cancelAgentTurn()), available: true };
+			// Turn state from the response; the boot-time facts (`available`,
+			// `restartRequired`) are preserved from what we already hold — cancel
+			// cannot observe them and must not blank them.
+			this.agent = { ...this.agent, ...(await api.cancelAgentTurn()), available: true };
 		} catch (err) {
 			this.agentError = describeError(err);
 		}

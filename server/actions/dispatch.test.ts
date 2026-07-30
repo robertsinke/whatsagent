@@ -9,6 +9,7 @@ import { getDraft, upsertDraft } from '../store/drafts.js';
 import { upsertMessage } from '../store/messages.js';
 import { getProposal, listPendingProposals } from '../store/proposals.js';
 import { enqueueDraftOutbox } from '../store/outbox.js';
+import { getSetting } from '../store/settings.js';
 import { EventBus } from '../api/events.js';
 import type { RoutesDeps } from '../api/routes.js';
 import {
@@ -270,6 +271,45 @@ describe('action registry dispatch', () => {
 		);
 		expect(result.kind).toBe('json');
 		expect(result).toMatchObject({ status: 200 });
+	});
+
+	/**
+	 * PANEL-S1 — the panel's opt-in is a settings row, so the agent must not be
+	 * able to write it. This is the concrete instance of why `set-setting` is
+	 * frontend-only: an agent that could flip `panel_enabled` could enable its
+	 * own tool surface, and `/mcp` follows the panel row.
+	 *
+	 * Asserted as a CALLER-POLICY refusal, not a validation failure: a 400 from
+	 * `validateSettingValue` would pass this test for the wrong reason and keep
+	 * passing if `set-setting` ever left the frontend-only list. Hence the legal
+	 * value and the "before run" row check.
+	 */
+	it('a tool caller cannot write panel_enabled — refused by policy, before run', async () => {
+		const deps = makeDeps();
+		const result = await dispatch(
+			actionRegistry,
+			'set-setting',
+			{ key: 'panel_enabled', value: 'true' },
+			{ caller: 'tool', deps }
+		);
+		expect(result).toMatchObject({
+			kind: 'error',
+			status: 403,
+			error: 'Caller not permitted'
+		});
+		// Nothing was written: the refusal happened before `run()`.
+		expect(getSetting(db!, 'panel_enabled')).toBeUndefined();
+
+		// Same key, same value, from the owner: accepted. Without this the test
+		// above would also pass if the key itself were rejected outright.
+		const owner = await dispatch(
+			actionRegistry,
+			'set-setting',
+			{ key: 'panel_enabled', value: 'true' },
+			{ caller: 'frontend', deps }
+		);
+		expect(owner).toMatchObject({ kind: 'json', status: 200 });
+		expect(getSetting(db!, 'panel_enabled')).toBe('true');
 	});
 
 	it('approve-draft tool refusal happens before draft work', async () => {

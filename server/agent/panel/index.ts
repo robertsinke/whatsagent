@@ -33,6 +33,19 @@ export function isPanelHarnessId(value: unknown): value is PanelHarnessId {
 	return typeof value === 'string' && (PANEL_HARNESS_IDS as readonly string[]).includes(value);
 }
 
+/**
+ * PANEL-S1 — which discovery slot holds each harness's binary. The names do
+ * not line up and cannot be assumed: discovery's `codex` key is the OpenAI
+ * subscription slot whose binary is *OpenCode* (see `BINARY_NAMES` in
+ * `providers/discovery.ts`), so the panel's `opencode` harness reads the
+ * `codex` provider. Written down here because guessing it wrong yields a
+ * panel that silently spawns a bare name off PATH.
+ */
+export const PANEL_HARNESS_PROVIDERS: Record<PanelHarnessId, 'claude' | 'codex'> = {
+	claude: 'claude',
+	opencode: 'codex'
+};
+
 export type CreatePanelHarnessOptions = {
 	harness: PanelHarnessId;
 	/** Port the app server is listening on — `/mcp` is mounted on it. */
@@ -40,6 +53,13 @@ export type CreatePanelHarnessOptions = {
 	/** Bearer token from `app.mcp.token`. */
 	token: string;
 	model?: string;
+	/**
+	 * PANEL-S1 — absolute path to the harness binary, from provider discovery.
+	 * Omitted falls back to the bare name on PATH, which is what a packaged
+	 * `.app` (launched from Finder, with a minimal PATH) most often cannot
+	 * resolve. Same reason the drafting providers spawn discovered paths.
+	 */
+	command?: string;
 	registry?: ActionRegistry;
 	env?: NodeJS.ProcessEnv;
 	timeoutMs?: number;
@@ -49,6 +69,7 @@ export function createPanelHarness(options: CreatePanelHarnessOptions): PanelHar
 	const shared = {
 		port: options.port,
 		token: options.token,
+		...(options.command === undefined ? {} : { command: options.command }),
 		...(options.model === undefined ? {} : { model: options.model }),
 		...(options.env === undefined ? {} : { env: options.env }),
 		...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs })

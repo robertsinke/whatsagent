@@ -145,6 +145,14 @@ export type RoutesDeps = {
 	 * (503) rather than silently accepting turns that go nowhere.
 	 */
 	panelSession?: PanelSessionRuntime;
+	/**
+	 * PANEL-S1 — whether the saved panel settings differ from what this process
+	 * booted with. A closure, not a boolean: the rows change under a live
+	 * process (that is the point of the toggle) and the answer has to be current
+	 * at request time. Absent reads as "no", so a `RoutesDeps` built by hand in
+	 * a test reports the honest default.
+	 */
+	panelRestartRequired?: () => boolean;
 };
 
 /**
@@ -447,11 +455,19 @@ async function handleApi(
 	 * Whether the panel can run at all, and with which harness. The panel is
 	 * unusable with `/mcp` off, so this reports honestly rather than letting the
 	 * composer look wired when it is not.
+	 *
+	 * PANEL-S1 — `available` alone cannot tell the owner why. Paired with
+	 * `restartRequired` it separates the three states the UI has to distinguish:
+	 * running now (`available`), saved but not yet running (`restartRequired`),
+	 * and never configured (neither). Same server-side comparison as
+	 * `/api/providers` — a client-side "just saved" flag dies on reload and
+	 * would lie.
 	 */
 	if (path === '/api/agent/status' && method === 'GET') {
 		const panel = deps.panelSession;
 		json(res, 200, {
 			available: Boolean(panel),
+			restartRequired: deps.panelRestartRequired?.() ?? false,
 			...(panel
 				? panel.status()
 				: { running: false, sessionId: null, messageId: null, harness: null })

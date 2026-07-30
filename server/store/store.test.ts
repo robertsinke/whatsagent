@@ -23,9 +23,11 @@ import {
 import { enqueueOutbox, listPendingOutbox } from './outbox.js';
 import {
 	getOutboxPacingSettings,
+	getPanelSettings,
 	getSetting,
 	listEffectiveSettings,
-	setSetting
+	setSetting,
+	validateSettingValue
 } from './settings.js';
 
 let dataDir: string | undefined;
@@ -486,6 +488,79 @@ describe('outbox pacing settings', () => {
 			pacing_min_seconds: '2.5',
 			pacing_max_seconds: '2.5'
 		});
+	});
+});
+
+describe('agent panel settings (PANEL-S1)', () => {
+	it('accepts only true/false for panel_enabled, normalizing case and padding', () => {
+		expect(validateSettingValue('panel_enabled', 'true')).toEqual({
+			ok: true,
+			normalized: 'true'
+		});
+		expect(validateSettingValue('panel_enabled', ' FALSE ')).toEqual({
+			ok: true,
+			normalized: 'false'
+		});
+		for (const bad of ['', 'yes', '1', 'on', 'enabled']) {
+			const result = validateSettingValue('panel_enabled', bad);
+			expect(result.ok, bad).toBe(false);
+			if (!result.ok) expect(result.allowed).toEqual(['true', 'false']);
+		}
+	});
+
+	it('accepts only the two harness ids, and never a drafting provider name', () => {
+		expect(validateSettingValue('panel_harness', 'opencode')).toEqual({
+			ok: true,
+			normalized: 'opencode'
+		});
+		expect(validateSettingValue('panel_harness', ' Claude ')).toEqual({
+			ok: true,
+			normalized: 'claude'
+		});
+		// `codex` and `ollama` are DRAFTING provider ids. Accepting either here
+		// would persist a row the boot path rejects — codex is the discovery slot
+		// whose binary is opencode, and ollama has no tool surface at all.
+		for (const bad of ['', 'codex', 'ollama', 'opencode-cli']) {
+			const result = validateSettingValue('panel_harness', bad);
+			expect(result.ok, bad).toBe(false);
+			if (!result.ok) expect(result.allowed).toEqual(['opencode', 'claude']);
+		}
+	});
+
+	it('leaves panel_model free text, like provider_model', () => {
+		expect(validateSettingValue('panel_model', 'a-model-released-today')).toEqual({
+			ok: true,
+			normalized: 'a-model-released-today'
+		});
+	});
+
+	it('reads back as off with no rows, and reports panel_enabled off in the effective view', () => {
+		const database = openTempDb();
+		expect(getPanelSettings(database)).toEqual({ enabled: false, harness: null, model: null });
+		expect(listEffectiveSettings(database)).toMatchObject({ panel_enabled: 'false' });
+	});
+
+	it('treats a corrupt enable row as off rather than on', () => {
+		const database = openTempDb();
+		// A row can only get here by hand or by corruption — `set-setting`
+		// validates. Fail-safe polarity: only the exact string turns it on.
+		setSetting(database, 'panel_enabled', 'TRUE');
+		expect(getPanelSettings(database).enabled).toBe(false);
+		expect(listEffectiveSettings(database)).toMatchObject({ panel_enabled: 'false' });
+	});
+
+	it('reports a saved harness and model, treating an empty model as unset', () => {
+		const database = openTempDb();
+		setSetting(database, 'panel_enabled', 'true');
+		setSetting(database, 'panel_harness', 'claude');
+		setSetting(database, 'panel_model', '   ');
+		expect(getPanelSettings(database)).toEqual({
+			enabled: true,
+			harness: 'claude',
+			model: null
+		});
+		setSetting(database, 'panel_model', 'claude-opus-5');
+		expect(getPanelSettings(database).model).toBe('claude-opus-5');
 	});
 });
 

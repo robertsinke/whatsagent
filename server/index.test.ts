@@ -493,3 +493,174 @@ describe('resolveDataDirOverride', () => {
 		}
 	});
 });
+
+/**
+ * PANEL-S1 — the panel is reachable from Settings. Before this, `electron/main.js`
+ * had no way to pass a panel option and no way to set `WHATSAGENT_MCP`, so the
+ * shipped app rendered a feature nobody could turn on.
+ *
+ * Asserted through `GET /api/agent/status` rather than internals: that response
+ * is what the composer and the empty state read, so it is the thing that has to
+ * be right.
+ */
+describe('agent panel configuration (PANEL-S1)', () => {
+	const savedMcpEnv = process.env.WHATSAGENT_MCP;
+
+	afterEach(() => {
+		if (savedMcpEnv === undefined) delete process.env.WHATSAGENT_MCP;
+		else process.env.WHATSAGENT_MCP = savedMcpEnv;
+		vi.restoreAllMocks();
+	});
+
+	async function startPanelApp(
+		configure: (database: AppDatabase) => void,
+		options: Parameters<typeof createApp>[0] = {}
+	) {
+		dataDir = mkdtempSync(join(tmpdir(), 'whatsagent-panel-'));
+		db = openDatabase({ dataDir });
+		configure(db);
+		app = createApp({ db, dataDir, port: 0, staticDir: null, ...options });
+		await app.start();
+		const res = await fetch(`${app.url}/api/agent/status`);
+		return {
+			status: (await res.json()) as {
+				available: boolean;
+				restartRequired: boolean;
+				harness: string | null;
+			},
+			mcp: app.mcp
+		};
+	}
+
+	/** A harness that never spawns anything — the panel is built, not run. */
+	const inertHarness = { id: 'opencode' as const, run: () => (async function* () {})() };
+
+	it('builds the panel and mints the MCP surface from the settings rows alone', async () => {
+		delete process.env.WHATSAGENT_MCP;
+		const { status, mcp } = await startPanelApp((database) => {
+			setSetting(database, 'panel_enabled', 'true');
+			setSetting(database, 'panel_harness', 'opencode');
+		});
+		expect(status.available).toBe(true);
+		expect(status.restartRequired).toBe(false);
+		// Enabling the panel implies enabling MCP: the panel has no tools without
+		// it, so a toggle that left `/mcp` closed would be a toggle that does
+		// nothing. The token is minted here and nowhere else.
+		expect(mcp).not.toBeNull();
+	});
+
+	it('warns and stays unavailable when the row is on with no harness — and leaves /mcp closed', async () => {
+		delete process.env.WHATSAGENT_MCP;
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+		const { status, mcp } = await startPanelApp((database) => {
+			setSetting(database, 'panel_enabled', 'true');
+		});
+		expect(status.available).toBe(false);
+		// A restart cannot fix a missing harness, so this is "not configured",
+		// not "needs restart" — the UI would otherwise tell the owner to reboot
+		// into the same broken state.
+		expect(status.restartRequired).toBe(false);
+		// No harness means no panel, and no panel means no reason to mint a
+		// token — an unused token file is pure attack surface.
+		expect(mcp).toBeNull();
+		expect(warn.mock.calls.flat().join(' ')).toMatch(/panel_harness/);
+	});
+
+	it('does not throw on a harness id this build does not have', async () => {
+		delete process.env.WHATSAGENT_MCP;
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+		const { status } = await startPanelApp((database) => {
+			setSetting(database, 'panel_enabled', 'true');
+			// `codex` is a drafting provider id, not a harness id. A row written by
+			// an older build (or by hand) must degrade, not crash startup.
+			setSetting(database, 'panel_harness', 'codex');
+		});
+		expect(status.available).toBe(false);
+		expect(warn.mock.calls.flat().join(' ')).toMatch(/"codex"/);
+	});
+
+	it('reports restartRequired when the row is saved but this process booted without it', async () => {
+		delete process.env.WHATSAGENT_MCP;
+		const { status } = await startPanelApp(
+			(database) => {
+				setSetting(database, 'panel_enabled', 'true');
+				setSetting(database, 'panel_harness', 'claude');
+			},
+			// An explicit `mcp: false` is the caller overriding the row — the same
+			// shape as a process that started before the row was written.
+			{ mcp: false }
+		);
+		expect(status.available).toBe(false);
+		expect(status.restartRequired).toBe(true);
+	});
+
+	it('reports restartRequired when the saved model no longer matches the running one', async () => {
+		delete process.env.WHATSAGENT_MCP;
+		dataDir = mkdtempSync(join(tmpdir(), 'whatsagent-panel-model-'));
+		db = openDatabase({ dataDir });
+		setSetting(db, 'panel_enabled', 'true');
+		setSetting(db, 'panel_harness', 'opencode');
+		setSetting(db, 'panel_model', 'first-model');
+		app = createApp({ db, dataDir, port: 0, staticDir: null });
+		await app.start();
+		const before = (await (await fetch(`${app.url}/api/agent/status`)).json()) as {
+			restartRequired: boolean;
+		};
+		expect(before.restartRequired).toBe(false);
+
+		// The rows change under a live process — that is the entire point of the
+		// toggle, so the answer has to be recomputed per request.
+		setSetting(db, 'panel_model', 'second-model');
+		const after = (await (await fetch(`${app.url}/api/agent/status`)).json()) as {
+			restartRequired: boolean;
+		};
+		expect(after.restartRequired).toBe(true);
+	});
+
+	it('lets an explicit option beat the row, and never claims a restart would change it', async () => {
+		delete process.env.WHATSAGENT_MCP;
+		const { status } = await startPanelApp(
+			(database) => {
+				setSetting(database, 'panel_enabled', 'false');
+				setSetting(database, 'panel_harness', 'claude');
+			},
+			{ mcp: true, panel: { harness: 'opencode', harnessImpl: inertHarness } }
+		);
+		expect(status.available).toBe(true);
+		// The dev path is not a saved preference. Comparing it against rows it
+		// never wrote would report "restart required" forever.
+		expect(status.restartRequired).toBe(false);
+	});
+
+	it('still honours WHATSAGENT_MCP=1 with an explicit panel and no rows at all', async () => {
+		process.env.WHATSAGENT_MCP = '1';
+		const { status, mcp } = await startPanelApp(
+			() => undefined,
+			{ panel: { harness: 'opencode', harnessImpl: inertHarness } }
+		);
+		expect(status.available).toBe(true);
+		expect(mcp).not.toBeNull();
+	});
+
+	it('lets an explicit mcp:false override the row, so the surface stays closed', async () => {
+		process.env.WHATSAGENT_MCP = '1';
+		const { mcp } = await startPanelApp(
+			(database) => {
+				setSetting(database, 'panel_enabled', 'true');
+				setSetting(database, 'panel_harness', 'opencode');
+			},
+			{ mcp: false }
+		);
+		// Precedence is explicit option, then env, then the row — in that order,
+		// in both directions. A settings row must never re-open a surface the
+		// caller shut.
+		expect(mcp).toBeNull();
+	});
+
+	it('reports not-configured with no rows and no options', async () => {
+		delete process.env.WHATSAGENT_MCP;
+		const { status, mcp } = await startPanelApp(() => undefined);
+		expect(status).toMatchObject({ available: false, restartRequired: false });
+		expect(mcp).toBeNull();
+	});
+});

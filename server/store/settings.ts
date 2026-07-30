@@ -7,11 +7,31 @@ export const OUTBOX_DRY_RUN_SETTING = 'outbox_dry_run';
 export const PROVIDER_SETTING = 'provider';
 export const PROVIDER_MODEL_SETTING = 'provider_model';
 export const MEMORY_SETTING = 'memory';
+/**
+ * PANEL-S1 — the agent panel's owner-facing opt-in. Three rows rather than one:
+ * the panel cannot run without a harness, and the model is optional (each
+ * harness has its own default), so a single blob would make "enabled but
+ * unconfigured" unrepresentable and the warning path impossible to state.
+ *
+ * Read once at boot by `createApp`. Writing them does not start a panel — see
+ * the restart-required story in `server/index.ts`.
+ */
+export const PANEL_ENABLED_SETTING = 'panel_enabled';
+export const PANEL_HARNESS_SETTING = 'panel_harness';
+export const PANEL_MODEL_SETTING = 'panel_model';
 export const DEFAULT_MIN_SPACING_MS = 0;
 export const DEFAULT_MAX_SPACING_MS = 1_000;
 
 /** Closed domain for the `memory` setting. Mirrors `MemoryMode` in hindsight.ts. */
 const MEMORY_VALUES: ReadonlySet<string> = new Set(['off', 'null', 'hindsight']);
+
+/**
+ * Closed domain for `panel_harness`. Mirrors `PANEL_HARNESS_IDS` in
+ * `agent/panel/index.ts` — kept local for the same reason `MEMORY_VALUES` is,
+ * so the store module does not pull the harness graph (and its child-process
+ * imports) into every caller that only wants to read a settings row.
+ */
+const PANEL_HARNESS_VALUES: ReadonlySet<string> = new Set(['opencode', 'claude']);
 
 export type OutboxPacingSettings = {
 	minSpacingMs: number;
@@ -36,8 +56,8 @@ export type SettingValidation =
  * so a key whitelist would silently break every one of them. Closed domains
  * (`provider`, `memory`, `outbox_dry_run`, `pacing_*`) are validated against
  * their allowed set and normalized; everything else passes through unchanged,
- * including `provider_model` which stays free text on purpose — a model
- * released today must be settable without shipping a new build.
+ * including `provider_model` and `panel_model` which stay free text on purpose
+ * — a model released today must be settable without shipping a new build.
  */
 export function validateSettingValue(key: string, raw: string): SettingValidation {
 	const value = typeof raw === 'string' ? raw : '';
@@ -74,6 +94,28 @@ export function validateSettingValue(key: string, raw: string): SettingValidatio
 				ok: false,
 				message: `outbox_dry_run must be 'true' or 'false'`,
 				allowed: ['true', 'false']
+			};
+		}
+		return { ok: true, normalized: lower };
+	}
+	if (key === PANEL_ENABLED_SETTING) {
+		const lower = value.trim().toLowerCase();
+		if (lower !== 'true' && lower !== 'false') {
+			return {
+				ok: false,
+				message: `${PANEL_ENABLED_SETTING} must be 'true' or 'false'`,
+				allowed: ['true', 'false']
+			};
+		}
+		return { ok: true, normalized: lower };
+	}
+	if (key === PANEL_HARNESS_SETTING) {
+		const lower = value.trim().toLowerCase();
+		if (!PANEL_HARNESS_VALUES.has(lower)) {
+			return {
+				ok: false,
+				message: `Unknown panel harness ${JSON.stringify(raw)}`,
+				allowed: [...PANEL_HARNESS_VALUES]
 			};
 		}
 		return { ok: true, normalized: lower };
@@ -154,6 +196,26 @@ export function resolveOutboxDryRun(setting: string | undefined): boolean {
 	return setting !== 'false';
 }
 
+/**
+ * PANEL-S1 — the three panel rows as the boot path wants them. `harness` is
+ * returned raw (not narrowed) so the single narrowing lives at the one call
+ * site that can act on it, `isPanelHarnessId` in `createApp`; a row written
+ * before a harness id was retired must be *reported* as unusable, not silently
+ * dropped here.
+ */
+export function getPanelSettings(db: AppDatabase): {
+	enabled: boolean;
+	harness: string | null;
+	model: string | null;
+} {
+	const model = getSetting(db, PANEL_MODEL_SETTING)?.trim();
+	return {
+		enabled: getSetting(db, PANEL_ENABLED_SETTING) === 'true',
+		harness: getSetting(db, PANEL_HARNESS_SETTING)?.trim() || null,
+		model: model ? model : null
+	};
+}
+
 /** Settings API view: persisted values plus normalized runtime defaults. */
 export function listEffectiveSettings(db: AppDatabase): Record<string, string> {
 	const settings = listSettings(db);
@@ -165,6 +227,10 @@ export function listEffectiveSettings(db: AppDatabase): Record<string, string> {
 		// Normalized polarity: only the explicit string 'false' means live sends.
 		// Missing, misspelled, or corrupt stays 'true' (dry-run) — see
 		// `resolveOutboxDryRun` and the W4-U8 corrupt-setting test.
-		[OUTBOX_DRY_RUN_SETTING]: settings[OUTBOX_DRY_RUN_SETTING] === 'false' ? 'false' : 'true'
+		[OUTBOX_DRY_RUN_SETTING]: settings[OUTBOX_DRY_RUN_SETTING] === 'false' ? 'false' : 'true',
+		// PANEL-S1: same fail-safe polarity — only the exact string 'true' turns
+		// the panel on, so the Settings toggle renders off for a missing or
+		// corrupt row rather than claiming a capability that is not running.
+		[PANEL_ENABLED_SETTING]: settings[PANEL_ENABLED_SETTING] === 'true' ? 'true' : 'false'
 	};
 }

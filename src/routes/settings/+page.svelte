@@ -13,6 +13,7 @@
 		Eye,
 		Pencil,
 		Radio,
+		Bot,
 		RefreshCw,
 		ShieldAlert,
 		Sparkles,
@@ -24,7 +25,7 @@
 		type VoiceSaveResponse,
 		type VoiceSuggestion
 	} from '$lib/client/api.js';
-	import { ApiError, type ProvidersResponse } from '$lib/client/types.js';
+	import { ApiError, type AgentStatus, type ProvidersResponse } from '$lib/client/types.js';
 	// OSS-P3.4 — the provider + model control is shared with first-run setup.
 	// Do not re-implement it here; the two screens must not drift apart.
 	import ProviderPicker from '$lib/components/app/ProviderPicker.svelte';
@@ -108,6 +109,35 @@
 	 * WhatsApp; `false` (the fail-safe default) means approving a draft marks it
 	 * sent and nothing reaches the recipient.
 	 */
+	/**
+	 * PANEL-S1 — the agent panel's opt-in. Three rows (`panel_enabled`,
+	 * `panel_harness`, `panel_model`) read at startup only, so the saved value
+	 * and the running process can disagree; `agentStatus.restartRequired` is the
+	 * server's own comparison of the two and the only honest source for the
+	 * banner. A client-side "just saved" flag would not survive a reload.
+	 */
+	let agentStatus = $state<AgentStatus | null>(null);
+	/**
+	 * Harness ids are not provider ids: discovery's `codex` slot holds the
+	 * OpenCode binary (see BINARY_NAMES in providers/discovery.ts), so the
+	 * panel's `opencode` harness is gated on `codex` being installed. Mirrors
+	 * PANEL_HARNESS_PROVIDERS on the server.
+	 */
+	const PANEL_HARNESSES = [
+		{ value: 'opencode', label: 'OpenCode', provider: 'codex', binary: 'opencode' },
+		{ value: 'claude', label: 'Claude Code', provider: 'claude', binary: 'claude' }
+	] as const;
+	const installedHarnesses = $derived(
+		PANEL_HARNESSES.filter((h) =>
+			(providersSnapshot?.providers ?? []).some((p) => p.name === h.provider && p.installed)
+		)
+	);
+	const panelEnabled = $derived(values.panel_enabled === 'true');
+	/** Only offer Save once a harness is chosen — an enabled row with none is the warn-and-stay-off path. */
+	const panelHarnessChosen = $derived(
+		PANEL_HARNESSES.some((h) => h.value === values.panel_harness)
+	);
+
 	let sendsLive = $state(false);
 	let sendingMode = $state(false);
 	/** Confirmation dialog open state — only the unsafe direction (live) confirms. */
@@ -162,6 +192,30 @@
 		} finally {
 			providersLoading = false;
 		}
+	}
+
+	async function loadAgentStatus() {
+		try {
+			agentStatus = await api.agentStatus();
+		} catch {
+			// Enrichment only: an older server or a failed call leaves the banner
+			// off rather than claiming a state we cannot observe.
+			agentStatus = null;
+		}
+	}
+
+	/**
+	 * Writing the enable row without a harness produces a startup warning and no
+	 * panel, so the toggle writes both in one gesture: turning it on with exactly
+	 * one harness installed picks that one. Never silently picks between two.
+	 */
+	async function togglePanel(next: boolean) {
+		if (next && !panelHarnessChosen && installedHarnesses.length === 1) {
+			values.panel_harness = installedHarnesses[0]!.value;
+			await save('panel_harness');
+		}
+		values.panel_enabled = next ? 'true' : 'false';
+		await save('panel_enabled');
 	}
 
 	function applyVoiceDocument(doc: VoiceView) {
@@ -428,6 +482,7 @@
 			.then((mode) => (sendsLive = mode.live))
 			.catch((err) => (error = err instanceof Error ? err.message : String(err)));
 		void loadVoice();
+		void loadAgentStatus();
 
 		const onKey = (e: KeyboardEvent) => {
 			if (settingsTab !== 'voice' || voiceMode !== 'edit') return;
@@ -471,6 +526,9 @@
 			if (key === 'provider' || key === 'provider_model' || key === 'memory') {
 				void loadProviders();
 			}
+			// PANEL-S1: restartRequired is a server-side comparison, so re-ask
+			// rather than deriving it here from what we just wrote.
+			if (key.startsWith('panel_')) void loadAgentStatus();
 		} catch (err) {
 			error = err instanceof Error ? err.message : String(err);
 		}
@@ -598,6 +656,130 @@
 						<span class="field-help">{field.help}</span>
 					</label>
 				{/each}
+
+				<!--
+				  PANEL-S1 — the agent panel's opt-in, and the only one there is: the
+				  old WHATSAGENT_MCP=1 instruction was unreachable from a double-clicked
+				  .app. This is a capability AND a spend decision, so the copy states
+				  both what the panel can do and what it structurally cannot, rather
+				  than leaving the owner to infer either.
+				-->
+				<div class="panel-card" data-enabled={panelEnabled} data-testid="agent-panel-setting">
+					<div class="panel-head">
+						<span class="panel-icon" data-enabled={panelEnabled}><Bot class="size-4" /></span>
+						<div class="panel-titles">
+							<span class="field-label">Agent panel</span>
+							<span class="panel-state" data-testid="panel-runtime-state">
+								{#if agentStatus?.available}
+									Running now{agentStatus.harness ? ` on ${agentStatus.harness}` : ''}.
+								{:else if agentStatus?.restartRequired}
+									Saved, but this app was started without it — restart to apply.
+								{:else}
+									Not running in this app.
+								{/if}
+							</span>
+						</div>
+					</div>
+
+					<p class="panel-help">
+						Turning this on gives you a chat panel next to your conversations. It can read
+						your chats, generate and refine drafts, and propose a send for your approval.
+					</p>
+					<p class="panel-help">
+						<strong>It can never send, and it can never approve its own proposal.</strong> That
+						is structural — every message still leaves only after you press send or approve —
+						not something this setting can change.
+					</p>
+					<p class="panel-help">
+						It runs by spawning the coding-agent CLI you pick below, under the subscription
+						you are already logged into there. Every turn costs whatever that subscription
+						charges for it.
+					</p>
+
+					{#if installedHarnesses.length === 0}
+						<p class="panel-warn" data-testid="panel-no-harness">
+							No harness found. Install the <code>opencode</code> or <code>claude</code> CLI and
+							re-scan above — the panel needs one of them to run.
+						</p>
+					{:else}
+						<label class="field">
+							<span class="field-label">Harness</span>
+							<span class="field-row">
+								<Select.Root type="single" bind:value={values.panel_harness}>
+									<Select.Trigger class="field-select" data-testid="panel-harness-select">
+										{installedHarnesses.find((h) => h.value === values.panel_harness)?.label ??
+											'Select a harness'}
+									</Select.Trigger>
+									<Select.Content>
+										{#each installedHarnesses as harness (harness.value)}
+											<Select.Item value={harness.value} label={harness.label} />
+										{/each}
+									</Select.Content>
+								</Select.Root>
+								<Button size="sm" variant="outline" onclick={() => save('panel_harness')}>
+									{#if saved === 'panel_harness'}
+										<Check class="size-3.5" /> Saved
+									{:else}
+										Save
+									{/if}
+								</Button>
+							</span>
+							<span class="field-help">
+								Only installed CLIs are listed. Ollama is not offered here: the panel needs a
+								tool surface, and Ollama models reach one by running inside OpenCode.
+							</span>
+						</label>
+
+						<label class="field">
+							<span class="field-label">Panel model (optional)</span>
+							<span class="field-row">
+								<Input
+									bind:value={values.panel_model}
+									placeholder="harness default"
+									class="field-input"
+								/>
+								<Button size="sm" variant="outline" onclick={() => save('panel_model')}>
+									{#if saved === 'panel_model'}
+										<Check class="size-3.5" /> Saved
+									{:else}
+										Save
+									{/if}
+								</Button>
+							</span>
+							<span class="field-help">
+								Leave empty to use whatever the harness defaults to. Free text on purpose — a
+								model released today must be settable without a new build.
+							</span>
+						</label>
+
+						<div class="panel-controls">
+							<Button
+								size="sm"
+								variant={panelEnabled ? 'outline' : 'default'}
+								data-testid="panel-toggle"
+								disabled={!panelEnabled && !panelHarnessChosen && installedHarnesses.length !== 1}
+								onclick={() => togglePanel(!panelEnabled)}
+							>
+								{#if panelEnabled}
+									Turn the agent panel off
+								{:else}
+									Turn the agent panel on
+								{/if}
+							</Button>
+							{#if saved === 'panel_enabled'}
+								<span class="panel-saved"><Check class="size-3.5" /> Saved</span>
+							{/if}
+						</div>
+
+						<p class="panel-help">
+							The panel is built once at startup, so saving here does not start or stop
+							anything in the app you are looking at.
+							{#if agentStatus?.restartRequired}
+								<strong data-testid="panel-restart-note">Restart WhatsAgent to apply.</strong>
+							{/if}
+						</p>
+					{/if}
+				</div>
 			</Tabs.Content>
 
 			<Tabs.Content value="safety" class="panel-content">
@@ -1137,6 +1319,86 @@
 	}
 	:global(.confirm-live) {
 		max-width: 460px;
+	}
+
+	/* PANEL-S1 — agent panel opt-in. Same card idiom as the send-mode card, and
+	   the same cobalt "this is on" accent, so the two capability switches in
+	   Settings read as one family rather than two inventions. */
+	.panel-card {
+		display: flex;
+		flex-direction: column;
+		gap: 0.6rem;
+		padding: 0.7rem 0.8rem;
+		border-radius: var(--radius-md);
+		border: 1px solid var(--hairline);
+		background: var(--surface-raised);
+	}
+	.panel-card[data-enabled='true'] {
+		border-color: color-mix(in srgb, var(--cobalt) 45%, var(--hairline));
+		background: color-mix(in srgb, var(--cobalt) 6%, var(--surface-raised));
+	}
+	.panel-head {
+		display: flex;
+		gap: 0.55rem;
+		align-items: flex-start;
+	}
+	.panel-icon {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 1.6rem;
+		height: 1.6rem;
+		border-radius: 999px;
+		flex: none;
+		color: var(--ink-60);
+		background: color-mix(in srgb, var(--ink-10) 12%, transparent);
+	}
+	.panel-icon[data-enabled='true'] {
+		color: var(--cobalt);
+		background: color-mix(in srgb, var(--cobalt) 14%, transparent);
+	}
+	.panel-titles {
+		display: flex;
+		flex-direction: column;
+		gap: 0.2rem;
+	}
+	.panel-state {
+		font-size: 0.78rem;
+		color: var(--ink-70);
+		line-height: 1.35;
+	}
+	.panel-help {
+		font-size: 0.72rem;
+		color: var(--ink-50);
+		margin: 0;
+		line-height: 1.4;
+	}
+	.panel-help strong {
+		color: var(--ink-70);
+		font-weight: 600;
+	}
+	.panel-warn {
+		font-size: 0.72rem;
+		color: var(--ink-70);
+		margin: 0;
+		line-height: 1.4;
+	}
+	.panel-warn code {
+		font-family: var(--font-mono, ui-monospace, monospace);
+		font-size: 0.95em;
+	}
+	.panel-controls {
+		display: flex;
+		gap: 0.5rem;
+		align-items: center;
+		flex-wrap: wrap;
+	}
+	.panel-saved {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.25rem;
+		font-size: 0.72rem;
+		color: var(--cobalt);
 	}
 
 	/* W4-U10 / P3.4 — voice inspector + editor tab */

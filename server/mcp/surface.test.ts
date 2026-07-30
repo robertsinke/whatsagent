@@ -12,7 +12,7 @@ import { getDraft } from '../store/drafts.js';
 import { EventBus } from '../api/events.js';
 import { actionRegistry, listActionsForCaller } from '../actions/index.js';
 import { mcpTokenPath } from './token.js';
-import { isMcpEnabled, MCP_PATH } from './surface.js';
+import { isMcpEnabled, mcpOptionOverride, MCP_PATH } from './surface.js';
 
 const REFUSED = [
 	'send',
@@ -80,6 +80,25 @@ describe('isMcpEnabled', () => {
 		expect(isMcpEnabled({ mcp: { enabled: true } }, {})).toBe(true);
 		expect(isMcpEnabled({}, { WHATSAGENT_MCP: '1' })).toBe(true);
 		expect(isMcpEnabled({ mcp: false }, { WHATSAGENT_MCP: '1' })).toBe(false);
+	});
+});
+
+/**
+ * PANEL-S1 — `isMcpEnabled` folds "said no" and "said nothing" into the same
+ * `false`, which is right for its question and wrong for the settings
+ * fallback: a `panel_enabled` row may switch the surface on when nobody asked,
+ * and must never re-open one a caller explicitly shut.
+ */
+describe('mcpOptionOverride', () => {
+	it('distinguishes an explicit answer from no answer at all', () => {
+		expect(mcpOptionOverride({})).toBeUndefined();
+		expect(mcpOptionOverride(undefined)).toBeUndefined();
+		// An object with only a token is still no answer about enablement.
+		expect(mcpOptionOverride({ mcp: {} })).toBeUndefined();
+		expect(mcpOptionOverride({ mcp: true })).toBe(true);
+		expect(mcpOptionOverride({ mcp: false })).toBe(false);
+		expect(mcpOptionOverride({ mcp: { enabled: true } })).toBe(true);
+		expect(mcpOptionOverride({ mcp: { enabled: false } })).toBe(false);
 	});
 });
 
