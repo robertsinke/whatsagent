@@ -78,6 +78,25 @@ export type ServerEvent =
 	 * text chunk for live append. One-way server→client, same as every other
 	 * variant — no request/response layer on the socket.
 	 */
+	/**
+	 * PL-U7 — the panel turn's own lifecycle, separate from its parts.
+	 *
+	 * Needed because "is a turn still running?" is not derivable from the parts.
+	 * A turn can end without a `step-finish` (a harness that exits mid-step, a
+	 * cancel, a spawn failure), and a turn's *first* part can arrive seconds after
+	 * the owner pressed Enter. Inferring the state from step markers therefore
+	 * either leaves the composer locked forever or unlocks it early; both are
+	 * worse than one explicit event. `reason` is what the panel shows when a turn
+	 * ended without finishing normally.
+	 */
+	| {
+			type: 'agent-turn';
+			phase: 'started' | 'finished';
+			sessionId: string;
+			messageId: string;
+			harness: string;
+			reason?: string;
+	  }
 	| { type: 'agent-part-updated'; part: AgentPart; delta?: string }
 	/**
 	 * PL-A1 — pure client-state commands (no REST route exists). Closed typed

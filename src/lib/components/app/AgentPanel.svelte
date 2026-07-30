@@ -3,7 +3,7 @@
 	import MessageContent from '$lib/components/ai-elements/message-content.svelte';
 	import Shimmer from '$lib/components/ai-elements/shimmer.svelte';
 	import { scrollActivity } from '$lib/actions/scroll-activity.svelte.js';
-	import { CornerDownLeft, Sparkles, Wrench, TriangleAlert } from '@lucide/svelte';
+	import { CornerDownLeft, Sparkles, Square, Wrench, TriangleAlert } from '@lucide/svelte';
 	import * as InputGroup from '$lib/components/ui/input-group/index.js';
 	import { Spinner } from '$lib/components/ui/spinner/index.js';
 	import type { AppState } from '$lib/client/state.svelte.js';
@@ -43,11 +43,17 @@
 	 * generated a draft, shortened it" as it happens — not a wall of raw JSON
 	 * and not a spinner that hides what is happening.
 	 *
-	 * THE INPUT STAYS UNWIRED. There is no agent runtime, so the composer
-	 * cannot send a message to anything. It stays visibly disabled and clearly
-	 * marked. The attachment point for the runtime is `onsubmit` below —
-	 * marked `TODO: agent runtime` — and replacing the disabled affordance
-	 * with a real send is the join point.
+	 * THE INPUT IS WIRED (PL-U7). `submit` below calls `app.sendAgentTurn`,
+	 * which POSTs the owner's text to the frontend-only `agent-turn` action; the
+	 * reply streams back through the same `agent-part-updated` channel this pane
+	 * already renders, so nothing about the rendering path changed.
+	 *
+	 * It is still disabled when there is nothing to send to. `app.agent.available`
+	 * is false whenever the `/mcp` surface is off — which is the shipped default,
+	 * because the panel deliberately does NOT switch a network surface on for the
+	 * owner. That state is labelled honestly ("agent panel not enabled") rather
+	 * than left looking broken, and the previous "(not wired)" placeholder is
+	 * gone: it would now be a lie in the configured case.
 	 */
 
 	let { app }: { app: AppState } = $props();
@@ -64,20 +70,37 @@
 
 	let value = $state('');
 
+	const available = $derived(app.agent.available);
+	const running = $derived(app.agent.running);
+	// `working` (derived from the parts) and `running` (the turn lifecycle event)
+	// are different facts: a turn is running from the moment the owner submits,
+	// but there are no parts to shimmer over until the harness produces one.
+	const busy = $derived(running || working);
+	const canSubmit = $derived(available && !running && value.trim().length > 0);
+
 	function handleKeydown(e: KeyboardEvent) {
 		if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
 		e.preventDefault();
 		(e.currentTarget as HTMLTextAreaElement).form?.requestSubmit();
 	}
 
-	// TODO: agent runtime — when a runtime exists, this is where the panel
-	// sends an owner instruction to it. Today there is nothing to send to, so
-	// the form is disabled and the textarea reads as a scratchpad. Never fake
-	// a reply: the honest "not wired" treatment is a disabled affordance.
-	function submit(e: Event) {
+	/**
+	 * PL-U7 — the join point PL-U4 left marked. The text is cleared optimistically
+	 * so the composer is ready for the next instruction, and restored if the turn
+	 * was refused: retyping a rejected instruction is a worse outcome than a
+	 * briefly-repopulated field.
+	 */
+	async function submit(e: Event) {
 		e.preventDefault();
-		// Intentionally a no-op until the runtime attaches. Keeping the handler
-		// here (rather than deleting the form) makes the join point explicit.
+		const text = value.trim();
+		if (!text || !canSubmit) return;
+		value = '';
+		const started = await app.sendAgentTurn(text);
+		if (!started) value = text;
+	}
+
+	function cancel() {
+		void app.cancelAgentTurn();
 	}
 </script>
 
@@ -85,11 +108,13 @@
 	<header class="agent-head">
 		<Sparkles class="size-3.5" />
 		<span class="agent-title">Agent</span>
-		<span class="agent-sub" class:working>
-			{#if working}
+		<span class="agent-sub" class:working={busy} data-testid="agent-status">
+			{#if busy}
 				<Shimmer children="working…" as="span" />
+			{:else if !available}
+				not enabled
 			{:else}
-				not running
+				{app.agent.harness ?? 'ready'}
 			{/if}
 		</span>
 	</header>
@@ -99,10 +124,22 @@
 			<!-- The normal resting state: no session yet. Not an error. -->
 			<div class="agent-empty" data-testid="agent-empty">
 				<Sparkles class="size-5 empty-icon" />
-				<p class="empty-title">Agent is idle</p>
-				<p class="empty-body">
-					When a chat needs a reply, the agent's tool calls and reasoning will stream here.
-				</p>
+				{#if available}
+					<p class="empty-title">Agent is idle</p>
+					<p class="empty-body">
+						Ask for something below — open a chat, draft a reply, make it shorter. Tool
+						calls and reasoning stream here as they happen.
+					</p>
+				{:else}
+					<!-- Honest, and specific enough to act on. The panel needs the local MCP
+					     surface and does not turn it on by itself. -->
+					<p class="empty-title">Agent panel not enabled</p>
+					<p class="empty-body">
+						The panel reaches the app through the local MCP surface, which is off by
+						default. Start the app with <code>WHATSAGENT_MCP=1</code> and a configured
+						panel harness to use it.
+					</p>
+				{/if}
 			</div>
 		{:else}
 			{#each sessions as session (session.sessionId)}
@@ -164,35 +201,58 @@
 	  flex child below the scroll viewport (the same shape as .conv-foot), so it
 	  stays on screen at any viewport height and never drifts up the column.
 	  The textarea auto-grows with field-sizing-content up to a max, then
-	  scrolls internally — the conversation composer's approach. Visibly
-	  disabled affordance: the submit button is disabled and the textarea reads
-	  as a local scratchpad. The real agent runtime (TODO: agent runtime) will
-	  attach at onsubmit and replace the disabled affordance. Do not fake a
-	  reply — there is nothing to send to yet.
+	  scrolls internally — the conversation composer's approach.
+
+	  PL-U7: live. Disabled only when there is genuinely nothing to send to
+	  (`available` false — the MCP surface is off) or while a turn is in flight,
+	  in which case the submit button becomes a stop button. One turn runs at a
+	  time and a second is refused rather than queued, so offering send during a
+	  turn would only produce a 409.
 	-->
 	<form class="agent-input" onsubmit={submit}>
+		{#if app.agentError}
+			<p class="agent-error" role="status" data-testid="agent-error">
+				<TriangleAlert class="size-3" />
+				{app.agentError}
+			</p>
+		{/if}
 		<InputGroup.Root class="agent-field">
 			<div class="contents">
 				<InputGroup.Textarea
 					class="field-sizing-content max-h-40 min-h-12"
 					name="agent-message"
-					placeholder="Notes to the agent (not wired)…"
+					placeholder={available
+						? 'Ask the agent to do something…'
+						: 'Agent panel not enabled'}
 					bind:value
 					onkeydown={handleKeydown}
-					disabled
+					disabled={!available || running}
 				/>
 			</div>
 			<InputGroup.Addon align="block-end" class="justify-end gap-1">
-				<InputGroup.Button
-					aria-label="Submit"
-					size="icon-sm"
-					type="submit"
-					variant="default"
-					class="agent-hero"
-					disabled
-				>
-					<CornerDownLeft class="size-4" />
-				</InputGroup.Button>
+				{#if running}
+					<InputGroup.Button
+						aria-label="Stop"
+						size="icon-sm"
+						type="button"
+						variant="default"
+						class="agent-hero"
+						onclick={cancel}
+					>
+						<Square class="size-3.5" />
+					</InputGroup.Button>
+				{:else}
+					<InputGroup.Button
+						aria-label="Submit"
+						size="icon-sm"
+						type="submit"
+						variant="default"
+						class="agent-hero"
+						disabled={!canSubmit}
+					>
+						<CornerDownLeft class="size-4" />
+					</InputGroup.Button>
+				{/if}
 			</InputGroup.Addon>
 		</InputGroup.Root>
 	</form>
@@ -378,6 +438,25 @@
 	}
 	.agent-input :global(textarea) {
 		font-size: 0.82rem;
+	}
+	/* Turn failures belong next to the input that caused them, not in the global
+	   error banner — a harness that is not installed is a panel problem, not an
+	   app problem. */
+	.agent-error {
+		display: flex;
+		align-items: center;
+		gap: 0.3rem;
+		margin: 0 0.15rem 0.35rem;
+		font-size: 0.7rem;
+		line-height: 1.35;
+		color: var(--destructive);
+	}
+	.empty-body code {
+		font-family: ui-monospace, SFMono-Regular, monospace;
+		font-size: 0.72rem;
+		padding: 0.05rem 0.25rem;
+		border-radius: var(--radius-sm);
+		background: color-mix(in srgb, var(--ink-50) 14%, transparent);
 	}
 	/* Same well treatment as the composer field, cut into the sunken surface. */
 	.agent-input :global(.agent-field) {

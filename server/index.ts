@@ -30,6 +30,13 @@ import { createSessionState } from './api/session.js';
 import { buildAllowedOrigins, validateOriginAndHost } from './api/security.js';
 import { createMcpSurface, isMcpEnabled } from './mcp/surface.js';
 import { ensureMcpToken } from './mcp/token.js';
+import {
+	createPanelHarness,
+	PanelSessionManager,
+	type PanelHarness,
+	type PanelHarnessId
+} from './agent/panel/index.js';
+import { actionRegistry } from './actions/index.js';
 import { DraftScheduler } from './agent/scheduler.js';
 import type { Memory } from './agent/memory/memory.js';
 import { NullMemory } from './agent/memory/null-memory.js';
@@ -111,6 +118,28 @@ export type CreateAppOptions = {
 	 * `{dataDir}/mcp.token` at 0600). Pass `{ enabled: true, token }` in tests.
 	 */
 	mcp?: boolean | { enabled?: boolean; token?: string };
+	/**
+	 * PL-U7 — run the agent panel with this harness. Off by default.
+	 *
+	 * THE MCP RELATIONSHIP, decided rather than left implicit: the panel needs
+	 * `/mcp` and this does NOT switch it on. `isMcpEnabled` is read once at boot
+	 * and the token is minted only while enabled, so "enable it implicitly" would
+	 * mean a UI feature quietly turning on a network surface that ships off by
+	 * default — and the owner would have no way to tell it had happened. So with
+	 * MCP off the panel reports itself unavailable (`GET /api/agent/status`
+	 * `available: false`, and `agent-turn` 503s) and the composer stays visibly
+	 * disabled. It never silently no-ops.
+	 *
+	 * `harness` is `opencode` or `claude`. Direct-Ollama is not a panel option —
+	 * it has no tool surface; Ollama models run inside opencode instead.
+	 */
+	panel?: {
+		harness: PanelHarnessId;
+		model?: string;
+		timeoutMs?: number;
+		/** Pre-built harness, for tests — skips spawning a real binary. */
+		harnessImpl?: PanelHarness;
+	};
 };
 
 export type App = {
@@ -294,6 +323,44 @@ export function createApp(options: CreateAppOptions = {}): App {
 		});
 		routeDeps.mcp = surface;
 		mcpInfo = { token: minted.token, tokenPath: minted.path };
+	}
+
+	/**
+	 * PL-U7 — the panel runtime, only when MCP is on. See
+	 * `CreateAppOptions.panel` for why this does not enable MCP itself.
+	 *
+	 * The harness is built lazily (on the first turn) so it can read the port the
+	 * server actually bound: `port: 0` is the normal case in tests, and the MCP
+	 * URL written into the harness config has to be the listening port, not the
+	 * requested one.
+	 */
+	let panelSession: PanelSessionManager | undefined;
+	if (options.panel && mcpInfo) {
+		const token = mcpInfo.token;
+		const panelOptions = options.panel;
+		let built: PanelHarness | undefined = panelOptions.harnessImpl;
+		const harness: PanelHarness = {
+			get id() {
+				return panelOptions.harness;
+			},
+			run(turn, signal) {
+				built ??= createPanelHarness({
+					harness: panelOptions.harness,
+					port: listeningPort,
+					token,
+					registry: actionRegistry,
+					...(panelOptions.model === undefined ? {} : { model: panelOptions.model }),
+					...(panelOptions.timeoutMs === undefined ? {} : { timeoutMs: panelOptions.timeoutMs })
+				});
+				return built.run(turn, signal);
+			}
+		};
+		panelSession = new PanelSessionManager({ events, harness });
+		routeDeps.panelSession = panelSession;
+	} else if (options.panel) {
+		console.warn(
+			'[panel] agent panel requested but the MCP surface is off — the panel has no tools and will report itself unavailable. Enable it with WHATSAGENT_MCP=1.'
+		);
 	}
 
 	const handleRequest = createRequestHandler(routeDeps);
@@ -499,6 +566,8 @@ export function createApp(options: CreateAppOptions = {}): App {
 		drainTimer = undefined;
 		scheduler?.stop();
 		pacer?.stop();
+		// Kills any in-flight harness process — a turn must not outlive the app.
+		await panelSession?.stop();
 		session.dispose();
 		if (options.channel) await options.channel.stop();
 		unsubscribeEvents();

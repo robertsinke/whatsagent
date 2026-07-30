@@ -1,7 +1,9 @@
 import type { ActionDefinition } from './types.js';
 import type { ActionRegistry } from './dispatch.js';
 import { agentDemoAction } from './agent-demo.js';
+import { agentTurnAction } from './agent-turn.js';
 import { approveDraftAction } from './approve-draft.js';
+import { cancelAgentTurnAction } from './cancel-agent-turn.js';
 import { cancelOutboxAction } from './cancel-outbox.js';
 import { confirmProposalAction } from './confirm-proposal.js';
 import { deepenHistoryAction } from './deepen-history.js';
@@ -9,6 +11,9 @@ import { discardVoiceSuggestionAction } from './discard-voice-suggestion.js';
 import { dismissCancellationNoticeAction } from './dismiss-cancellation-notice.js';
 import { editDraftAction } from './edit-draft.js';
 import { generateDraftAction } from './generate-draft.js';
+import { getDraftAction } from './get-draft.js';
+import { getMessagesAction } from './get-messages.js';
+import { listChatsAction } from './list-chats.js';
 import { loadMediaAction } from './load-media.js';
 import { markReadAction } from './mark-read.js';
 import { promoteVoiceSuggestionAction } from './promote-voice-suggestion.js';
@@ -27,7 +32,9 @@ import { suggestVoiceNoteAction } from './suggest-voice-note.js';
 
 const actions: ActionDefinition<unknown>[] = [
 	agentDemoAction as ActionDefinition<unknown>,
+	agentTurnAction as ActionDefinition<unknown>,
 	approveDraftAction as ActionDefinition<unknown>,
+	cancelAgentTurnAction as ActionDefinition<unknown>,
 	cancelOutboxAction as ActionDefinition<unknown>,
 	confirmProposalAction as ActionDefinition<unknown>,
 	deepenHistoryAction as ActionDefinition<unknown>,
@@ -35,6 +42,9 @@ const actions: ActionDefinition<unknown>[] = [
 	dismissCancellationNoticeAction as ActionDefinition<unknown>,
 	editDraftAction as ActionDefinition<unknown>,
 	generateDraftAction as ActionDefinition<unknown>,
+	getDraftAction as ActionDefinition<unknown>,
+	getMessagesAction as ActionDefinition<unknown>,
+	listChatsAction as ActionDefinition<unknown>,
 	loadMediaAction as ActionDefinition<unknown>,
 	markReadAction as ActionDefinition<unknown>,
 	promoteVoiceSuggestionAction as ActionDefinition<unknown>,

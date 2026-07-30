@@ -2,6 +2,12 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+	disabledInheritedMcp,
+	OPENCODE_BUILTIN_TOOLS_OFF,
+	readUserOpenCodeMcpNames,
+	type OpenCodeGlobalsOptions
+} from './opencode-config.js';
+import {
 	buildPrompt,
 	parseDraftResult,
 	ProviderError,
@@ -15,38 +21,28 @@ import {
 } from './provider.js';
 
 /**
- * Verbatim empty-toolset config from
- * `docs/evidence/2026-07-29-pl-s3-opencode-recheck.md` (PL-S3).
+ * The empty-toolset config for DRAFTING: no MCP tools, no builtins, everything
+ * denied. The panel's config is the inverse of this one (our MCP tools, still
+ * no builtins) and lives in `server/agent/panel/opencode-harness.ts`. The two
+ * mechanical pieces they share — the verified thirteen-key `tools` block and
+ * the inherited-globals disable list — come from `opencode-config.ts`; the
+ * `mcp` and `permission` blocks are deliberately NOT shared.
  *
- * Do not hand-roll a subset: on opencode 1.18.9 a five-key tools block
- * (bash/read/todoread/patch/task) can hang every run, while this thirteen-key
- * shape returns in seconds. If you must change it, re-prove with a decoy file.
+ * Built as a function rather than a frozen literal because the inherited-MCP
+ * names are read off the user's own opencode configs at spawn time. They used
+ * to be four hardcoded names that happened to exist on the owner's machine,
+ * which both leaked and was wrong for everybody else.
  */
-export const OPENCODE_EMPTY_TOOLS_CONFIG = {
-	$schema: 'https://opencode.ai/config.json',
-	mcp: {
-		'computer-use': { enabled: false },
-		'legalwork-ui': { enabled: false },
-		'open-knowledge': { enabled: false },
-		pencil: { enabled: false }
-	},
-	permission: { '*': 'deny' },
-	tools: {
-		bash: false,
-		edit: false,
-		write: false,
-		read: false,
-		grep: false,
-		glob: false,
-		list: false,
-		webfetch: false,
-		websearch: false,
-		todowrite: false,
-		skill: false,
-		question: false,
-		lsp: false
-	}
-} as const;
+export function buildOpenCodeEmptyToolsConfig(
+	options: OpenCodeGlobalsOptions = {}
+): Record<string, unknown> {
+	return {
+		$schema: 'https://opencode.ai/config.json',
+		mcp: disabledInheritedMcp(readUserOpenCodeMcpNames(options)),
+		permission: { '*': 'deny' },
+		tools: { ...OPENCODE_BUILTIN_TOOLS_OFF }
+	};
+}
 
 export interface OpenCodeProviderOptions {
 	command?: string;
@@ -80,7 +76,7 @@ export class OpenCodeProvider implements DraftProvider {
 		const configDirectory = await mkdtemp(join(tmpdir(), 'whatsagent-opencode-'));
 		await writeFile(
 			join(configDirectory, 'opencode.json'),
-			`${JSON.stringify(OPENCODE_EMPTY_TOOLS_CONFIG, null, 2)}\n`,
+			`${JSON.stringify(buildOpenCodeEmptyToolsConfig({ env: this.options.env }), null, 2)}\n`,
 			{ mode: 0o600 }
 		);
 

@@ -10,7 +10,8 @@ import {
 	type RefinementIntent,
 	type SendProposal,
 	type SessionView,
-	type AgentSessionView
+	type AgentSessionView,
+	type AgentStatus
 } from './types.js';
 import {
 	isKnownAgentPartKind,
@@ -53,6 +54,19 @@ const RESYNC_MAX_WAIT_MS = 4_000;
  * Generate button disabled indefinitely.
  */
 const GENERATE_SETTLE_TIMEOUT_MS = 30_000;
+
+/**
+ * PL-U7 — the resting agent state. `available: false` is the shipped default,
+ * not an error path: the panel needs the `/mcp` surface and that is off unless
+ * the owner turns it on.
+ */
+const UNAVAILABLE_AGENT: AgentStatus = {
+	available: false,
+	running: false,
+	sessionId: null,
+	messageId: null,
+	harness: null
+};
 
 const EMPTY_SESSION: SessionView = {
 	status: 'initializing',
@@ -202,6 +216,19 @@ export class AppState {
 	 * from the wire directly.
 	 */
 	agentSessions = $state<Record<string, AgentSessionView>>({});
+	/**
+	 * PL-U7 — whether the panel has a runtime, and whether a turn is in flight.
+	 * `available: false` is the shipped default (the MCP surface is off), and the
+	 * composer must stay disabled in that case rather than look wired.
+	 *
+	 * `running` is kept locally as well as server-side because it flips on the
+	 * owner's own submit, before any part has arrived — otherwise the composer
+	 * would stay enabled for the second or two a harness takes to spawn, and a
+	 * fast second Enter would earn a 409 the owner did nothing to deserve.
+	 */
+	agent = $state<AgentStatus>(UNAVAILABLE_AGENT);
+	/** Last panel failure, shown in the composer rather than as a global error. */
+	agentError = $state<string | null>(null);
 
 	#realtime: Realtime | undefined;
 	#conversationEpoch = 0;
@@ -288,7 +315,7 @@ export class AppState {
 
 	async refresh(options: { preserveDeepenStatus?: boolean } = {}): Promise<void> {
 		try {
-			const [session, chats, outbox, sendMode, proposals, notices] = await Promise.all([
+			const [session, chats, outbox, sendMode, proposals, notices, agent] = await Promise.all([
 				api.session().catch(() => EMPTY_SESSION),
 				api.chats(),
 				api.outbox(),
@@ -296,7 +323,11 @@ export class AppState {
 				// A proposal outlives the socket that announced it, so the pending
 				// set is refetched rather than reconstructed from events.
 				api.proposals().catch(() => ({ items: [] as SendProposal[] })),
-				api.cancellationNotices().catch(() => ({ items: [] as CancellationNotice[] }))
+				api.cancellationNotices().catch(() => ({ items: [] as CancellationNotice[] })),
+				// PL-U7 — whether the panel has a runtime at all. Falls back to
+				// unavailable so an older server (or a failed call) leaves the composer
+				// disabled rather than accepting turns that go nowhere.
+				api.agentStatus().catch(() => UNAVAILABLE_AGENT)
 			]);
 			this.session = session;
 			this.chats = chats;
@@ -304,6 +335,7 @@ export class AppState {
 			this.sendsLive = sendMode.live;
 			this.proposals = proposals.items;
 			this.cancellationNotices = notices.items.filter((n) => n.dismissed_at === null);
+			this.agent = agent;
 			// Session and chats have now both been seen — first-run can be decided.
 			this.hydrated = true;
 			if (this.selectedJid) {
@@ -1111,11 +1143,79 @@ export class AppState {
 			case 'agent-part-updated':
 				this.#applyAgentPart(event.part, event.delta);
 				return;
+			case 'agent-turn':
+				// PL-U7 — the only authoritative "is a turn running?" signal; the parts
+				// cannot answer it (see the event's own comment). `available` is not
+				// touched: it is a boot-time configuration fact, not turn state.
+				this.agent = {
+					...this.agent,
+					running: event.phase === 'started',
+					sessionId: event.sessionId,
+					messageId: event.messageId,
+					harness: event.harness
+				};
+				if (event.phase === 'finished') {
+					// A normal finish clears the last error; a failed one names itself.
+					this.agentError = event.reason ?? null;
+				}
+				return;
 			case 'client-command':
 				this.#applyClientCommand(event.command);
 				return;
 			default:
 				return;
+		}
+	}
+
+	/**
+	 * PL-U7 — send an owner instruction to the agent panel.
+	 *
+	 * The reply is not returned: parts arrive over the WebSocket as
+	 * `agent-part-updated` and land in {@link agentSessions}, exactly as the dev
+	 * emitter's did. So this returns as soon as the server acknowledges, and the
+	 * panel is already proven against that channel.
+	 *
+	 * `running` is set optimistically *before* the request. A harness takes a
+	 * second or two to spawn, and without this the composer would stay live over
+	 * that window and a second Enter would earn a 409 for a reasonable action. On
+	 * a 409 from the server we trust the server and stay running; on any other
+	 * failure we release, because a turn that never started must not leave the
+	 * composer locked.
+	 */
+	async sendAgentTurn(text: string): Promise<boolean> {
+		const trimmed = text.trim();
+		if (!trimmed || !this.agent.available || this.agent.running) return false;
+		this.agentError = null;
+		this.agent = { ...this.agent, running: true };
+		try {
+			const started = await api.agentTurn(trimmed);
+			this.agent = {
+				...this.agent,
+				running: true,
+				sessionId: started.session_id,
+				messageId: started.message_id,
+				harness: started.harness
+			};
+			return true;
+		} catch (err) {
+			if (err instanceof ApiError && err.status === 409) {
+				// A turn really is running — the server is right, keep the lock.
+				this.agentError = 'A turn is already running.';
+				return false;
+			}
+			this.agent = { ...this.agent, running: false };
+			this.agentError = describeError(err);
+			return false;
+		}
+	}
+
+	/** PL-U7 — stop the running turn. Idempotent server-side. */
+	async cancelAgentTurn(): Promise<void> {
+		if (!this.agent.available) return;
+		try {
+			this.agent = { ...(await api.cancelAgentTurn()), available: true };
+		} catch (err) {
+			this.agentError = describeError(err);
 		}
 	}
 
