@@ -216,6 +216,7 @@ describe('MCP surface — registry tools', () => {
 			// edit to this surface. `propose-send` is the proof — it was added to
 			// the registry alone. PANEL-S5 opened reject/promote/discard the same way.
 			expect(names).toContain('propose-send');
+			expect(names).toContain('propose-reaction');
 			expect(names).toContain('reject-proposal');
 			expect(names).toContain('discard-voice-suggestion');
 			// Promote is owner-only: it writes the voice document the drafter reads,

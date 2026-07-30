@@ -27,8 +27,13 @@
  *   PREVIEW_SPLIT_IDENTITY=1
  *     Seeds the pre-merge LID/phone duplicate pair (W4-U13).
  *   PREVIEW_PROPOSAL=1
- *     Seeds a pending agent proposal (PL-U3) so the confirm/discard card has
- *     something to render. No outbox row exists — that is the point of it.
+ *     Seeds a pending agent send proposal (PL-U3) so the confirm/discard card
+ *     has something to render. No outbox row exists — that is the point of it.
+ *   PREVIEW_REACTION_PROPOSAL=1
+ *     Seeds a pending agent reaction proposal (PANEL-S6) so the reaction
+ *     confirmation card (emoji + target message + chat) can be photographed.
+ *     Mutually exclusive with PREVIEW_PROPOSAL in practice — both can be set,
+ *     but captures should pick one focus.
  *   PREVIEW_AGENT_EDIT=1
  *     Two seconds after boot, rewrites the seeded draft as the *agent* and
  *     emits `draft-updated`, reproducing the exact sequence PL-U3 Half B
@@ -722,6 +727,17 @@ if (process.env.PREVIEW_PROPOSAL === '1' && !sessionMode) {
 		chatJid: DIRECT,
 		text: 'Yes — eight works for me. I will bring the printouts.',
 		basisMsgId: 'u-2',
+		now: Date.now()
+	});
+}
+
+// PANEL-S6 — a pending reaction proposal to photograph.
+if (process.env.PREVIEW_REACTION_PROPOSAL === '1' && !sessionMode) {
+	insertProposal(db, {
+		kind: 'reaction',
+		chatJid: DIRECT,
+		emoji: '👍',
+		targetMsgId: 'u-2',
 		now: Date.now()
 	});
 }

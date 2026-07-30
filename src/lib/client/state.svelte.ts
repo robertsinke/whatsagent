@@ -21,6 +21,7 @@ import {
 import {
 	CONFLICT_TEXT_CHANGED,
 	hashApprovalText,
+	proposalApprovalText,
 	type DraftTextSource
 } from '../../../shared/approval-hash.js';
 import {
@@ -639,13 +640,15 @@ export class AppState {
 	}
 
 	/**
-	 * PL-U3 — confirm an agent-proposed send. This is the click that creates the
-	 * outbox row; `propose-send` created nothing. The hash is taken from the
-	 * proposal text this client is holding (and therefore rendering), so a
-	 * server-side row that says something else is refused rather than sent.
+	 * PANEL-S6 — confirm an agent proposal. This is the click that creates the
+	 * outbox row; `propose-send` / `propose-reaction` created nothing. The hash
+	 * is taken from {@link proposalApprovalText} of the row this client is
+	 * holding (and therefore rendering), so a server-side row that says
+	 * something else is refused rather than sent.
 	 *
-	 * A stale 409 raises a prompt for a second, explicit confirmation carrying
-	 * the newer inbound id — the same contract as a stale draft.
+	 * A stale 409 (send proposals only) raises a prompt for a second, explicit
+	 * confirmation carrying the newer inbound id — the same contract as a
+	 * stale draft.
 	 */
 	async confirmProposal(id: number, confirmedLatestInboundId?: string): Promise<boolean> {
 		const proposal = this.proposals.find((p) => p.id === id);
@@ -654,7 +657,7 @@ export class AppState {
 		try {
 			const { outbox, proposal: decided } = await api.confirmProposal(
 				id,
-				hashApprovalText(proposal.text),
+				hashApprovalText(proposalApprovalText(proposal)),
 				confirmedLatestInboundId
 			);
 			this.#mergeOutbox(outbox);

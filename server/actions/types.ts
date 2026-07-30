@@ -13,8 +13,13 @@ import type { RoutesDeps } from '../api/routes.js';
  * reason in the action file; do not leave a conservative default without one.
  *
  * The real exception is not "the agent may not act" — it is that outbound
- * actions arrive as proposals. The agent cannot send (R9); it calls
- * `propose-send` and the owner confirms. Prefer that pattern over refusing
+ * actions arrive as proposals. Outbound = anything that puts something on the
+ * wire to a contact (send, react, …). For each such action:
+ *   1. Keep the owner-facing action frontend-only (it enqueues / wakes the pacer).
+ *   2. Add a tool-only `propose-*` counterpart that writes an inert proposal row.
+ *   3. Only `confirm-proposal` (frontend-only) may enqueue the outbox row.
+ * `propose-send` / `propose-reaction` are the existing instances; R9 holds
+ * because no tool path reaches the outbox. Prefer that pattern over refusing
  * the agent entirely when the underlying effect is outbound.
  */
 export type ActionCaller = 'frontend' | 'tool';
@@ -61,8 +66,8 @@ export type ActionResult = ActionErrorResult | ActionJsonResult;
  * `callers` default is both surfaces — see `ActionCaller`. Narrowing to
  * `frontend` alone is a deliberate owner-only decision and must be explained
  * in the action file (one line minimum). Outbound WhatsApp effects use the
- * propose-and-confirm pattern rather than a silent refusal when the agent
- * needs an equivalent capability.
+ * propose-and-confirm pattern (`propose-*` tool → owner `confirm-proposal`)
+ * rather than a silent refusal when the agent needs an equivalent capability.
  */
 export type ActionDefinition<TInput = unknown> = {
 	name: string;

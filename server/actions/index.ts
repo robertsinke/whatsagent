@@ -19,6 +19,7 @@ import { loadMediaAction } from './load-media.js';
 import { markReadAction } from './mark-read.js';
 import { openChatAction } from './open-chat.js';
 import { promoteVoiceSuggestionAction } from './promote-voice-suggestion.js';
+import { proposeReactionAction } from './propose-reaction.js';
 import { proposeSendAction } from './propose-send.js';
 import { reactAction } from './react.js';
 import { refineDraftAction } from './refine-draft.js';
@@ -52,6 +53,7 @@ const actions: ActionDefinition<unknown>[] = [
 	markReadAction as ActionDefinition<unknown>,
 	openChatAction as ActionDefinition<unknown>,
 	promoteVoiceSuggestionAction as ActionDefinition<unknown>,
+	proposeReactionAction as ActionDefinition<unknown>,
 	proposeSendAction as ActionDefinition<unknown>,
 	reactAction as ActionDefinition<unknown>,
 	refineDraftAction as ActionDefinition<unknown>,

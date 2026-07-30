@@ -1,18 +1,27 @@
 import type { AppDatabase } from './db.js';
 
 /**
- * PL-U3: a send the agent asked for and the owner has not yet acted on.
+ * PANEL-S6: a proposal is the agent's half of any outbound action.
  *
  * A proposal is inert. It is not a queued send, it is not an outbox row, and
  * the pacer never looks at this table. The only transition out of `pending` is
- * an owner click through a frontend-only action.
+ * an owner click through a frontend-only action (`confirm-proposal`). Outbound
+ * WhatsApp effects therefore stay behind owner confirmation structurally —
+ * adding a new outbound capability means adding a `propose-*` tool that writes
+ * here, not opening the underlying action to tools.
  */
 export type ProposalStatus = 'pending' | 'confirmed' | 'rejected';
+
+/** Discriminator for what the owner is being asked to put on the wire. */
+export type ProposalKind = 'send' | 'reaction';
 
 export type SendProposal = {
 	id: number;
 	chat_jid: string;
+	kind: ProposalKind;
 	text: string;
+	reaction_emoji: string | null;
+	reaction_target_msg_id: string | null;
 	status: ProposalStatus;
 	created_at: number;
 	basis_msg_id: string | null;
@@ -20,14 +29,58 @@ export type SendProposal = {
 	outbox_id: number | null;
 };
 
-export function insertProposal(
-	db: AppDatabase,
-	input: { chatJid: string; text: string; basisMsgId: string | null; now: number }
-): number {
+/** @deprecated Prefer {@link SendProposal} — same row; name kept for call-site familiarity. */
+export type Proposal = SendProposal;
+
+export type InsertSendProposalInput = {
+	kind?: 'send';
+	chatJid: string;
+	text: string;
+	basisMsgId: string | null;
+	now: number;
+};
+
+export type InsertReactionProposalInput = {
+	kind: 'reaction';
+	chatJid: string;
+	emoji: string;
+	targetMsgId: string;
+	now: number;
+};
+
+export type InsertProposalInput = InsertSendProposalInput | InsertReactionProposalInput;
+
+export function insertProposal(db: AppDatabase, input: InsertProposalInput): number {
+	if (input.kind === 'reaction') {
+		const result = db
+			.prepare(
+				`INSERT INTO send_proposals
+				   (chat_jid, text, status, created_at, basis_msg_id, kind,
+				    reaction_emoji, reaction_target_msg_id)
+				 VALUES
+				   (@chat_jid, '', 'pending', @created_at, @basis_msg_id, 'reaction',
+				    @reaction_emoji, @reaction_target_msg_id)`
+			)
+			.run({
+				chat_jid: input.chatJid,
+				created_at: input.now,
+				// Approval binding for a reaction is the target message itself —
+				// the proposal cannot silently retarget after the owner reviews it.
+				basis_msg_id: input.targetMsgId,
+				reaction_emoji: input.emoji,
+				reaction_target_msg_id: input.targetMsgId
+			});
+		return Number(result.lastInsertRowid);
+	}
+
 	const result = db
 		.prepare(
-			`INSERT INTO send_proposals (chat_jid, text, status, created_at, basis_msg_id)
-			 VALUES (@chat_jid, @text, 'pending', @created_at, @basis_msg_id)`
+			`INSERT INTO send_proposals
+			   (chat_jid, text, status, created_at, basis_msg_id, kind,
+			    reaction_emoji, reaction_target_msg_id)
+			 VALUES
+			   (@chat_jid, @text, 'pending', @created_at, @basis_msg_id, 'send',
+			    NULL, NULL)`
 		)
 		.run({
 			chat_jid: input.chatJid,
@@ -62,11 +115,6 @@ export function listPendingProposalsAll(db: AppDatabase, limit = 50): SendPropos
 }
 
 /**
- * Conditional on `status = 'pending'`, so two clicks (or a click racing a
- * reject) cannot both decide one proposal. Returns false when the row was
- * already decided — the caller turns that into a 409.
- */
-/**
  * Link a confirmed proposal to the row the owner's click queued. Separate from
  * {@link decideProposal} because the claim has to happen *before* the outbox
  * insert (it is what wins the race), and the outbox id only exists after.
@@ -75,6 +123,11 @@ export function attachProposalOutbox(db: AppDatabase, id: number, outboxId: numb
 	db.prepare('UPDATE send_proposals SET outbox_id = ? WHERE id = ?').run(outboxId, id);
 }
 
+/**
+ * Conditional on `status = 'pending'`, so two clicks (or a click racing a
+ * reject) cannot both decide one proposal. Returns false when the row was
+ * already decided — the caller turns that into a 409.
+ */
 export function decideProposal(
 	db: AppDatabase,
 	input: {

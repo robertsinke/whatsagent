@@ -119,6 +119,26 @@ export function hashApprovalText(text: string): string {
 }
 
 /**
+ * Canonical string the owner is approving for a proposal row.
+ *
+ * Send proposals hash their message text (historical). Reaction proposals hash
+ * emoji *and* target message id so a confirm cannot silently retarget — the
+ * target id is also stored on the row as `basis_msg_id` / `reaction_target_msg_id`,
+ * and this hash is the second binding that the UI reviewed exactly that pair.
+ */
+export function proposalApprovalText(proposal: {
+	kind: string;
+	text: string;
+	reaction_emoji?: string | null;
+	reaction_target_msg_id?: string | null;
+}): string {
+	if (proposal.kind === 'reaction') {
+		return `reaction\0${proposal.reaction_target_msg_id ?? ''}\0${proposal.reaction_emoji ?? ''}`;
+	}
+	return proposal.text;
+}
+
+/**
  * True only when the caller supplied a hash and it matches the stored text.
  *
  * A caller that supplies nothing gets `false` here; whether that is a refusal

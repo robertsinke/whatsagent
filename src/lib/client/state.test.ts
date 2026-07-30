@@ -1607,7 +1607,10 @@ describe('AppState proposals', () => {
 		return {
 			id: 7,
 			chat_jid: JID,
+			kind: 'send' as const,
 			text: 'Yes — seven works.',
+			reaction_emoji: null,
+			reaction_target_msg_id: null,
 			status: 'pending' as const,
 			created_at: 100,
 			basis_msg_id: 'a1',

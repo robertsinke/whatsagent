@@ -192,16 +192,23 @@ export type AgentClearResult = Omit<AgentStatus, 'available'> & {
 };
 
 /**
- * PL-U3 — a send the agent asked for. It is not queued and never will be
+ * PANEL-S6 — a proposal the agent asked for. It is not queued and never will be
  * unless the owner confirms it; `confirm-proposal` is frontend-only precisely
  * so that this row can only become an outbox row by way of a click.
+ *
+ * `kind` discriminates what would go on the wire: `send` (message text) or
+ * `reaction` (emoji + target message). Reaction rows keep `text` empty.
  */
 export type ProposalStatus = 'pending' | 'confirmed' | 'rejected';
+export type ProposalKind = 'send' | 'reaction';
 
 export type SendProposal = {
 	id: number;
 	chat_jid: string;
+	kind: ProposalKind;
 	text: string;
+	reaction_emoji: string | null;
+	reaction_target_msg_id: string | null;
 	status: ProposalStatus;
 	created_at: number;
 	basis_msg_id: string | null;
