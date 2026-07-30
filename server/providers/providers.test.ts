@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { ClaudeProvider } from './claude.js';
+import { ClaudeProvider, CLAUDE_DRAFT_ISOLATION_FLAGS } from './claude.js';
 import { OpenCodeProvider } from './opencode.js';
 import { fakeSpawn } from './fake-spawn.js';
 import { OllamaProvider } from './ollama.js';
@@ -59,6 +59,27 @@ describe('ClaudeProvider', () => {
 
 		await provider.draft(input);
 		expect(process.calls[0]?.env).toEqual({ PATH: '/usr/bin', HOME: '/tmp/home' });
+	});
+
+	// Measured 2026-07-30 on Claude Code 2.1.220: `--tools ''` on its own leaves
+	// the user's OWN MCP servers live — 84 tools on the developer machine,
+	// including mail send, cloud-drive reads and arbitrary code execution.
+	// `--safe-mode` is what takes the surface to 0 tools / mcp_servers: [].
+	// Drafting feeds attacker-controlled message text to the model, so this is
+	// the difference between an isolated model and a fully-tooled one. Nothing
+	// else in the suite can observe a spawned harness's tool list, so this
+	// assertion is the whole guard.
+	it('spawns with every isolation flag, --safe-mode included', async () => {
+		const process = fakeSpawn([{ stdout: fixture('claude-success.jsonl') }]);
+		const provider = new ClaudeProvider({ spawn: process.spawn });
+
+		await provider.draft(input);
+		const args = process.calls[0]?.args ?? [];
+		for (const flag of CLAUDE_DRAFT_ISOLATION_FLAGS) {
+			expect(args).toContain(flag);
+		}
+		// `--tools` must be followed by the empty string, not merely present.
+		expect(args[args.indexOf('--tools') + 1]).toBe('');
 	});
 
 	it('backs off once on a rejected rate-limit event', async () => {
