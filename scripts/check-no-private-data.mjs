@@ -17,6 +17,14 @@
  *
  * Excludes: node_modules, .git, build, and the fixtures file itself (its digit
  * runs *are* the allowlist).
+ *
+ * THE PASS LINE NAMES EVERY CHECK AND WHETHER IT RAN. The substring half is
+ * optional by construction — the values cannot live in a tracked file — so
+ * without the local file this script used to print a confident `ok` having
+ * checked nothing for names, which is evidence about only the half nobody was
+ * worried about. A skipped check now says so on its own line, and the scanned
+ * file count is reported so a walk that silently stops finding files (a bad
+ * `SKIP_DIRS` entry, a cwd change) cannot pass as a clean tree.
  */
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
@@ -70,6 +78,7 @@ if (existsSync(localPatternsPath)) {
 const findings = [];
 /** @type {{ file: string, line: number, pattern: string }[]} */
 const patternFindings = [];
+let scanned = 0;
 
 /**
  * @param {string} dir
@@ -104,6 +113,7 @@ function walk(dir) {
 		// Skip obviously-binary buffers misread as utf8.
 		if (text.includes('\u0000')) continue;
 
+		scanned += 1;
 		const lines = text.split(/\r?\n/);
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
@@ -160,10 +170,26 @@ if (patternFindings.length > 0) {
 
 if (failed) process.exit(1);
 
-const patternNote =
-	localPatterns.length > 0
-		? `, ${localPatterns.length} local private-pattern${localPatterns.length === 1 ? '' : 's'}`
-		: '';
+// A walk that finds nothing prints the same `ok` as a clean tree, so the count
+// is part of the verdict, not decoration.
+if (scanned === 0) {
+	console.error('private-data check failed: scanned 0 files — the walk found nothing to check');
+	process.exit(1);
+}
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+console.log(`private-data ok: scanned ${plural(scanned, 'file')}`);
 console.log(
-	`private-data ok: ${allow.size} allowlisted digit runs${patternNote}, no undeclared 11–15 digit identifiers`
+	`  digit-run check      RAN — ${plural(allow.size, 'allowlisted run')}, no undeclared 11–15 digit identifiers`
 );
+if (localPatterns.length > 0) {
+	console.log(`  private-substring    RAN — ${plural(localPatterns.length, 'pattern')}, no matches`);
+} else {
+	// Deliberately loud and on stderr. This half cannot be made mandatory — the
+	// values are machine-specific and must not be committed — so the only defence
+	// against reading a green line as full coverage is saying which half is
+	// missing, every run.
+	console.error(
+		`  private-substring    SKIPPED — scripts/private-patterns.local absent, so MCP server names and codenames were NOT checked (copy scripts/private-patterns.local.example to enable)`
+	);
+}
