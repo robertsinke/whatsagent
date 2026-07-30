@@ -24,5 +24,10 @@ node_modules/
 *.sqlite*
 coverage/
 
+# Machine-specific private-data substrings for scripts/check-no-private-data.mjs
+# (see scripts/private-patterns.local.example). Must stay untracked — the
+# values are the disclosure the gate exists to catch.
+scripts/private-patterns.local
+
 # Stray screenshots dropped at the repo root (evidence under docs/ is fine)
 /*.png

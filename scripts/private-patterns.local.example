@@ -1,0 +1,14 @@
+# Copy to scripts/private-patterns.local (gitignored) and add one literal
+# substring per line. The private-data check fails if any line appears in the
+# scanned tree. Use this for machine-specific names that must never ship —
+# e.g. MCP server names from your personal opencode/codex config, or a client
+# project codename. Do not commit the real values; that re-ships the disclosure.
+#
+# Lines starting with # and blank lines are ignored.
+#
+# Caution: ordinary English words false-positive. Prefer scoped patterns
+# (JSON keys like `"my-server":`) over bare words that also appear in UI copy.
+#
+# Example (placeholders only — replace with your own):
+# my-client-mcp
+# "server-from-my-config":
