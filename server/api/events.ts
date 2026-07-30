@@ -99,19 +99,20 @@ export type ServerEvent =
 	  }
 	| { type: 'agent-part-updated'; part: AgentPart; delta?: string }
 	/**
-	 * PANEL-S4 — focus a chat in the SPA without marking it read. Emitted by the
-	 * `open-chat` tool action; the client reducer routes this into
-	 * `openChat(jid, { markRead: false })`. Distinct from `client-command`'s
-	 * `open-chat` (which marks read) so the closed client-command set stays
-	 * honest about its own side effects — opening a chat by *looking at it* must
-	 * not silently clear the unread badge, and `mark-read` is already its own
-	 * explicit action.
+	 * PANEL-S4/S7 — focus a chat in the SPA without marking it read. Emitted by
+	 * the `open-chat` registry action (both the agent tool surface and the
+	 * owner's chat-list click, which dispatches it via REST); the client
+	 * reducer routes this into `openChat(jid)` (load-only). `mark-read` is a
+	 * separate, explicit action — opening a chat by *looking at it* must not
+	 * silently clear the unread badge.
 	 */
 	| { type: 'focus-chat'; jid: string; name: string | null }
 	/**
 	 * PL-A1 — pure client-state commands (no REST route exists). Closed typed
 	 * set; the client reducer dispatches into AppState. Still server→client
 	 * only — an agent (or the dev emitter) pushes these through the EventBus.
+	 * PANEL-S7 removed `open-chat` from this set — it duplicated the
+	 * `open-chat` registry action and was emitted only from the dev harness.
 	 */
 	| { type: 'client-command'; command: ClientCommand };
 

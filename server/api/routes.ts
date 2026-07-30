@@ -835,6 +835,16 @@ async function handleApi(
 		return;
 	}
 
+	if (rest === 'open' && method === 'POST') {
+		// PANEL-S7 — the UI's chat-list click dispatches through the registry
+		// (the same `open-chat` action the agent tool surface exposes). The
+		// action emits a `focus-chat` event over the WebSocket, which the client
+		// reducer routes into `AppState.openChat` (load-only). The click then
+		// dispatches `mark-read` separately — two actions, both in the registry.
+		await dispatchAction(deps, res, 'open-chat', { chatJid: jid });
+		return;
+	}
+
 	if (rest === 'draft' && method === 'GET') {
 		if (!chat) {
 			error(res, 404, 'Chat not found', { jid });

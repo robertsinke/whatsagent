@@ -13,6 +13,7 @@
 	import FirstRunScreen from '$lib/components/app/FirstRunScreen.svelte';
 	import PairingScreen from '$lib/components/app/PairingScreen.svelte';
 	import { AppState } from '$lib/client/state.svelte.js';
+	import { api } from '$lib/client/api.js';
 	import { displayName, initialsFor, isFirstRun, sessionBanner } from '$lib/client/view.js';
 
 	const app = new AppState();
@@ -88,7 +89,14 @@
 
 	async function openChat(jid: string) {
 		composerValue = '';
-		await app.openChat(jid);
+		// PANEL-S7 — the click routes through the registry, not client state
+		// directly. `open-chat` emits a `focus-chat` event the reducer routes
+		// into `AppState.openChat` (load-only); `mark-read` is the owner's
+		// explicit "I have seen this" and clears the unread badge. Two actions,
+		// both in the registry, both available to either caller — the agent
+		// dispatches `open-chat` without `mark-read`, the owner dispatches both.
+		await api.openChat(jid);
+		await app.markRead(jid);
 	}
 </script>
 

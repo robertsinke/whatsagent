@@ -1308,6 +1308,46 @@ describe('read cursor (U4) — viewing produces no outbound WhatsApp traffic', (
 		expect(transport.sendReaction).not.toHaveBeenCalled();
 	});
 
+	it('POST /chats/:jid/open dispatches open-chat and emits focus-chat (PANEL-S7)', async () => {
+		const events = new EventBus();
+		const seen: import('./events.js').ServerEvent[] = [];
+		events.subscribe((e) => seen.push(e));
+		await startTestApp(events);
+		upsertChat(db!, { jid: 'alice@s.whatsapp.net', kind: '1:1', name: 'Alice', last_msg_at: 100, unread: 3 });
+
+		const res = await api('/api/chats/alice%40s.whatsapp.net/open', {
+			method: 'POST',
+			origin: originForApp(),
+			headers: { 'Content-Type': 'application/json' },
+			body: '{}'
+		});
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { jid: string; name: string | null };
+		expect(body).toMatchObject({ jid: 'alice@s.whatsapp.net', name: 'Alice' });
+
+		// The action emits a focus-chat event (load-only, never marks read).
+		const focused = seen.filter((e) => e.type === 'focus-chat');
+		expect(focused).toHaveLength(1);
+		expect(focused[0]).toMatchObject({
+			type: 'focus-chat',
+			jid: 'alice@s.whatsapp.net',
+			name: 'Alice'
+		});
+		// No chat-updated (mark-read path) — that is a separate dispatch.
+		expect(seen.some((e) => e.type === 'chat-updated')).toBe(false);
+	});
+
+	it('POST /chats/:jid/open 404s for an unknown jid', async () => {
+		await startTestApp();
+		const res = await api('/api/chats/nope%40s.whatsapp.net/open', {
+			method: 'POST',
+			origin: originForApp(),
+			headers: { 'Content-Type': 'application/json' },
+			body: '{}'
+		});
+		expect(res.status).toBe(404);
+	});
+
 	it('GET /chats/:jid/messages is read-only and never touches the transport', async () => {
 		const transport: WhatsAppSendTransport = {
 			setPresence: vi.fn(async () => undefined),
@@ -2171,7 +2211,10 @@ describe('POST /api/dev/agent-demo (PL-A1 gated emitter)', () => {
 			body: JSON.stringify({ stepMs: 5 })
 		});
 		expect(res.status).toBe(202);
-		await vi.waitFor(() => expect(seen).toContain('client-command'), { timeout: 2000 });
+		// PANEL-S7 — the harness now emits focus-chat (the production event the
+		// open-chat registry action emits), not the retired client-command
+		// open-chat duplicate.
+		await vi.waitFor(() => expect(seen).toContain('focus-chat'), { timeout: 2000 });
 		expect(seen).toContain('agent-part-updated');
 	});
 });

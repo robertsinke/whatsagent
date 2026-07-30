@@ -65,9 +65,14 @@ export function isKnownAgentPartKind(kind: string): kind is AgentPartKind {
  * Closed, typed set of pure-client UI actions. No stringly-typed method
  * dispatch — this channel can drive the UI and must not become an arbitrary
  * remote-control surface.
+ *
+ * PANEL-S7 — `open-chat` was removed from this set. It duplicated the
+ * `open-chat` registry action (which emits a `focus-chat` event) and was
+ * emitted from exactly one place: the dev demo harness. Production routes
+ * through the registry; the harness now emits `focus-chat` directly. Two
+ * mechanisms for one action is the thing the registry exists to prevent.
  */
 export type ClientCommand =
-	| { type: 'open-chat'; jid: string }
 	| { type: 'select-reply'; messageId: string }
 	| { type: 'dismiss-reply' }
 	| { type: 'jump-to-quoted-message'; messageId: string };

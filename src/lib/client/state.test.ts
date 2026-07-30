@@ -69,7 +69,7 @@ describe('AppState deepen history feedback', () => {
 
 		expect(state.deepenStatus.kind).toBe('success');
 
-		await state.openChat('sam@s.whatsapp.net', { markRead: false });
+		await state.openChat('sam@s.whatsapp.net', );
 		expect(state.deepenStatus).toEqual({ kind: 'idle', at: null });
 	});
 });
@@ -349,8 +349,13 @@ describe('AppState unread boundary', () => {
 		await state.openChat(JID);
 
 		expect(state.unreadBoundary).toEqual({ firstUnreadId: 'i2', count: 2, exact: true });
-		// The chat is read now, but the marker the owner is reading against stays.
+		// PANEL-S7 — openChat is load-only; the unread badge survives the load.
+		// The owner's explicit markRead is what clears it.
+		expect(state.selectedChat?.unread).toBe(2);
+		await state.markRead(JID);
 		expect(state.selectedChat?.unread).toBe(0);
+		// The marker the owner is reading against stays after markRead.
+		expect(state.unreadBoundary).toEqual({ firstUnreadId: 'i2', count: 2, exact: true });
 	});
 
 	it('does not restate the boundary when the same chat is reloaded after markRead', async () => {
@@ -360,7 +365,7 @@ describe('AppState unread boundary', () => {
 
 		await state.openChat(JID);
 		const afterOpen = state.unreadBoundary;
-		await state.openChat(JID, { markRead: false });
+		await state.openChat(JID);
 
 		expect(state.unreadBoundary).toEqual(afterOpen);
 	});
@@ -426,13 +431,15 @@ describe('AppState unread boundary', () => {
 	});
 
 	it('survives a simulated restart: a fresh AppState re-derives from the persisted cursor', async () => {
-		// First session: open the chat, server advances the cursor to the latest
-		// message (i3) and returns it in the markRead response.
+		// First session: open the chat and mark it read. The server advances the
+		// cursor to the latest message (i3) and returns it in the markRead
+		// response; here we emulate that by stamping the returned cursor.
 		const state = new AppState();
 		state.chats = [chatRow({ unread: 2, last_read_msg_id: 'i1' })];
 		mockConversation([inbound('i1', 1), inbound('i2', 2), inbound('i3', 3)]);
 
 		await state.openChat(JID);
+		await state.markRead(JID);
 		// The markRead response is chatRow({ unread: 0 }) which has a null cursor
 		// in the mock; emulate the real server by stamping the returned cursor.
 		state.chats = state.chats.map((c) =>
@@ -451,7 +458,7 @@ describe('AppState unread boundary', () => {
 			if (url.endsWith('/draft')) return jsonResponse({ error: 'Not found' }, 404);
 			throw new Error(`Unexpected request: ${url}`);
 		});
-		await reopened.openChat(JID, { markRead: false });
+		await reopened.openChat(JID);
 
 		// Cursor is at the last inbound → no unread boundary, exactly as the
 		// owner left it before the "restart".
@@ -1262,22 +1269,6 @@ describe('AppState agent-part-updated', () => {
 describe('AppState client-command', () => {
 	afterEach(() => vi.restoreAllMocks());
 
-	it('open-chat fires openChat (async fire-and-forget)', async () => {
-		const state = new AppState();
-		state.chats = [chatRow()];
-		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-			const url = String(input);
-			if (url.includes('/messages?')) return jsonResponse({ items: [inbound('m1', 1)] });
-			if (url.endsWith('/draft')) return jsonResponse({ error: 'Not found' }, 404);
-			if (url.includes('/read')) return jsonResponse(chatRow({ unread: 0 }));
-			throw new Error(`Unexpected request: ${url}`);
-		});
-
-		state.applyEvent({ type: 'client-command', command: { type: 'open-chat', jid: JID } });
-		expect(state.selectedJid).toBe(JID);
-		await vi.waitFor(() => expect(state.messages.map((m) => m.id)).toEqual(['m1']));
-	});
-
 	it('select-reply and dismiss-reply drive replyTarget', async () => {
 		const state = new AppState();
 		state.chats = [chatRow()];
@@ -1335,9 +1326,10 @@ describe('AppState client-command', () => {
 });
 
 /**
- * PANEL-S4 — the agent's `focus-chat` event selects a chat WITHOUT marking it
- * read. The client-command `open-chat` marks read by default; this must not,
- * and the difference is observable as the absence of a `/read` request.
+ * PANEL-S4/S7 — the `focus-chat` event (emitted by the `open-chat` registry
+ * action, dispatched by both the agent tool and the owner's chat-list click)
+ * selects a chat WITHOUT marking it read. `openChat` is load-only; the
+ * difference is observable as the absence of a `/read` request.
  */
 describe('AppState focus-chat (PANEL-S4)', () => {
 	afterEach(() => vi.restoreAllMocks());
@@ -1365,6 +1357,126 @@ describe('AppState focus-chat (PANEL-S4)', () => {
 		expect(readCalled).toBe(false);
 		// The chat row the list renders still carries its unread count.
 		expect(state.chats.find((c) => c.jid === JID)?.unread).toBe(3);
+	});
+});
+
+/**
+ * PANEL-S7 — loading and marking read are separate, independently exercisable
+ * acts. `openChat` is load-only (never marks read); `markRead` is the owner's
+ * explicit "I have seen this". The owner's chat-list click dispatches both
+ * through the registry (`open-chat` then `mark-read`); the agent dispatches
+ * `open-chat` alone. The observable difference is the `/read` request and the
+ * unread badge clearing.
+ */
+describe('AppState open-chat / mark-read split (PANEL-S7)', () => {
+	afterEach(() => vi.restoreAllMocks());
+
+	it('openChat loads the conversation but does not mark it read', async () => {
+		const state = new AppState();
+		state.chats = [chatRow({ unread: 3 })];
+		let readCalled = false;
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.includes('/messages?')) return jsonResponse({ items: [inbound('m1', 1)] });
+			if (url.endsWith('/draft')) return jsonResponse({ error: 'Not found' }, 404);
+			if (url.includes('/read')) {
+				readCalled = true;
+				return jsonResponse(chatRow({ unread: 0 }));
+			}
+			throw new Error(`Unexpected request: ${url}`);
+		});
+
+		await state.openChat(JID);
+
+		expect(state.messages.map((m) => m.id)).toEqual(['m1']);
+		// Loading never marks read — no /read request, badge survives.
+		expect(readCalled).toBe(false);
+		expect(state.chats.find((c) => c.jid === JID)?.unread).toBe(3);
+	});
+
+	it('markRead clears the unread badge without loading messages', async () => {
+		const state = new AppState();
+		state.chats = [chatRow({ unread: 3 })];
+		let messagesCalled = false;
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.includes('/messages?')) {
+				messagesCalled = true;
+				return jsonResponse({ items: [inbound('m1', 1)] });
+			}
+			if (url.endsWith('/draft')) return jsonResponse({ error: 'Not found' }, 404);
+			if (url.includes('/read')) return jsonResponse(chatRow({ unread: 0 }));
+			throw new Error(`Unexpected request: ${url}`);
+		});
+
+		await state.markRead(JID);
+
+		// markRead is the explicit read-cursor act; it does not load messages.
+		expect(messagesCalled).toBe(false);
+		expect(state.chats.find((c) => c.jid === JID)?.unread).toBe(0);
+	});
+
+	it('owner click flow: openChat then markRead — chat opens AND badge clears', async () => {
+		const state = new AppState();
+		state.chats = [chatRow({ unread: 3 })];
+		const readUrls: string[] = [];
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.includes('/messages?')) return jsonResponse({ items: [inbound('m1', 1)] });
+			if (url.endsWith('/draft')) return jsonResponse({ error: 'Not found' }, 404);
+			if (url.includes('/read')) {
+				readUrls.push(url);
+				return jsonResponse(chatRow({ unread: 0 }));
+			}
+			throw new Error(`Unexpected request: ${url}`);
+		});
+
+		// The owner's click dispatches open-chat (load) then mark-read (badge).
+		await state.openChat(JID);
+		await state.markRead(JID);
+
+		expect(state.messages.map((m) => m.id)).toEqual(['m1']);
+		expect(readUrls).toHaveLength(1);
+		expect(state.chats.find((c) => c.jid === JID)?.unread).toBe(0);
+	});
+
+	it('agent flow: focus-chat event loads without marking read (no /read)', async () => {
+		const state = new AppState();
+		state.chats = [chatRow({ unread: 3 })];
+		let readCalled = false;
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.includes('/messages?')) return jsonResponse({ items: [inbound('m1', 1)] });
+			if (url.endsWith('/draft')) return jsonResponse({ error: 'Not found' }, 404);
+			if (url.includes('/read')) {
+				readCalled = true;
+				return jsonResponse(chatRow({ unread: 0 }));
+			}
+			throw new Error(`Unexpected request: ${url}`);
+		});
+
+		// The agent's open-chat action emits a focus-chat event — load only.
+		state.applyEvent({ type: 'focus-chat', jid: JID, name: 'Maya' });
+		await vi.waitFor(() => expect(state.messages.map((m) => m.id)).toEqual(['m1']));
+
+		expect(readCalled).toBe(false);
+		expect(state.chats.find((c) => c.jid === JID)?.unread).toBe(3);
+	});
+
+	it('openChat and markRead are independently exercisable', async () => {
+		// markRead is reachable on its own — no openChat prerequisite.
+		const state = new AppState();
+		state.chats = [chatRow({ unread: 5 })];
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.includes('/read')) return jsonResponse(chatRow({ unread: 0 }));
+			throw new Error(`Unexpected request: ${url}`);
+		});
+
+		await state.markRead(JID);
+		expect(state.chats.find((c) => c.jid === JID)?.unread).toBe(0);
+		expect(state.selectedJid).toBeNull();
+		expect(state.messages).toEqual([]);
 	});
 });
 
@@ -1406,7 +1518,7 @@ describe('AppState reviewed-draft binding', () => {
 			if (url.endsWith('/draft')) return jsonResponse(draft);
 			throw new Error(`Unexpected request: ${url}`);
 		});
-		await state.openChat(JID, { markRead: false });
+		await state.openChat(JID, );
 		vi.restoreAllMocks();
 	}
 
@@ -1561,7 +1673,7 @@ describe('AppState reviewed-draft binding', () => {
 			if (url.endsWith('/draft')) return jsonResponse({ error: 'Not found' }, 404);
 			throw new Error(`Unexpected request: ${url}`);
 		});
-		await state.openChat('someone-else@s.whatsapp.net', { markRead: false });
+		await state.openChat('someone-else@s.whatsapp.net', );
 
 		// Otherwise the other chat's composer renders this chat's contested text.
 		expect(state.textConflict).toBeNull();

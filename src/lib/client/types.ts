@@ -340,10 +340,11 @@ export type ServerEvent =
 	  }
 	| { type: 'agent-part-updated'; part: AgentPart; delta?: string }
 	/**
-	 * PANEL-S4 — focus a chat in the SPA without marking it read. Emitted by
-	 * the `open-chat` tool action. Distinct from `client-command`'s `open-chat`
-	 * (which marks read) so the closed client-command set stays honest about
-	 * its own side effects.
+	 * PANEL-S4/S7 — focus a chat in the SPA without marking it read. Emitted by
+	 * the `open-chat` registry action (both the agent tool surface and the
+	 * owner's chat-list click). The reducer routes this into `openChat(jid)`,
+	 * which is load-only; `mark-read` is a separate action the click dispatches
+	 * next.
 	 */
 	| { type: 'focus-chat'; jid: string; name: string | null }
 	/** PL-A1 — closed client-command set; see shared/agent-events.ts. */
