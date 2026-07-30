@@ -131,8 +131,7 @@ export class ClaudePanelHarness implements PanelHarness {
 		]);
 		env.WHATSAGENT_MCP_TOKEN = this.options.token;
 
-		/** tool_use_id → the part we emitted for the call, to update in place. */
-		const calls = new Map<string, { partId: string; name: string; input: unknown }>();
+		const state = newClaudeTurnState();
 
 		try {
 			for await (const event of streamJsonLines({
@@ -148,8 +147,12 @@ export class ClaudePanelHarness implements PanelHarness {
 				...(this.options.spawn === undefined ? {} : { spawn: this.options.spawn }),
 				signal
 			})) {
-				for (const part of translateClaudeEvent(event, turn, calls)) yield part;
+				for (const part of translateClaudeEvent(event, turn, state)) yield part;
 			}
+			// A harness that dies without emitting `result` would otherwise leave the
+			// last step open, which is the stuck-shimmer failure the ledger exists to
+			// prevent. Closing here covers the crash path too.
+			for (const part of translateClaudeEvent({ type: 'result' }, turn, state)) yield part;
 		} finally {
 			await rm(configDirectory, { recursive: true, force: true });
 		}
@@ -159,23 +162,68 @@ export class ClaudePanelHarness implements PanelHarness {
 export type ClaudeCallIndex = Map<string, { partId: string; name: string; input: unknown }>;
 
 /**
+ * Per-turn translation state. `openStep` is the load-bearing part.
+ *
+ * WHY A STEP LEDGER. Claude has no `step_finish` event of its own; it emits a
+ * fresh `assistant` message per model turn and one `result` at the end. An
+ * earlier draft opened a step per assistant message and closed one only on a
+ * `tool_result`, which left the FINAL assistant message (the answer, which has
+ * no tool result after it) permanently open. `groupTurns` then reported that
+ * turn `inFlight` forever, so the panel header shimmered "working…" and a
+ * phantom "Thinking…" sat under the finished answer for the rest of the session.
+ * `agent-turn/finished` correctly cleared `running`, but the panel's `busy` is
+ * `running || working` and `working` is derived from the step markers — so the
+ * stuck step won.
+ *
+ * The rule now: exactly one step is open at a time, the next assistant message
+ * closes the previous one, and `result` closes the last. Balanced by
+ * construction rather than by hoping the event order cooperates.
+ */
+export type ClaudeTurnState = {
+	calls: ClaudeCallIndex;
+	openStep: string | null;
+};
+
+export function newClaudeTurnState(): ClaudeTurnState {
+	return { calls: new Map(), openStep: null };
+}
+
+/**
  * One event can yield several parts (an assistant message may hold both text
  * and a tool call), so this returns an array. Exported for tests.
  */
 export function translateClaudeEvent(
 	event: Record<string, unknown>,
 	turn: PanelTurn,
-	calls: ClaudeCallIndex
+	state: ClaudeTurnState
 ): AgentPart[] {
 	const base = { sessionId: turn.sessionId, messageId: turn.messageId };
+	const { calls } = state;
 	const out: AgentPart[] = [];
+
+	/** Close the open step, if there is one. Idempotent. */
+	const closeStep = (): void => {
+		if (state.openStep === null) return;
+		out.push({ kind: 'step-finish', ...base, partId: `${state.openStep}-end` });
+		state.openStep = null;
+	};
+
+	// The turn's terminal event. Nothing renderable in it, but it is the only
+	// reliable signal that the last assistant message will not be continued.
+	if (event.type === 'result') {
+		closeStep();
+		return out;
+	}
 
 	if (event.type === 'assistant') {
 		const content = contentBlocks(event);
-		// A step boundary per assistant message, so the panel groups a
-		// call-then-answer exchange the way it groups an opencode step.
 		if (content.length > 0) {
-			out.push({ kind: 'step-start', ...base, partId: `${messageKey(event, turn)}-step` });
+			// A step boundary per assistant message, so the panel groups a
+			// call-then-answer exchange the way it groups an opencode step.
+			closeStep();
+			const stepId = `${messageKey(event, turn)}-step`;
+			state.openStep = stepId;
+			out.push({ kind: 'step-start', ...base, partId: stepId });
 		}
 		for (const [index, block] of content.entries()) {
 			if (block.type === 'text' && typeof block.text === 'string' && block.text) {
@@ -215,6 +263,10 @@ export function translateClaudeEvent(
 			if (!call) continue;
 			const payload = parseToolPayload(flattenResultContent(block.content));
 			const isError = block.is_error === true;
+			// Same partId as the call, so `upsertAgentPart` updates that line in place
+			// instead of appending a second one. Deliberately does NOT close the step:
+			// the tool result sits inside the step its call opened, and the next
+			// assistant message (or `result`) is what closes it.
 			out.push({
 				kind: 'tool',
 				...base,
@@ -224,15 +276,11 @@ export function translateClaudeEvent(
 				state: isError ? 'error' : 'complete',
 				...(isError ? { error: describeError(payload) } : { output: payload })
 			});
-			// Claude closes the exchange with a fresh assistant message, so pair the
-			// step boundary with the result rather than leaving the turn open.
-			out.push({ kind: 'step-finish', ...base, partId: `${call.partId}-step-end` });
 		}
 		return out;
 	}
 
-	// `result` / `system` / `rate_limit_event` carry nothing the panel renders.
-	// The turn's own completion is the session manager's business, not a part.
+	// `system` / `rate_limit_event` carry nothing the panel renders.
 	return out;
 }
 

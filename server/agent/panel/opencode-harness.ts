@@ -147,6 +147,7 @@ export class OpenCodePanelHarness implements PanelHarness {
 			'CODEX_API_KEY'
 		]);
 		env.WHATSAGENT_MCP_TOKEN = this.options.token;
+		const state = newOpenCodeTurnState();
 
 		try {
 			for await (const event of streamJsonLines({
@@ -163,7 +164,7 @@ export class OpenCodePanelHarness implements PanelHarness {
 				...(this.options.spawn === undefined ? {} : { spawn: this.options.spawn }),
 				signal
 			})) {
-				const part = translateOpenCodeEvent(event, turn);
+				const part = translateOpenCodeEvent(event, turn, state);
 				if (part) yield part;
 			}
 		} finally {
@@ -172,18 +173,42 @@ export class OpenCodePanelHarness implements PanelHarness {
 	}
 }
 
-/** Exported for tests — the translation is the unit worth pinning. */
+/**
+ * Per-turn counter for the partId fallback. See {@link translateOpenCodeEvent}.
+ */
+export type OpenCodeTurnState = { seq: number };
+
+export function newOpenCodeTurnState(): OpenCodeTurnState {
+	return { seq: 0 };
+}
+
+/**
+ * Exported for tests — the translation is the unit worth pinning.
+ *
+ * THE PARTID FALLBACK MUST BE UNIQUE. `part.id` is present in every captured
+ * event, but an absent one used to fall back to
+ * `${messageId}-${part.type}` — which is the SAME string for every tool call in
+ * a turn. `upsertAgentPart` is last-write-wins on partId, so two tool calls
+ * would have collapsed into one rendered line and a call the agent actually made
+ * would silently vanish from the trace. The tool trace is the product, so a
+ * dropped call is the expensive failure. `part.callID` is per-call and is used
+ * first; a monotonic counter covers step markers, which have neither id.
+ */
 export function translateOpenCodeEvent(
 	event: Record<string, unknown>,
-	turn: PanelTurn
+	turn: PanelTurn,
+	state: OpenCodeTurnState = newOpenCodeTurnState()
 ): AgentPart | null {
 	const part = event.part as Record<string, unknown> | undefined;
 	if (!part || typeof part !== 'object') return null;
-	const partId = typeof part.id === 'string' ? part.id : null;
+	const fallbackId =
+		typeof part.callID === 'string' && part.callID
+			? `call-${part.callID}`
+			: `${turn.messageId}-${String(part.type ?? 'part')}-${++state.seq}`;
 	const base = {
 		sessionId: turn.sessionId,
 		messageId: turn.messageId,
-		partId: partId ?? `${turn.messageId}-${String(part.type ?? 'part')}`
+		partId: typeof part.id === 'string' && part.id ? part.id : fallbackId
 	};
 
 	switch (part.type) {

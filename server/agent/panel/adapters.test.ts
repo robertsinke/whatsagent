@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { upsertAgentPart, type AgentPart } from '../../../shared/agent-events.js';
 import {
 	buildPanelClaudeMcpConfig,
-	translateClaudeEvent,
-	type ClaudeCallIndex
+	newClaudeTurnState,
+	translateClaudeEvent
 } from './claude-harness.js';
-import { buildPanelOpenCodeConfig, translateOpenCodeEvent } from './opencode-harness.js';
+import {
+	buildPanelOpenCodeConfig,
+	newOpenCodeTurnState,
+	translateOpenCodeEvent
+} from './opencode-harness.js';
 import type { PanelTurn } from './harness.js';
 
 const turn: PanelTurn = { sessionId: 'panel-1', messageId: 'msg-1', text: 'hi', history: [] };
@@ -116,11 +120,61 @@ describe('translateOpenCodeEvent', () => {
 		// Empty text is not a renderable part.
 		expect(translateOpenCodeEvent({ part: { id: 'p', type: 'text', text: '' } }, turn)).toBeNull();
 	});
+
+	/**
+	 * `part.id` is present in every captured event, so this is the defensive path —
+	 * but the old fallback was `${messageId}-${part.type}`, identical for every tool
+	 * call in a turn. `upsertAgentPart` is last-write-wins on partId, so two calls
+	 * collapsed into one rendered line and a call the agent really made vanished
+	 * from the trace. The tool trace is the product; a dropped call is the
+	 * expensive failure, and it fails silently.
+	 */
+	it('gives id-less parts distinct partIds so no tool call is swallowed', () => {
+		const state = newOpenCodeTurnState();
+		const first = translateOpenCodeEvent(
+			{
+				part: {
+					type: 'tool',
+					tool: 'whatsagent_list-chats',
+					callID: 'call_a',
+					state: { status: 'completed', input: {}, output: '{}' }
+				}
+			},
+			turn,
+			state
+		)!;
+		const second = translateOpenCodeEvent(
+			{
+				part: {
+					type: 'tool',
+					tool: 'whatsagent_get-messages',
+					callID: 'call_b',
+					state: { status: 'completed', input: { chatJid: 'a' }, output: '{}' }
+				}
+			},
+			turn,
+			state
+		)!;
+		expect(first.partId).not.toBe(second.partId);
+		// Both survive the reducer the panel actually renders from.
+		const merged = [first, second].reduce<AgentPart[]>(
+			(acc, part) => upsertAgentPart(acc, part),
+			[]
+		);
+		expect(merged.filter((p) => p.kind === 'tool')).toHaveLength(2);
+	});
+
+	it('gives id-less step markers distinct partIds too', () => {
+		const state = newOpenCodeTurnState();
+		const a = translateOpenCodeEvent({ part: { type: 'step-start' } }, turn, state)!;
+		const b = translateOpenCodeEvent({ part: { type: 'step-start' } }, turn, state)!;
+		expect(a.partId).not.toBe(b.partId);
+	});
 });
 
 describe('translateClaudeEvent', () => {
 	it('emits a running tool part on the call and completes it on the result', () => {
-		const calls: ClaudeCallIndex = new Map();
+		const state = newClaudeTurnState();
 		const onCall = translateClaudeEvent(
 			{
 				type: 'assistant',
@@ -137,7 +191,7 @@ describe('translateClaudeEvent', () => {
 				}
 			},
 			turn,
-			calls
+			state
 		);
 		// Claude emits the call before the result, so it is genuinely in flight —
 		// the panel shows it spinning rather than appearing already finished.
@@ -168,24 +222,104 @@ describe('translateClaudeEvent', () => {
 				}
 			},
 			turn,
-			calls
+			state
 		);
+		// One part only: same partId as the call, so `upsertAgentPart` updates that
+		// line in place. The step is NOT closed here — the result belongs inside the
+		// step its call opened.
+		expect(onResult).toHaveLength(1);
 		expect(onResult[0]).toMatchObject({
 			kind: 'tool',
-			// Same partId, so `upsertAgentPart` updates the line in place instead of
-			// appending a second one.
 			partId: 'tool-toolu_1',
 			name: 'mark-read',
 			state: 'complete',
 			output: { jid: 'a@s.whatsapp.net', unread: 0 }
 		});
-		expect(onResult[1]).toMatchObject({ kind: 'step-finish' });
+	});
+
+	/**
+	 * The regression that matters most in this adapter. Claude has no
+	 * `step_finish` of its own, so an unbalanced ledger leaves the last step open
+	 * forever — `groupTurns` reports the turn `inFlight`, the panel header
+	 * shimmers "working…" for the rest of the session and a phantom "Thinking…"
+	 * sits under the finished answer. `agent-turn/finished` does clear `running`,
+	 * but the panel's `busy` is `running || working`, so the stuck step wins.
+	 */
+	it('closes every step it opens across a full real turn', () => {
+		const state = newClaudeTurnState();
+		const parts: AgentPart[] = [];
+		const feed = (event: Record<string, unknown>) => {
+			parts.push(...translateClaudeEvent(event, turn, state));
+		};
+
+		// The exact event sequence a captured claude turn produces.
+		feed({
+			type: 'assistant',
+			message: { id: 'm1', content: [{ type: 'thinking', thinking: '' }] }
+		});
+		feed({
+			type: 'assistant',
+			message: {
+				id: 'm1',
+				content: [
+					{ type: 'tool_use', id: 't1', name: 'mcp__whatsagent__list-chats', input: {} }
+				]
+			}
+		});
+		feed({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed_warning' } });
+		feed({
+			type: 'user',
+			message: {
+				content: [{ type: 'tool_result', tool_use_id: 't1', content: '{"total":1}' }]
+			}
+		});
+		// The final answer — the message with no tool result after it, i.e. the one
+		// that used to be left open.
+		feed({ type: 'assistant', message: { id: 'm2', content: [{ type: 'text', text: 'Done.' }] } });
+		feed({ type: 'result', subtype: 'success', is_error: false });
+
+		const starts = parts.filter((p) => p.kind === 'step-start').length;
+		const finishes = parts.filter((p) => p.kind === 'step-finish').length;
+		expect(starts).toBe(finishes);
+		expect(starts).toBeGreaterThan(0);
+		// And the turn is genuinely closed: the last marker is a finish.
+		expect(parts.filter((p) => p.kind.startsWith('step-')).at(-1)!.kind).toBe('step-finish');
+	});
+
+	it('a second assistant message closes the first step before opening its own', () => {
+		const state = newClaudeTurnState();
+		translateClaudeEvent(
+			{ type: 'assistant', message: { id: 'm1', content: [{ type: 'text', text: 'one' }] } },
+			turn,
+			state
+		);
+		const second = translateClaudeEvent(
+			{ type: 'assistant', message: { id: 'm2', content: [{ type: 'text', text: 'two' }] } },
+			turn,
+			state
+		);
+		expect(second[0]).toMatchObject({ kind: 'step-finish', partId: 'm1-step-end' });
+		expect(second[1]).toMatchObject({ kind: 'step-start', partId: 'm2-step' });
+	});
+
+	it('`result` closes an open step and is idempotent', () => {
+		const state = newClaudeTurnState();
+		translateClaudeEvent(
+			{ type: 'assistant', message: { id: 'm1', content: [{ type: 'text', text: 'x' }] } },
+			turn,
+			state
+		);
+		expect(translateClaudeEvent({ type: 'result' }, turn, state)).toEqual([
+			{ kind: 'step-finish', sessionId: 'panel-1', messageId: 'msg-1', partId: 'm1-step-end' }
+		]);
+		// The harness also feeds a synthetic `result` after the stream ends, to cover
+		// a crash that never emitted one. It must not produce a second finish.
+		expect(translateClaudeEvent({ type: 'result' }, turn, state)).toEqual([]);
 	});
 
 	it('marks an is_error tool_result as an error part', () => {
-		const calls: ClaudeCallIndex = new Map([
-			['toolu_2', { partId: 'tool-toolu_2', name: 'send', input: {} }]
-		]);
+		const state = newClaudeTurnState();
+		state.calls.set('toolu_2', { partId: 'tool-toolu_2', name: 'send', input: {} });
 		const parts = translateClaudeEvent(
 			{
 				type: 'user',
@@ -195,15 +329,13 @@ describe('translateClaudeEvent', () => {
 							type: 'tool_result',
 							tool_use_id: 'toolu_2',
 							is_error: true,
-							content: [
-								{ type: 'text', text: '{"error":"Caller not permitted","status":403}' }
-							]
+							content: [{ type: 'text', text: '{"error":"Caller not permitted","status":403}' }]
 						}
 					]
 				}
 			},
 			turn,
-			calls
+			state
 		);
 		expect(parts[0]).toMatchObject({
 			kind: 'tool',
@@ -226,7 +358,7 @@ describe('translateClaudeEvent', () => {
 				}
 			},
 			turn,
-			new Map()
+			newClaudeTurnState()
 		);
 		// `thinking` is not an AgentPart kind and the panel has nowhere to put it;
 		// inventing a kind for it would change a shipped union for cosmetics.
@@ -235,15 +367,17 @@ describe('translateClaudeEvent', () => {
 	});
 
 	it('ignores the noise events a real transcript is full of', () => {
-		const calls: ClaudeCallIndex = new Map();
+		const state = newClaudeTurnState();
 		for (const event of [
 			{ type: 'system', subtype: 'hook_started' },
 			{ type: 'system', subtype: 'hook_response' },
-			{ type: 'rate_limit_event', rate_limit_info: { status: 'allowed_warning' } },
-			{ type: 'result', subtype: 'success', is_error: false }
+			{ type: 'rate_limit_event', rate_limit_info: { status: 'allowed_warning' } }
 		]) {
-			expect(translateClaudeEvent(event, turn, calls)).toEqual([]);
+			expect(translateClaudeEvent(event, turn, state)).toEqual([]);
 		}
+		// `result` is deliberately NOT in that list: with no step open it yields
+		// nothing, but with one open it is the only thing that closes it.
+		expect(translateClaudeEvent({ type: 'result' }, turn, state)).toEqual([]);
 	});
 
 	it('ignores a tool_result whose call was never seen', () => {
@@ -257,7 +391,7 @@ describe('translateClaudeEvent', () => {
 					}
 				},
 				turn,
-				new Map()
+				newClaudeTurnState()
 			)
 		).toEqual([]);
 	});
@@ -285,7 +419,7 @@ describe('the two adapters agree once merged', () => {
 			)!
 		]);
 
-		const calls: ClaudeCallIndex = new Map();
+		const state = newClaudeTurnState();
 		const fromClaude = reduce([
 			...translateClaudeEvent(
 				{
@@ -303,7 +437,7 @@ describe('the two adapters agree once merged', () => {
 					}
 				},
 				turn,
-				calls
+				state
 			),
 			...translateClaudeEvent(
 				{
@@ -315,7 +449,7 @@ describe('the two adapters agree once merged', () => {
 					}
 				},
 				turn,
-				calls
+				state
 			)
 		]);
 

@@ -1189,9 +1189,15 @@ export class AppState {
 		this.agent = { ...this.agent, running: true };
 		try {
 			const started = await api.agentTurn(trimmed);
+			// Ids only — deliberately NOT `running: true`. A turn can fail fast (a
+			// missing harness binary spawns and dies), and the server emits
+			// `agent-turn/finished` from inside its own start path, so that event can
+			// reach the socket before this fetch resolves. Re-asserting `running` here
+			// would then lock the composer with no turn left to cancel. The optimistic
+			// set above already covers the window before the response; the lifecycle
+			// event is the authority from here on.
 			this.agent = {
 				...this.agent,
-				running: true,
 				sessionId: started.session_id,
 				messageId: started.message_id,
 				harness: started.harness
