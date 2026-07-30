@@ -454,4 +454,48 @@ describe('DraftScheduler.generate — owner-triggered', () => {
 		// Asking for help must not be what silences the chat.
 		expect(getChat(database, 'alice@s.whatsapp.net')?.agent_state).toBeNull();
 	});
+
+	it('records who asked on the row: agent for the panel, system for the button', async () => {
+		vi.useFakeTimers();
+		const database = setup();
+		const draft = vi.fn(async () => ({ kind: 'draft' as const, text: 'Whoever asked' }));
+		const agent = scheduler(database, { draft });
+		addMessage(database, 'alice@s.whatsapp.net', 'in-1', NOW);
+
+		agent.generate('alice@s.whatsapp.net', 'agent');
+		await vi.runAllTimersAsync();
+		await agent.waitForIdle();
+		// The owner's question at approval time is *who changed my draft*; `system`
+		// here would answer it with "it was regenerated" and name nobody.
+		expect(getDraft(database, 'alice@s.whatsapp.net')?.text_source).toBe('agent');
+
+		addMessage(database, 'alice@s.whatsapp.net', 'in-2', NOW + 1_000);
+		agent.generate('alice@s.whatsapp.net');
+		await vi.runAllTimersAsync();
+		await agent.waitForIdle();
+		// Never `owner` from this path: the words are the provider's either way, and
+		// `owner` is reserved for text the owner actually wrote.
+		expect(getDraft(database, 'alice@s.whatsapp.net')?.text_source).toBe('system');
+	});
+
+	it('carries the requester across a rate-limited retry', async () => {
+		vi.useFakeTimers();
+		const database = setup();
+		const draft = vi
+			.fn()
+			.mockRejectedValueOnce(new ProviderError('rate_limit', 'wait', true, 500))
+			.mockResolvedValueOnce({ kind: 'draft', text: 'After backoff' });
+		const agent = scheduler(database, { draft });
+		addMessage(database, 'alice@s.whatsapp.net', 'in-1', NOW);
+
+		agent.generate('alice@s.whatsapp.net', 'agent');
+		await vi.runAllTimersAsync();
+		await agent.waitForIdle();
+
+		expect(draft).toHaveBeenCalledTimes(2);
+		// The re-arm re-adds the marker; if it re-added a bare flag instead of the
+		// requester, an agent-caused draft would come back anonymous purely because
+		// the first attempt happened to be rate limited.
+		expect(getDraft(database, 'alice@s.whatsapp.net')?.text_source).toBe('agent');
+	});
 });

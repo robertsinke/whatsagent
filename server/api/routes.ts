@@ -1,6 +1,7 @@
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { extname, join, normalize, sep } from 'node:path';
+import type { DraftTextSource } from '../../shared/approval-hash.js';
 import type { AppDatabase } from '../store/db.js';
 import { getChat, listChats } from '../store/chats.js';
 import { getDraft } from '../store/drafts.js';
@@ -110,8 +111,12 @@ export type RoutesDeps = {
 	 * W4-U15 — owner-triggered draft generation, queued on the draft scheduler.
 	 * Returns false when the seam itself refused the request. Absent when no
 	 * provider is configured. This never sends and never touches the outbox.
+	 *
+	 * `requestedBy` is the dispatching caller, recorded on the resulting row as
+	 * `text_source`. Optional so existing one-argument test doubles stay
+	 * assignable; the scheduler defaults it to `system`.
 	 */
-	generateDraft?: (chatJid: string) => boolean;
+	generateDraft?: (chatJid: string, requestedBy?: DraftTextSource) => boolean;
 	/**
 	 * OSS-P2.4 — discovery used by `GET /api/providers`. Injected through
 	 * `CreateAppOptions`; absent in tests that don't exercise the endpoint.

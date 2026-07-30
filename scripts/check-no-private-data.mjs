@@ -31,6 +31,12 @@ const DIGITS = /[0-9]{11,15}/g;
 // Info.plist — a gate that cannot be run once a build exists is worse than no
 // gate, because the reflex is to stop running it. They are gitignored and never
 // published, so nothing in them can leak through the export.
+//
+// `.remember` is the same shape: gitignored local agent-session logs, which
+// accumulate timestamps and ids and will eventually trip the digit rule by
+// chance. It failed exactly that way on 2026-07-30. The gate's question is what
+// *ships*, and the export takes tracked files only, so a gitignored working
+// directory can never answer it — it can only produce a failure nobody can fix.
 const SKIP_DIRS = new Set([
 	'node_modules',
 	'.git',
@@ -38,7 +44,8 @@ const SKIP_DIRS = new Set([
 	'.svelte-kit',
 	'coverage',
 	'release',
-	'dist'
+	'dist',
+	'.remember'
 ]);
 
 const fixturesSource = readFileSync(fixturesPath, 'utf8');

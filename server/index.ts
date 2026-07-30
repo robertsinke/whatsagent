@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { DraftTextSource } from '../shared/approval-hash.js';
 import { resolveDataDirOverride } from './data-dir.js';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { Channel } from './channels/channel.js';
@@ -297,7 +298,13 @@ export function createApp(options: CreateAppOptions = {}): App {
 		refineDraft: refiner,
 		// Owner-triggered generation shares the scheduler's queue and hooks, so a
 		// manual run cancels any pending debounce for the chat rather than racing it.
-		generateDraft: scheduler ? (chatJid: string) => scheduler.generate(chatJid) : undefined,
+		generateDraft: scheduler
+			? (chatJid: string, requestedBy?: DraftTextSource) =>
+					// An explicit `undefined` hits the default parameter, so the seam's
+					// optional argument and the scheduler's default line up with no
+					// branch in between.
+					scheduler.generate(chatJid, requestedBy)
+			: undefined,
 		deepenHistory: options.channel?.deepenHistory
 			? (chatJid, count) => options.channel!.deepenHistory!(chatJid, count)
 			: undefined,

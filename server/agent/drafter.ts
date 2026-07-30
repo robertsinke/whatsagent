@@ -1,3 +1,4 @@
+import type { DraftTextSource } from '../../shared/approval-hash.js';
 import { getChat, setChatAgentState, type Chat } from '../store/chats.js';
 import type { AppDatabase } from '../store/db.js';
 import {
@@ -45,6 +46,17 @@ export type DraftChatOptions = {
 	 * structurally, and not only at the route.
 	 */
 	ownerRequested?: boolean;
+	/**
+	 * Who caused this run, recorded on the row as `text_source`. Deliberately
+	 * separate from {@link ownerRequested}, which answers a different question
+	 * (may this run bypass the classifier). Defaults to `system` — an automatic
+	 * debounce has no requester, and neither does the frontend's Generate button:
+	 * the text is the provider's either way. `agent` is written when the panel
+	 * agent asked, so the approval-time prompt can name it. Never `owner` from
+	 * here — that value means text the owner actually wrote, and only
+	 * `edit-draft` / `refine-draft` produce it.
+	 */
+	requestedBy?: DraftTextSource;
 	conversationLimit?: number;
 	now?: () => number;
 	hooks?: AgentDraftHooks;
@@ -124,9 +136,19 @@ function emitChat(options: DraftChatOptions): void {
 /**
  * `error_code` is optional and defaults to null on every write, so any non-failed
  * transition (including a retry) clears a stale code rather than carrying it.
+ *
+ * `text_source` is stamped here rather than at each call site because the upsert
+ * writes `COALESCE(@text_source, 'system')` into `excluded.text_source` — an
+ * omitted field is not "leave it alone", it is a silent reset. Setting it in the
+ * one function every write in this file goes through means a later write cannot
+ * forget it. An explicit value in `input` still wins.
  */
 function persistDraft(options: DraftChatOptions, input: Omit<DraftRowInput, 'chat_jid'>): Draft {
-	upsertDraft(options.db, { chat_jid: options.chatJid, ...input });
+	upsertDraft(options.db, {
+		chat_jid: options.chatJid,
+		text_source: options.requestedBy ?? 'system',
+		...input
+	});
 	const draft = getDraft(options.db, options.chatJid)!;
 	options.hooks?.onDraftUpdated?.(draft);
 	return draft;

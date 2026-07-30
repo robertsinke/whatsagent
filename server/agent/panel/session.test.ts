@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentPart } from '../../../shared/agent-events.js';
 import { EventBus, type ServerEvent } from '../../api/events.js';
-import type { PanelHarness, PanelTurn } from './harness.js';
+import { MAX_HISTORY_TURNS, type PanelHarness, type PanelTurn } from './harness.js';
 import { PanelSessionManager, PanelTurnInFlightError } from './session.js';
 import { PanelTurnError } from './stream-process.js';
 
@@ -138,6 +138,37 @@ describe('PanelSessionManager', () => {
 		manager.start('again');
 		await vi.waitFor(() => expect(seenTurns).toHaveLength(2));
 		expect(seenTurns[1]!.history[0]!.reply).toBe('Hello');
+	});
+
+	it('retains only the turns the prompt can render, however long the panel runs', async () => {
+		const seenTurns: PanelTurn[] = [];
+		const { manager } = makeManager(
+			fakeHarness(async function* (turn) {
+				seenTurns.push(turn);
+				yield {
+					kind: 'text',
+					sessionId: turn.sessionId,
+					messageId: turn.messageId,
+					partId: 'p',
+					text: `answer to ${turn.text}`
+				};
+			})
+		);
+
+		const turns = MAX_HISTORY_TURNS + 4;
+		for (let i = 1; i <= turns; i += 1) {
+			manager.start(`turn ${i}`);
+			await vi.waitFor(() => expect(manager.status().running).toBe(false));
+		}
+
+		// The manager lives for the whole app lifetime, so an uncapped array is a
+		// leak of one full prompt plus one full reply per turn — and every entry
+		// past the render window was already unreachable.
+		const last = seenTurns.at(-1)!;
+		expect(last.history).toHaveLength(MAX_HISTORY_TURNS);
+		// It keeps the newest, which is what `renderHistory` would have sliced to.
+		expect(last.history.at(-1)!.prompt).toBe(`turn ${turns - 1}`);
+		expect(last.history.at(0)!.prompt).toBe(`turn ${turns - MAX_HISTORY_TURNS}`);
 	});
 
 	it('clearHistory drops the rendered context', async () => {

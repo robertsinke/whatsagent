@@ -49,7 +49,12 @@ export const generateDraftAction: ActionDefinition<GenerateDraftInput> = {
 		if (existing?.status === 'approved') {
 			return actionError(409, 'Draft is already approved', { status: existing.status });
 		}
-		if (!ctx.deps.generateDraft(input.chatJid)) {
+		// PL-U7: the panel agent can reach this action, and a draft it caused must
+		// say so on the row — the same reasoning as `refine-draft`. `system` for a
+		// frontend request is not a placeholder: the words are still the
+		// provider's, so `owner` would be a lie, and it is the value the automatic
+		// path writes too.
+		if (!ctx.deps.generateDraft(input.chatJid, ctx.caller === 'tool' ? 'agent' : 'system')) {
 			return actionError(409, 'Draft generation was refused for this chat');
 		}
 		return actionJson(202, { ok: true, chat_jid: input.chatJid });

@@ -513,6 +513,33 @@ describe('the caller policies U7 must not have weakened', () => {
 		}
 	});
 
+	it('generate-draft tells the scheduler which caller asked', async () => {
+		const asked: (string | undefined)[] = [];
+		// Uncast on purpose: the double has to stay assignable to the real seam, so
+		// this pins the signature as well as the values.
+		const deps = makeDeps({
+			generateDraft: (_chatJid, requestedBy) => {
+				asked.push(requestedBy);
+				return true;
+			}
+		});
+		seed(db!);
+
+		await dispatch(actionRegistry, 'generate-draft', { chatJid: DIRECT }, {
+			caller: 'tool',
+			deps
+		});
+		await dispatch(actionRegistry, 'generate-draft', { chatJid: DIRECT }, {
+			caller: 'frontend',
+			deps
+		});
+
+		// The row this produces is what the owner approves, so an agent-caused
+		// regeneration has to be attributable at approval time. Same reasoning as
+		// `refine-draft`; this action was the one left behind.
+		expect(asked).toEqual(['agent', 'system']);
+	});
+
 	it('a refused send creates no outbox row', async () => {
 		const deps = makeDeps();
 		seed(db!);

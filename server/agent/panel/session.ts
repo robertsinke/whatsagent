@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentPart } from '../../../shared/agent-events.js';
 import type { EventBus } from '../../api/events.js';
-import type { PanelHarness, PanelTurnSummary } from './harness.js';
+import { MAX_HISTORY_TURNS, type PanelHarness, type PanelTurnSummary } from './harness.js';
 import { PanelTurnError } from './stream-process.js';
 
 /**
@@ -57,6 +57,18 @@ export class PanelSessionManager {
 	private readonly newId: () => string;
 	/** Stable across turns so the panel keeps one transcript per app lifetime. */
 	private readonly sessionId: string;
+	/**
+	 * RETENTION IS BOUNDED BY THE RENDER BOUND, deliberately the same constant.
+	 * `renderHistory` never looks past the last {@link MAX_HISTORY_TURNS} entries,
+	 * so anything older is unreachable — keeping it changed nothing except the
+	 * process's memory, which grew by one full prompt plus one full reply per turn
+	 * for the lifetime of the app (the clip to `MAX_CHARS_PER_FIELD` happens at
+	 * render, not here, so the retained strings are the untruncated ones).
+	 *
+	 * Sharing the constant rather than picking a second number is the point: a
+	 * later change to how much history the model sees moves retention with it, and
+	 * this stays a no-op on what any harness is sent.
+	 */
 	private history: PanelTurnSummary[] = [];
 	private current: { start: PanelTurnStart; controller: AbortController } | null = null;
 
@@ -146,7 +158,7 @@ export class PanelSessionManager {
 			this.history = [
 				...this.history,
 				{ prompt: text, reply: [...replies.values()].filter(Boolean).join('\n').trim() }
-			];
+			].slice(-MAX_HISTORY_TURNS);
 			// Only clear if this is still the current turn — a cancel followed by a
 			// fast new start must not have its state wiped by the old turn unwinding.
 			if (this.current?.start.messageId === start.messageId) this.current = null;

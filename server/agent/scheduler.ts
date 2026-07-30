@@ -1,3 +1,4 @@
+import type { DraftTextSource } from '../../shared/approval-hash.js';
 import { getChat, setChatAgentState } from '../store/chats.js';
 import type { AppDatabase } from '../store/db.js';
 import { getDraft, upsertDraft } from '../store/drafts.js';
@@ -31,12 +32,18 @@ export class DraftScheduler {
 	readonly #timers = new Map<string, ReturnType<typeof setTimeout>>();
 	readonly #queued = new Set<string>();
 	/**
-	 * Chats with an owner "Generate draft" request pending. Consumed exactly once,
-	 * at the top of #run — if the marker could survive a run, the next *automatic*
-	 * debounce for that chat would draft in a muted/skipped chat with no owner
-	 * request behind it.
+	 * Chats with an explicit "Generate draft" request pending, mapped to who asked.
+	 * Consumed exactly once, at the top of #run — if the marker could survive a
+	 * run, the next *automatic* debounce for that chat would draft in a
+	 * muted/skipped chat with no explicit request behind it.
+	 *
+	 * The value is orthogonal to the presence of the key. Presence answers *may
+	 * this run bypass the classifier*; the value answers *whose text is this*, and
+	 * only the second one reaches `drafts.text_source`. They were the same fact
+	 * while the frontend was the only caller and stopped being so when the agent
+	 * panel gained `generate-draft`.
 	 */
-	readonly #ownerRequested = new Set<string>();
+	readonly #requested = new Map<string, DraftTextSource>();
 	readonly #queue: string[] = [];
 	readonly #idleWaiters = new Set<() => void>();
 	#running = 0;
@@ -99,8 +106,16 @@ export class DraftScheduler {
 	 *
 	 * Returns false when the request was refused, so the caller can distinguish a
 	 * refusal from an accepted run.
+	 *
+	 * `requestedBy` is recorded on the resulting draft as `text_source`. The panel
+	 * agent can reach this through `generate-draft`, and an agent-caused rewrite
+	 * has to say so: the owner's question at approval time is *who changed my
+	 * draft*, and "the agent regenerated it" is a different answer from the
+	 * anonymous "it was regenerated" that a `system` source produces. Frontend
+	 * requests stay `system` rather than becoming `owner` — the text is still the
+	 * provider's, and `owner` is reserved for text the owner actually wrote.
 	 */
-	generate(chatJid: string): boolean {
+	generate(chatJid: string, requestedBy: DraftTextSource = 'system'): boolean {
 		const chat = getChat(this.#options.db, chatJid);
 		// R8 restated at the seam: no caller can drive a group into the agent.
 		if (!chat || chat.kind !== '1:1') return false;
@@ -115,7 +130,7 @@ export class DraftScheduler {
 		setChatAgentState(this.#options.db, chatJid, null);
 		const updated = getChat(this.#options.db, chatJid);
 		if (updated) this.#options.hooks?.onChatUpdated?.(updated);
-		this.#ownerRequested.add(chatJid);
+		this.#requested.set(chatJid, requestedBy);
 		this.#schedule(chatJid, 0);
 		return true;
 	}
@@ -143,7 +158,7 @@ export class DraftScheduler {
 		this.#timers.clear();
 		this.#queue.length = 0;
 		this.#queued.clear();
-		this.#ownerRequested.clear();
+		this.#requested.clear();
 		this.#resolveIdle();
 	}
 
@@ -179,10 +194,13 @@ export class DraftScheduler {
 
 	async #run(chatJid: string): Promise<void> {
 		// Read-and-delete before the await: the marker authorises this run only.
-		const ownerRequested = this.#ownerRequested.delete(chatJid);
+		const requestedBy = this.#requested.get(chatJid);
+		this.#requested.delete(chatJid);
+		const ownerRequested = requestedBy !== undefined;
 		try {
 			const result = await draftChat({
 				ownerRequested,
+				...(requestedBy === undefined ? {} : { requestedBy }),
 				db: this.#options.db,
 				provider: this.#options.provider,
 				providerName: this.#options.providerName,
@@ -194,9 +212,11 @@ export class DraftScheduler {
 			});
 			if (result.kind === 'rate_limited') {
 				// The rate-limit reschedule is a continuation of the same request, so
-				// the owner authorisation is carried over rather than silently
-				// downgraded to an automatic run the classifier would then reject.
-				if (ownerRequested) this.#ownerRequested.add(chatJid);
+				// the authorisation is carried over rather than silently downgraded to
+				// an automatic run the classifier would then reject — and it carries the
+				// *same* requester, or an agent-caused draft would come back anonymous
+				// purely because the first attempt happened to be rate limited.
+				if (requestedBy !== undefined) this.#requested.set(chatJid, requestedBy);
 				this.#schedule(chatJid, result.retryAfterMs);
 			}
 		} finally {
