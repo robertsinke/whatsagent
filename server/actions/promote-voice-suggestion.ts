@@ -5,17 +5,30 @@ import { actionError, actionJson, parseError } from './types.js';
 export type PromoteVoiceSuggestionInput = { stem: string; id: string };
 
 /**
- * PANEL-S5 — both callers. Owner decision 2026-07-30: promoting a pending
- * suggestion is a voice-document write, not an outbound path. `run` only calls
- * `VoiceFiles.promoteSuggestion`; it does not enqueue an outbox row, wake the
- * pacer, or write `text_source: 'owner'`. R9 is untouched.
+ * FRONTEND ONLY, and this is the one exception to the first-class-agent rule
+ * that is about injection rather than about outbound sends.
  *
- * Direct rewrites of the voice body stay on `save-voice` (frontend-only); the
- * agent's append-only half remains `suggest-voice-note`.
+ * PANEL-S5 briefly opened this to `tool` and it was reverted the same day once
+ * the full chain was traced. `promoteSuggestion` writes the voice body through
+ * `VoiceFiles.writeOwnerEdit`, which records an `ownerHash` and therefore ARMS
+ * THE MIRROR GUARD — the promoted text is then protected from being overwritten
+ * by the memory system. And `drafter.ts` feeds that document into the system
+ * prompt of every future draft.
+ *
+ * So with `tool` here the chain is: a contact's message text reaches the agent,
+ * the agent calls `suggest-voice-note` (tool-only, append-only), then promotes
+ * its own suggestion — and durable, guard-protected instructions land in the
+ * owner's voice document with no owner click, shaping every draft afterwards.
+ * One click from the owner is the whole defence, which is why the split into
+ * suggest-then-promote exists at all.
+ *
+ * The agent keeps the other half: `suggest-voice-note` to propose, and
+ * `discard-voice-suggestion` (both callers) to withdraw its own suggestion.
+ * Direct rewrites of the body stay on `save-voice`, also frontend-only.
  */
 export const promoteVoiceSuggestionAction: ActionDefinition<PromoteVoiceSuggestionInput> = {
 	name: 'promote-voice-suggestion',
-	callers: ['frontend', 'tool'],
+	callers: ['frontend'],
 	jsonSchema: {
 		type: 'object',
 		properties: {

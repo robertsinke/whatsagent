@@ -23,7 +23,12 @@ const REFUSED = [
 	// PL-U3 / PANEL-S5: an agent may *propose* a send; confirming is still the
 	// owner's click. Rejecting was opened to tools in PANEL-S5 (withdraw cannot
 	// cause a send) and therefore must NOT appear here.
-	'confirm-proposal'
+	'confirm-proposal',
+	// Promoting a suggestion writes the voice document the drafter reads, via
+	// the path that arms the mirror guard. The agent already holds the suggest
+	// half, so a tool-callable promote closes the loop from a contact's message
+	// to durable influence with no owner click.
+	'promote-voice-suggestion'
 ] as const;
 
 let dataDir: string | undefined;
@@ -212,8 +217,10 @@ describe('MCP surface — registry tools', () => {
 			// the registry alone. PANEL-S5 opened reject/promote/discard the same way.
 			expect(names).toContain('propose-send');
 			expect(names).toContain('reject-proposal');
-			expect(names).toContain('promote-voice-suggestion');
 			expect(names).toContain('discard-voice-suggestion');
+			// Promote is owner-only: it writes the voice document the drafter reads,
+			// and the agent already has the suggest half. It must not be advertised.
+			expect(names).not.toContain('promote-voice-suggestion');
 			for (const refused of REFUSED) {
 				expect(names).not.toContain(refused);
 			}
