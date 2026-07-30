@@ -61,10 +61,9 @@ const GENERATE_SETTLE_TIMEOUT_MS = 30_000;
  * the owner turns it on.
  */
 const UNAVAILABLE_AGENT: AgentStatus = {
+	// PANEL-S1: pessimistic on purpose. A failed status call must not claim a
+	// capability it could not observe.
 	available: false,
-	// PANEL-S1: the pessimistic half too. A failed status call must not claim a
-	// restart would fix anything — it has no idea what is saved.
-	restartRequired: false,
 	running: false,
 	sessionId: null,
 	messageId: null,
@@ -1149,7 +1148,7 @@ export class AppState {
 			case 'agent-turn':
 				// PL-U7 — the only authoritative "is a turn running?" signal; the parts
 				// cannot answer it (see the event's own comment). `available` is not
-				// touched: it is a boot-time configuration fact, not turn state.
+				// touched: it is a configuration fact, not turn state.
 				this.agent = {
 					...this.agent,
 					running: event.phase === 'started',
@@ -1222,9 +1221,8 @@ export class AppState {
 	async cancelAgentTurn(): Promise<void> {
 		if (!this.agent.available) return;
 		try {
-			// Turn state from the response; the boot-time facts (`available`,
-			// `restartRequired`) are preserved from what we already hold — cancel
-			// cannot observe them and must not blank them.
+			// Turn state from the response; `available` is preserved from what we
+			// already hold — cancel cannot observe it and must not blank it.
 			this.agent = { ...this.agent, ...(await api.cancelAgentTurn()), available: true };
 		} catch (err) {
 			this.agentError = describeError(err);

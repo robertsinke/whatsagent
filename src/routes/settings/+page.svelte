@@ -117,10 +117,12 @@
 
 	/**
 	 * PANEL-S1 — the agent panel's opt-in. Three rows (`panel_enabled`,
-	 * `panel_harness`, `panel_model`) read at startup only, so the saved value
-	 * and the running process can disagree; `agentStatus.restartRequired` is the
-	 * server's own comparison of the two and the only honest source for the
-	 * banner. A client-side "just saved" flag would not survive a reload.
+	 * `panel_harness`, `panel_model`).
+	 *
+	 * PANEL-S2: writing one of them reconciles the running panel inside the same
+	 * request, so the saved value and the running process cannot disagree. This
+	 * is re-fetched after every panel write and describes what IS running — never
+	 * a client-side guess at what the write will eventually produce.
 	 */
 	let agentStatus = $state<AgentStatus | null>(null);
 	/**
@@ -144,7 +146,7 @@
 		PANEL_HARNESSES.some((h) => h.value === values.panel_harness)
 	);
 	const runningHarnessLabel = $derived(
-		agentStatus?.available && !agentStatus.restartRequired && panelEnabled
+		agentStatus?.available && panelEnabled
 			? (PANEL_HARNESSES.find((h) => h.value === values.panel_harness)?.label ?? null)
 			: null
 	);
@@ -531,8 +533,8 @@
 			if (key === 'provider' || key === 'provider_model' || key === 'memory') {
 				void loadProviders();
 			}
-			// PANEL-S1: restartRequired is a server-side comparison, so re-ask
-			// rather than deriving it here from what we just wrote.
+			// PANEL-S2: the write reconfigured the runtime server-side, so re-ask
+			// what is running rather than deriving it here from what we just wrote.
 			if (key.startsWith('panel_')) void loadAgentStatus();
 		} catch (err) {
 			error = err instanceof Error ? err.message : String(err);
@@ -677,14 +679,13 @@
 							<span class="panel-state" data-testid="panel-runtime-state">
 								{#if agentStatus?.available}
 									<!-- `agentStatus.harness` is TURN state and is null while idle, so
-									     the name comes from the saved row — which `restartRequired: false`
-									     is the server's own proof matches what booted. With no row (the
-									     developer path) there is no name to claim, so none is claimed. -->
+									     the name comes from the saved row — which PANEL-S2 keeps in step
+									     with what is running, because the write that changed the row is
+									     the write that rebuilt the panel. With no row (the developer
+									     path) there is no name to claim, so none is claimed. -->
 									Running now{runningHarnessLabel ? ` on ${runningHarnessLabel}` : ''}.
-								{:else if agentStatus?.restartRequired}
-									Saved, but this app was started without it — restart to apply.
 								{:else}
-									Not running in this app.
+									Not running.
 								{/if}
 							</span>
 						</div>
@@ -800,12 +801,9 @@
 							{/if}
 						</div>
 
-						<p class="panel-help">
-							The panel is built once at startup, so saving here does not start or stop
-							anything in the app you are looking at.
-							{#if agentStatus?.restartRequired}
-								<strong data-testid="panel-restart-note">Restart WhatsAgent to apply.</strong>
-							{/if}
+						<p class="panel-help" data-testid="panel-apply-note">
+							Changes here take effect immediately — turning the panel on starts it,
+							turning it off stops it and ends any turn it was running.
 						</p>
 					{/if}
 				</div>

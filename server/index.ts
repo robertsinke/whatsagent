@@ -30,7 +30,7 @@ import { createRequestHandler, type RoutesDeps } from './api/routes.js';
 import { createSessionState } from './api/session.js';
 import { buildAllowedOrigins, validateOriginAndHost } from './api/security.js';
 import { createMcpSurface, isMcpEnabled, mcpOptionOverride } from './mcp/surface.js';
-import { ensureMcpToken } from './mcp/token.js';
+import { ensureMcpToken, removeMcpTokenFile } from './mcp/token.js';
 import {
 	createPanelHarness,
 	isPanelHarnessId,
@@ -218,8 +218,9 @@ export type ResolvedPanelConfig = {
 	/**
 	 * True when the owner's settings rows produced this, false for an explicit
 	 * `options.panel`. Two things hang off the distinction: only a settings-born
-	 * panel implies the MCP surface, and only a settings-born panel takes part
-	 * in the restart-required comparison.
+	 * panel implies the MCP surface, and only a settings-born panel is
+	 * reconciled when a row changes — the developer option is fixed for the life
+	 * of the process by design.
 	 */
 	fromSettings: boolean;
 };
@@ -259,7 +260,7 @@ export function resolvePanelConfig(
 				`[panel] ${PANEL_ENABLED_SETTING} is on but ${PANEL_HARNESS_SETTING} is ` +
 				`${settings.harness === null ? 'not set' : JSON.stringify(settings.harness)} — ` +
 				'expected "opencode" or "claude". The agent panel stays unavailable; ' +
-				'pick a harness in Settings → Agent and restart.'
+				'pick a harness in Settings → Agent.'
 		};
 	}
 	return {
@@ -425,46 +426,32 @@ export function createApp(options: CreateAppOptions = {}): App {
 	 *
 	 * Precedence: explicit option, else env, else the row.
 	 */
-	const panelSettings = getPanelSettings(db);
-	const { config: panelConfig, warning: panelWarning } = resolvePanelConfig(options, panelSettings);
-	if (panelWarning) console.warn(panelWarning);
-	const mcpEnabled =
-		mcpOptionOverride(options) ?? (isMcpEnabled(options) || (panelConfig?.fromSettings ?? false));
-
 	let mcpInfo: { token: string; tokenPath: string } | null = null;
-	if (mcpEnabled) {
-		const override =
-			typeof options.mcp === 'object' && typeof options.mcp.token === 'string'
-				? options.mcp.token
-				: undefined;
-		const minted = ensureMcpToken(dataDir, override);
-		const surface = createMcpSurface({
-			deps: routeDeps,
-			token: minted.token,
-			tokenPath: minted.path
-		});
-		routeDeps.mcp = surface;
-		mcpInfo = { token: minted.token, tokenPath: minted.path };
-	}
+	let panelSession: PanelSessionManager | undefined;
+	/**
+	 * What the running panel was built from, so a reconcile can tell "already
+	 * running this" from "running something else". `null` whenever no panel is
+	 * armed.
+	 */
+	let armedPanel: ResolvedPanelConfig | null = null;
 
 	/**
 	 * PL-U7 — the panel runtime, only when MCP is on. See
-	 * `CreateAppOptions.panel` for why this does not enable MCP itself.
+	 * `CreateAppOptions.panel` for why the panel option does not enable MCP itself.
 	 *
 	 * The harness is built lazily (on the first turn) so it can read the port the
 	 * server actually bound: `port: 0` is the normal case in tests, and the MCP
 	 * URL written into the harness config has to be the listening port, not the
-	 * requested one.
+	 * requested one. The same laziness is what lets PANEL-S2 arm a panel under a
+	 * live process: the token this closes over is the one minted for the surface
+	 * that is open right now, and a rebuild starts from a fresh, unbuilt harness.
 	 */
-	let panelSession: PanelSessionManager | undefined;
-	if (panelConfig && mcpInfo) {
-		const token = mcpInfo.token;
-		const panelOptions = panelConfig;
+	function buildPanelSession(config: ResolvedPanelConfig, token: string): PanelSessionManager {
 		const discovery = options.providerDiscovery;
-		let built: PanelHarness | undefined = panelOptions.harnessImpl;
+		let built: PanelHarness | undefined = config.harnessImpl;
 		const harness: PanelHarness = {
 			get id() {
-				return panelOptions.harness;
+				return config.harness;
 			},
 			run(turn, signal) {
 				// An async generator so the first turn can AWAIT discovery and still
@@ -474,60 +461,118 @@ export function createApp(options: CreateAppOptions = {}): App {
 				return (async function* () {
 					if (!built) {
 						built = createPanelHarness({
-							harness: panelOptions.harness,
+							harness: config.harness,
 							port: listeningPort,
 							token,
 							registry: actionRegistry,
-							...(panelOptions.model === null ? {} : { model: panelOptions.model }),
-							...(panelOptions.timeoutMs === undefined
-								? {}
-								: { timeoutMs: panelOptions.timeoutMs }),
-							...(await discoveredHarnessCommand(discovery, panelOptions.harness))
+							...(config.model === null ? {} : { model: config.model }),
+							...(config.timeoutMs === undefined ? {} : { timeoutMs: config.timeoutMs }),
+							...(await discoveredHarnessCommand(discovery, config.harness))
 						});
 					}
 					yield* built.run(turn, signal);
 				})();
 			}
 		};
-		panelSession = new PanelSessionManager({ events, harness });
-		routeDeps.panelSession = panelSession;
-	} else if (panelConfig) {
-		// Two ways to land here, and they need different advice: a developer who
-		// passed `panel` without `mcp`, or a caller who explicitly shut the
-		// surface while the owner's rows ask for a panel. The second is the
-		// override working as intended, so it is stated as such rather than as a
-		// mistake to fix.
-		console.warn(
-			panelConfig.fromSettings
-				? '[panel] the agent panel is enabled in Settings but this process was started with the MCP surface explicitly off — the panel has no tools and reports itself unavailable.'
-				: '[panel] agent panel requested but the MCP surface is off — the panel has no tools and will report itself unavailable. Pass `mcp: true` (or WHATSAGENT_MCP=1) alongside the explicit panel option; the Settings toggle enables both together.'
-		);
+		return new PanelSessionManager({ events, harness });
 	}
 
 	/**
-	 * PANEL-S1 — is what is saved different from what is running? Evaluated per
-	 * request, not captured at boot, because the whole point of the toggle is
-	 * that it changes under a live process.
+	 * PANEL-S2 — bring the running panel and the `/mcp` surface in line with the
+	 * settings rows as they are RIGHT NOW. The single arming path: boot calls it
+	 * from the cold state and `set-setting` calls it again on every panel row
+	 * write, so a surface armed live is identical to one armed at boot by
+	 * construction rather than by inspection — same mint, same 0600 file, same
+	 * Host+bearer validation, because it is the same three lines.
 	 *
-	 * An explicit `options.panel` opts out entirely: it is a developer flag, not
-	 * a saved preference, so comparing it against rows it never wrote would make
-	 * the dev path claim "restart required" forever.
+	 * Mutating `routeDeps` in place is what makes this take effect immediately:
+	 * `routes.ts` reads `deps.mcp` and `deps.panelSession` per request, so the
+	 * very next one sees the new answer. That is the same mechanism the outbox
+	 * dry-run flip already uses; PANEL-S1's "restart to apply" was caution, not a
+	 * constraint.
+	 *
+	 * Order on the way down is load-bearing: cancel the turn, then close the
+	 * doors, then delete the token. A harness process must never outlive the
+	 * toggle that authorized it, and it holds the token it was spawned with.
 	 */
-	const panelRestartRequired = (): boolean => {
-		if (options.panel) return false;
-		const saved = getPanelSettings(db);
-		const wanted =
-			saved.enabled && isPanelHarnessId(saved.harness)
-				? { harness: saved.harness as string, model: saved.model }
-				: null;
-		const running = panelSession
-			? { harness: panelConfig?.harness as string, model: panelConfig?.model ?? null }
-			: null;
-		if (wanted === null && running === null) return false;
-		if (wanted === null || running === null) return true;
-		return wanted.harness !== running.harness || wanted.model !== running.model;
+	function reconcilePanelRuntime(): void {
+		const { config, warning } = resolvePanelConfig(options, getPanelSettings(db));
+		if (warning) console.warn(warning);
+		const mcpEnabled =
+			mcpOptionOverride(options) ?? (isMcpEnabled(options) || (config?.fromSettings ?? false));
+
+		// Tear down when the panel is going away, losing its tools, or changing
+		// what it runs. A rebuild cancels too: leaving the old manager alive would
+		// orphan a turn nothing can cancel while the new one reports itself idle
+		// and accepts a second concurrent one.
+		const unchanged =
+			config !== null &&
+			armedPanel !== null &&
+			config.harness === armedPanel.harness &&
+			config.model === armedPanel.model;
+		if (panelSession && (!config || !mcpEnabled || !unchanged)) {
+			panelSession.cancel();
+			panelSession = undefined;
+			armedPanel = null;
+			routeDeps.panelSession = undefined;
+		}
+
+		// The surface follows `mcpEnabled`, never `panel_enabled` directly: a
+		// `WHATSAGENT_MCP=1` run keeps its `/mcp` when the owner turns the panel
+		// off, and an explicit `mcp: false` is never re-opened by a row.
+		if (!mcpEnabled && mcpInfo) {
+			routeDeps.mcp = undefined;
+			mcpInfo = null;
+			removeMcpTokenFile(dataDir);
+		}
+		if (mcpEnabled && !mcpInfo) {
+			const override =
+				typeof options.mcp === 'object' && typeof options.mcp.token === 'string'
+					? options.mcp.token
+					: undefined;
+			const minted = ensureMcpToken(dataDir, override);
+			// Always a fresh surface: it closes over its token, so reusing one
+			// after a re-mint would validate bearers against a dead secret.
+			routeDeps.mcp = createMcpSurface({
+				deps: routeDeps,
+				token: minted.token,
+				tokenPath: minted.path
+			});
+			mcpInfo = { token: minted.token, tokenPath: minted.path };
+		}
+
+		if (config && mcpInfo && !panelSession) {
+			panelSession = buildPanelSession(config, mcpInfo.token);
+			armedPanel = config;
+			routeDeps.panelSession = panelSession;
+		} else if (config && !mcpInfo) {
+			// Two ways to land here, and they need different advice: a developer who
+			// passed `panel` without `mcp`, or a caller who explicitly shut the
+			// surface while the owner's rows ask for a panel. The second is the
+			// override working as intended, so it is stated as such rather than as a
+			// mistake to fix.
+			console.warn(
+				config.fromSettings
+					? '[panel] the agent panel is enabled in Settings but this process was started with the MCP surface explicitly off — the panel has no tools and reports itself unavailable.'
+					: '[panel] agent panel requested but the MCP surface is off — the panel has no tools and will report itself unavailable. Pass `mcp: true` (or WHATSAGENT_MCP=1) alongside the explicit panel option; the Settings toggle enables both together.'
+			);
+		}
+	}
+
+	reconcilePanelRuntime();
+
+	/**
+	 * PANEL-S2 — what `set-setting` calls after writing a panel row.
+	 *
+	 * An explicit `options.panel` opts out: it is a developer flag, not a saved
+	 * preference, and `resolvePanelConfig` returns it whatever the rows say, so
+	 * reconciling would be a no-op that still cancels an in-flight dev turn on
+	 * every unrelated settings write.
+	 */
+	routeDeps.applyPanelSettings = () => {
+		if (options.panel) return;
+		reconcilePanelRuntime();
 	};
-	routeDeps.panelRestartRequired = panelRestartRequired;
 
 	const handleRequest = createRequestHandler(routeDeps);
 
@@ -763,7 +808,12 @@ export function createApp(options: CreateAppOptions = {}): App {
 		get url() {
 			return `http://${host}:${listeningPort}`;
 		},
-		mcp: mcpInfo,
+		// PANEL-S2: a getter, not a snapshot — the surface can be armed and
+		// disarmed under a live process, so a value captured here would report
+		// `null` for a panel the owner switched on a moment ago.
+		get mcp() {
+			return mcpInfo;
+		},
 		start,
 		close
 	};

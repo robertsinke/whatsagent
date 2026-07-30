@@ -162,14 +162,12 @@ export type Draft = {
  * and says so rather than accepting turns that go nowhere.
  */
 export type AgentStatus = {
-	available: boolean;
 	/**
-	 * PANEL-S1 — the panel is enabled in Settings but this process did not boot
-	 * with it (or booted with a different harness/model). Only ever true while
-	 * `available` is the stale half of the picture; the two together give the
-	 * three states the panel has to distinguish. See `panelEmptyState`.
+	 * PANEL-S2 — the whole configuration answer. The Settings toggle reconciles
+	 * the running panel in the same request, so "saved but not running yet" is
+	 * no longer a state: this is either running now or not switched on.
 	 */
-	restartRequired: boolean;
+	available: boolean;
 	running: boolean;
 	sessionId: string | null;
 	messageId: string | null;
@@ -178,11 +176,11 @@ export type AgentStatus = {
 
 /**
  * PANEL-S1 — what `POST /api/agent/cancel` actually returns: turn state only.
- * `available` and `restartRequired` are boot-time facts the cancel action has
- * no access to, so they are absent here rather than typed and undefined at
- * runtime — the caller preserves the ones it already holds.
+ * `available` is a configuration fact the cancel action has no access to, so it
+ * is absent here rather than typed and undefined at runtime — the caller
+ * preserves the one it already holds.
  */
-export type AgentCancelResult = Omit<AgentStatus, 'available' | 'restartRequired'> & {
+export type AgentCancelResult = Omit<AgentStatus, 'available'> & {
 	cancelled: boolean;
 };
 

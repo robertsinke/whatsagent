@@ -52,11 +52,11 @@
 	 * It is still disabled when there is nothing to send to. `app.agent.available`
 	 * is false whenever the `/mcp` surface is off, which is the shipped default:
 	 * the panel is opt-in, and PANEL-S1 made the opt-in a Settings toggle rather
-	 * than an env var no packaged app could ever receive. Because the toggle only
-	 * takes effect at startup, the disabled state has to distinguish "never
-	 * configured" from "saved, needs a restart" — `panelEmptyState` owns that
-	 * copy. Neither is left looking broken, and the old "(not wired)" placeholder
-	 * is gone: it would now be a lie in the configured case.
+	 * than an env var no packaged app could ever receive. PANEL-S2 made that
+	 * toggle take effect immediately, so "off" is the only disabled state left
+	 * and `panelEmptyState` says where to switch it on. It is not left looking
+	 * broken, and the old "(not wired)" placeholder is gone: it would now be a
+	 * lie in the configured case.
 	 */
 
 	let { app }: { app: AppState } = $props();
@@ -121,7 +121,7 @@
 			{#if busy}
 				<Shimmer children="working…" as="span" />
 			{:else if !available}
-				{app.agent.restartRequired ? 'restart needed' : 'not enabled'}
+				not enabled
 			{:else}
 				{app.agent.harness ?? 'ready'}
 			{/if}
@@ -202,8 +202,7 @@
 	  scrolls internally — the conversation composer's approach.
 
 	  PL-U7: live. Disabled only when there is genuinely nothing to send to
-	  (`available` false — the panel is off, or saved but not yet restarted into)
-	  or while a turn is in flight,
+	  (`available` false — the panel is switched off) or while a turn is in flight,
 	  in which case the submit button becomes a stop button. One turn runs at a
 	  time and a second is refused rather than queued, so offering send during a
 	  turn would only produce a 409.

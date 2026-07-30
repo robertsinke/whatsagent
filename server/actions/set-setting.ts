@@ -1,6 +1,9 @@
 import {
 	getSetting,
 	OUTBOX_DRY_RUN_SETTING,
+	PANEL_ENABLED_SETTING,
+	PANEL_HARNESS_SETTING,
+	PANEL_MODEL_SETTING,
 	PROVIDER_MODEL_SETTING,
 	PROVIDER_SETTING,
 	resolveOutboxDryRun,
@@ -12,6 +15,13 @@ import { actionError, actionJson, parseError } from './types.js';
 
 export type SetSettingInput = { key: string; value: string };
 
+/** PANEL-S2 — the rows whose write reconfigures the panel runtime in place. */
+const PANEL_SETTINGS: ReadonlySet<string> = new Set([
+	PANEL_ENABLED_SETTING,
+	PANEL_HARNESS_SETTING,
+	PANEL_MODEL_SETTING
+]);
+
 /**
  * FRONTEND ONLY, and the reason is R9 rather than caution about settings.
  *
@@ -21,6 +31,12 @@ export type SetSettingInput = { key: string; value: string };
  * entirely defeat `set-send-mode` refusing tool callers: an agent blocked from
  * the front door could simply write the setting instead. (Found and flagged by
  * the PL-U1 worker, which correctly declined to close it unilaterally.)
+ *
+ * PANEL-S2 ADDED A SECOND RUNTIME EFFECT of the same kind: a `panel_*` write
+ * calls `applyPanelSettings`, which arms or disarms the `/mcp` surface and the
+ * panel runtime immediately. A `tool` caller here would therefore be an agent
+ * able to arm its own tool surface — or to re-arm one the owner just switched
+ * off. Same conclusion, one more reason.
  *
  * The fix is a caller-policy change rather than a key check inside `run`,
  * because this registry's contract is that `callers` is enforced by the
@@ -66,6 +82,10 @@ export const setSettingAction: ActionDefinition<SetSettingInput> = {
 		) {
 			ctx.deps.providerDiscovery.invalidate();
 		}
+		// PANEL-S2: the row IS the runtime. Reconciled after the write, so the
+		// reconcile reads the value that is now on disk and a crash in between
+		// lands on the persisted state rather than on a panel nothing saved.
+		if (PANEL_SETTINGS.has(input.key)) ctx.deps.applyPanelSettings?.();
 		return actionJson(200, { key: input.key, value: getSetting(db, input.key) });
 	}
 };

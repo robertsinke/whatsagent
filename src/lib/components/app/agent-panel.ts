@@ -175,44 +175,35 @@ export function hasActiveSessions(
 }
 
 /**
- * PANEL-S1 — the empty-state copy, chosen from the two boot-time facts in
- * `AgentStatus`.
+ * PANEL-S1 — the empty-state copy, chosen from `AgentStatus`.
  *
  * A pure function rather than markup branches because the copy IS the feature
  * here: the shipped version told the owner to "start the app with
  * WHATSAGENT_MCP=1", an instruction a double-clicked `.app` cannot receive and
- * which would not have been sufficient anyway. Three states, three answers,
- * asserted in a test instead of eyeballed.
+ * which would not have been sufficient anyway.
+ *
+ * PANEL-S2 removed the third state. Turning the panel on in Settings arms it in
+ * that same request, so there is nothing to restart into and no "saved but not
+ * running" to explain — two states, two answers.
  *
  * `placeholder` is the disabled composer's, and is deliberately a different
  * length register from `title` — it sits inside a one-line field.
  */
 export type PanelEmptyState = {
 	/** Stable id for tests and `data-` attributes; never rendered. */
-	state: 'idle' | 'restart-required' | 'not-configured';
+	state: 'idle' | 'not-configured';
 	title: string;
 	body: string;
 	placeholder: string;
 };
 
-export function panelEmptyState(status: {
-	available: boolean;
-	restartRequired: boolean;
-}): PanelEmptyState {
+export function panelEmptyState(status: { available: boolean }): PanelEmptyState {
 	if (status.available) {
 		return {
 			state: 'idle',
 			title: 'Agent is idle',
 			body: 'Ask for something below — open a chat, draft a reply, make it shorter. Tool calls and reasoning stream here as they happen.',
 			placeholder: 'Ask the agent to do something…'
-		};
-	}
-	if (status.restartRequired) {
-		return {
-			state: 'restart-required',
-			title: 'Restart to start the agent panel',
-			body: 'The panel is switched on in Settings → Agent, but this app was started without it. Quit and reopen WhatsAgent to load it.',
-			placeholder: 'Restart to start the agent panel'
 		};
 	}
 	return {

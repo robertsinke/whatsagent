@@ -146,13 +146,19 @@ export type RoutesDeps = {
 	 */
 	panelSession?: PanelSessionRuntime;
 	/**
-	 * PANEL-S1 — whether the saved panel settings differ from what this process
-	 * booted with. A closure, not a boolean: the rows change under a live
-	 * process (that is the point of the toggle) and the answer has to be current
-	 * at request time. Absent reads as "no", so a `RoutesDeps` built by hand in
-	 * a test reports the honest default.
+	 * PANEL-S2 — re-read the panel settings rows and arm, disarm, or rebuild the
+	 * panel runtime and the `/mcp` surface to match. Called by `set-setting`
+	 * after a `panel_*` write, exactly as the outbox dry-run key calls
+	 * {@link setOutboxDryRun}, and it mutates the fields above on this same
+	 * object — which is why the toggle takes effect on the next request rather
+	 * than on the next launch.
+	 *
+	 * That this is reachable from a settings write is precisely why
+	 * `set-setting` is frontend-only: an agent that could write `panel_enabled`
+	 * could arm its own tool surface. Absent (the default) means a `RoutesDeps`
+	 * built by hand in a test simply has no runtime to reconcile.
 	 */
-	panelRestartRequired?: () => boolean;
+	applyPanelSettings?: () => void;
 };
 
 /**
@@ -456,18 +462,16 @@ async function handleApi(
 	 * unusable with `/mcp` off, so this reports honestly rather than letting the
 	 * composer look wired when it is not.
 	 *
-	 * PANEL-S1 — `available` alone cannot tell the owner why. Paired with
-	 * `restartRequired` it separates the three states the UI has to distinguish:
-	 * running now (`available`), saved but not yet running (`restartRequired`),
-	 * and never configured (neither). Same server-side comparison as
-	 * `/api/providers` — a client-side "just saved" flag dies on reload and
-	 * would lie.
+	 * PANEL-S2 — `available` is now the whole answer. It used to be paired with
+	 * `restartRequired` because a saved row could not reach a running process;
+	 * `set-setting` reconciles the runtime in the same request, so "saved but not
+	 * running" is no longer a state that exists. Read live from `deps` rather
+	 * than captured, so the status flips on the request after the toggle.
 	 */
 	if (path === '/api/agent/status' && method === 'GET') {
 		const panel = deps.panelSession;
 		json(res, 200, {
 			available: Boolean(panel),
-			restartRequired: deps.panelRestartRequired?.() ?? false,
 			...(panel
 				? panel.status()
 				: { running: false, sessionId: null, messageId: null, harness: null })

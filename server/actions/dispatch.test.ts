@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { hashApprovalText } from '../../shared/approval-hash.js';
 import { openDatabase, type AppDatabase } from '../store/db.js';
 import { upsertChat } from '../store/chats.js';
@@ -221,7 +221,9 @@ describe('action registry dispatch', () => {
 		// `set-setting` is in this list because its run() flips the live pacer when
 		// the key is OUTBOX_DRY_RUN_SETTING — a second door onto the send mode that
 		// would defeat `set-send-mode` being frontend-only. Any action that can arm
-		// an outbound path belongs here, not only the ones that send.
+		// an outbound path belongs here, not only the ones that send. PANEL-S2 gave
+		// it a second such effect: a `panel_*` key arms or disarms `/mcp` and the
+		// panel runtime immediately, so a tool caller here could arm its own tools.
 		// PL-U3 adds the two halves of the owner's decision on a proposal. They
 		// belong on this list for the same reason `set-setting` does: confirming
 		// is what creates the outbox row, and rejecting would let an agent erase
@@ -310,6 +312,42 @@ describe('action registry dispatch', () => {
 		);
 		expect(owner).toMatchObject({ kind: 'json', status: 200 });
 		expect(getSetting(db!, 'panel_enabled')).toBe('true');
+	});
+
+	/**
+	 * PANEL-S2 — the row now HAS a runtime effect: writing it arms or disarms the
+	 * `/mcp` surface and the panel in the same request. So the refusal above is
+	 * no longer only about a stale row the owner might notice; it is the thing
+	 * standing between an agent and its own tool surface. Asserted on the effect,
+	 * not the row, because a future `set-setting` that validated keys differently
+	 * could leave the row untouched and still reach the reconcile.
+	 */
+	it('a tool caller cannot reach applyPanelSettings at all', async () => {
+		const applyPanelSettings = vi.fn();
+		const deps = makeDeps({ applyPanelSettings });
+
+		for (const key of ['panel_enabled', 'panel_harness', 'panel_model']) {
+			const value = key === 'panel_enabled' ? 'true' : key === 'panel_harness' ? 'claude' : 'm';
+			const refused = await dispatch(
+				actionRegistry,
+				'set-setting',
+				{ key, value },
+				{ caller: 'tool', deps }
+			);
+			expect(refused).toMatchObject({ kind: 'error', status: 403 });
+		}
+		expect(applyPanelSettings).not.toHaveBeenCalled();
+
+		// The owner's own write does reconcile — otherwise this test would pass
+		// against a `set-setting` that had simply stopped calling it.
+		const owner = await dispatch(
+			actionRegistry,
+			'set-setting',
+			{ key: 'panel_enabled', value: 'true' },
+			{ caller: 'frontend', deps }
+		);
+		expect(owner).toMatchObject({ kind: 'json', status: 200 });
+		expect(applyPanelSettings).toHaveBeenCalledTimes(1);
 	});
 
 	it('approve-draft tool refusal happens before draft work', async () => {

@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 /** Relative to the app data dir — same discipline as WhatsApp auth blobs. */
@@ -42,4 +42,15 @@ export function ensureMcpToken(dataDir: string, override?: string): { token: str
 	const token = override ?? generateMcpToken();
 	const path = writeMcpTokenFile(dataDir, token);
 	return { token, path };
+}
+
+/**
+ * PANEL-S2 — the other half of "never leave a token while the surface is off".
+ * Turning the panel off closes `/mcp` in the same tick, and a token file that
+ * outlived it would be exactly the unused attack surface `ensureMcpToken`
+ * warns about. Missing file is success: this runs on every disable, including
+ * ones where nothing was ever minted.
+ */
+export function removeMcpTokenFile(dataDir: string): void {
+	rmSync(mcpTokenPath(dataDir), { force: true });
 }

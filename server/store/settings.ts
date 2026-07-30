@@ -13,8 +13,10 @@ export const MEMORY_SETTING = 'memory';
  * harness has its own default), so a single blob would make "enabled but
  * unconfigured" unrepresentable and the warning path impossible to state.
  *
- * Read once at boot by `createApp`. Writing them does not start a panel — see
- * the restart-required story in `server/index.ts`.
+ * PANEL-S2: writing one of these DOES start, stop, or rebuild the panel. The
+ * write path (`set-setting`) calls `applyPanelSettings`, which reconciles the
+ * live runtime and the `/mcp` surface — see `reconcilePanelRuntime` in
+ * `server/index.ts`. That runtime reach is why `set-setting` is frontend-only.
  */
 export const PANEL_ENABLED_SETTING = 'panel_enabled';
 export const PANEL_HARNESS_SETTING = 'panel_harness';

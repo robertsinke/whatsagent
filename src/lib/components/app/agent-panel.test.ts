@@ -208,21 +208,13 @@ describe('hasActiveSessions', () => {
  * var, and every not-running variant must name the place the owner can act.
  */
 describe('panelEmptyState (PANEL-S1)', () => {
-	const idle = panelEmptyState({ available: true, restartRequired: false });
-	const restart = panelEmptyState({ available: false, restartRequired: true });
-	const off = panelEmptyState({ available: false, restartRequired: false });
+	const idle = panelEmptyState({ available: true });
+	const off = panelEmptyState({ available: false });
 
 	it('shows the idle copy when the panel is running', () => {
 		expect(idle.state).toBe('idle');
 		expect(idle.title).toBe('Agent is idle');
 		expect(idle.placeholder).toMatch(/Ask the agent/);
-	});
-
-	it('asks for a restart when the setting is on but this process is not', () => {
-		expect(restart.state).toBe('restart-required');
-		expect(restart.title).toMatch(/[Rr]estart/);
-		expect(restart.body).toMatch(/Settings/);
-		expect(restart.body).toMatch(/[Rr]estart|reopen/);
 	});
 
 	it('points an unconfigured owner at Settings, not at a harness they have to guess', () => {
@@ -232,14 +224,16 @@ describe('panelEmptyState (PANEL-S1)', () => {
 		expect(off.body).toMatch(/never send/);
 	});
 
-	it('`available` wins over a stale restart flag', () => {
-		// Both true is reachable for one paint: the status refetch that clears
-		// restartRequired can land after the panel is already running.
-		expect(panelEmptyState({ available: true, restartRequired: true }).state).toBe('idle');
+	it('never tells the owner to restart — PANEL-S2 made the toggle immediate', () => {
+		for (const variant of [idle, off]) {
+			const all = `${variant.title} ${variant.body} ${variant.placeholder}`;
+			expect(all).not.toMatch(/[Rr]estart/);
+			expect(all).not.toMatch(/reopen|relaunch|[Qq]uit/);
+		}
 	});
 
 	it('never mentions the env var again, in any variant', () => {
-		for (const variant of [idle, restart, off]) {
+		for (const variant of [idle, off]) {
 			const all = `${variant.title} ${variant.body} ${variant.placeholder}`;
 			expect(all).not.toMatch(/WHATSAGENT_MCP/);
 			expect(all).not.toMatch(/MCP/);
@@ -247,8 +241,8 @@ describe('panelEmptyState (PANEL-S1)', () => {
 	});
 
 	it('gives every variant a distinct, non-empty composer placeholder', () => {
-		const placeholders = [idle, restart, off].map((v) => v.placeholder);
-		expect(new Set(placeholders).size).toBe(3);
+		const placeholders = [idle, off].map((v) => v.placeholder);
+		expect(new Set(placeholders).size).toBe(2);
 		for (const placeholder of placeholders) expect(placeholder.length).toBeGreaterThan(0);
 	});
 });
