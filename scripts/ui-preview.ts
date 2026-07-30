@@ -49,7 +49,13 @@
  *     REAL HARNESS and therefore calls a real model; without it the panel renders
  *     its honest "not enabled" state, which is the shipped default and also worth
  *     a screenshot. PREVIEW_AGENT_MODEL picks the model (e.g.
- *     `ollama/glm-5.2:cloud`).
+ *     `ollama/glm-5.2:cloud`). Without it, the Settings toggle arms the panel
+ *     live (PANEL-S2) — usable for a capture as long as no turn is started,
+ *     since the harness binary is only spawned on the first turn.
+ *   PREVIEW_PANEL_HARNESS=opencode|claude
+ *     PANEL-S2 — seeds only the `panel_harness` row, leaving the panel off, so
+ *     the Settings toggle is one click away from arming it live. Nothing spawns
+ *     until a turn is started.
  *   PREVIEW_AGENT_TURN="<instruction>"
  *     Fires that instruction at the panel a few seconds after boot, so a capture
  *     run started alongside the server photographs a real tool trace rather than
@@ -571,27 +577,34 @@ if (panelHarness && !isPanelHarnessId(panelHarness)) {
 }
 
 /**
- * PANEL-S1 — the third panel state. `available` and `restartRequired` are both
- * boot facts, so "saved in Settings but this process started without it" is not
- * something a screenshot run can click into: it needs settings rows that say
- * yes and a process that says no. `mcp: false` is exactly that disagreement,
- * and it is the same shape as the real case — the owner ticked the box after
- * the app was already running.
- *
- * It also seeds the Settings card into its enabled state, which is the half a
- * reviewer actually has to look at.
+ * PANEL-S2 removed the state a `PREVIEW_AGENT_PANEL_SAVED` switch used to
+ * photograph: "saved in Settings but this process started without it" cannot
+ * happen now that the write reconciles the runtime. The two remaining states
+ * are both clickable — leave the rows alone and toggle the panel on in Settings
+ * to watch it arm, which is the flow worth capturing anyway.
  */
-const panelSavedOnly = process.env.PREVIEW_AGENT_PANEL_SAVED === '1';
-if (panelSavedOnly || (panelHarness && isPanelHarnessId(panelHarness))) {
-	// Seeded in the running case too, so the Settings card is in its enabled
-	// state and reports the harness by name — the option alone leaves the rows
-	// empty, which is the developer path, not the one an owner ever sees.
+if (panelHarness && isPanelHarnessId(panelHarness)) {
+	// Seeded alongside the explicit option so the Settings card is in its
+	// enabled state and reports the harness by name — the option alone leaves
+	// the rows empty, which is the developer path, not one an owner ever sees.
 	setSetting(db, 'panel_enabled', 'true');
-	setSetting(
-		db,
-		'panel_harness',
-		panelHarness ?? process.env.PREVIEW_AGENT_PANEL_SAVED_HARNESS ?? 'opencode'
-	);
+	setSetting(db, 'panel_harness', panelHarness);
+}
+
+/**
+ * PANEL-S2 — the harness row alone, panel still off. The toggle refuses to arm
+ * an enabled row with no harness, so with two installed CLIs it stays disabled
+ * until one is picked — and a `Select` cannot be driven in the same capture run
+ * as a click (the harness fires every `--click` before any `--key`). Seeding the
+ * row is what makes the enable flow one click, which is the flow worth
+ * photographing.
+ */
+const panelHarnessRow = process.env.PREVIEW_PANEL_HARNESS;
+if (panelHarnessRow) {
+	if (!isPanelHarnessId(panelHarnessRow)) {
+		throw new Error(`PREVIEW_PANEL_HARNESS must be opencode or claude, got ${panelHarnessRow}`);
+	}
+	setSetting(db, 'panel_harness', panelHarnessRow);
 }
 const app = createApp({
   db,
@@ -623,10 +636,7 @@ const app = createApp({
             : {})
         }
       }
-    // PANEL-S1: rows on, surface explicitly off — the restart-required state.
-    : panelSavedOnly
-      ? { mcp: false as const }
-      : {})
+    : {})
 });
 
 // PL-U3 — a pending proposal to photograph. Inserted directly rather than
