@@ -242,7 +242,15 @@ describe('action registry dispatch', () => {
 			'regenerate-pairing',
 			'promote-voice-suggestion',
 			'discard-voice-suggestion',
-			'dismiss-cancellation-notice'
+			'dismiss-cancellation-notice',
+			// PL-U7: an agent must not be able to start or cancel an agent turn.
+			// Tool access here is unbounded recursion and unbounded spend, which is
+			// why these are frontend-only in their action files. They belong on this
+			// list too: the code being right is not the same as the code being
+			// guarded, and this assertion is the only thing that fails if a future
+			// change widens them.
+			'agent-turn',
+			'cancel-agent-turn'
 		]) {
 			expect(toolNames).not.toContain(banned);
 		}
