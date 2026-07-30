@@ -12,6 +12,6 @@
 export {
 	OpenCodeProvider as CodexProvider,
 	normalizeOpenCodeModel,
-	OPENCODE_EMPTY_TOOLS_CONFIG,
+	buildOpenCodeEmptyToolsConfig,
 	type OpenCodeProviderOptions as CodexProviderOptions
 } from './opencode.js';

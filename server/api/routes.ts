@@ -133,6 +133,29 @@ export type RoutesDeps = {
 	 * that path only; Host must still be loopback.
 	 */
 	mcp?: McpSurface;
+	/**
+	 * PL-U7 — the agent panel runtime. Injected rather than module-scoped so
+	 * several `createApp()` instances in one test process cannot share
+	 * single-flight state. Absent means the panel reports itself unavailable
+	 * (503) rather than silently accepting turns that go nowhere.
+	 */
+	panelSession?: PanelSessionRuntime;
+};
+
+/**
+ * The slice of `PanelSessionManager` the actions use. A structural type rather
+ * than the class, so `routes.ts` does not pull the agent runtime's module graph
+ * into every test that builds `RoutesDeps`.
+ */
+export type PanelSessionRuntime = {
+	start: (text: string) => { sessionId: string; messageId: string; harness: string };
+	cancel: () => boolean;
+	status: () => {
+		running: boolean;
+		sessionId: string | null;
+		messageId: string | null;
+		harness: string | null;
+	};
 };
 
 const MIME: Record<string, string> = {
@@ -395,6 +418,39 @@ async function handleApi(
 	if (path === '/api/dev/agent-demo' && method === 'POST') {
 		const body = await readJsonBody(req);
 		await dispatchAction(deps, res, 'agent-demo', body ?? {});
+		return;
+	}
+
+	/**
+	 * PL-U7 — the agent panel runtime. `agent-turn` and `cancel-agent-turn` are
+	 * both frontend-only in the registry; there is deliberately no MCP path to
+	 * either (an agent must not start or stop an agent). The 202 here is an
+	 * acknowledgement — the transcript arrives over the WebSocket.
+	 */
+	if (path === '/api/agent/turn' && method === 'POST') {
+		const body = await readJsonBody(req);
+		await dispatchAction(deps, res, 'agent-turn', body ?? {});
+		return;
+	}
+
+	if (path === '/api/agent/cancel' && method === 'POST') {
+		await dispatchAction(deps, res, 'cancel-agent-turn', {});
+		return;
+	}
+
+	/**
+	 * Whether the panel can run at all, and with which harness. The panel is
+	 * unusable with `/mcp` off, so this reports honestly rather than letting the
+	 * composer look wired when it is not.
+	 */
+	if (path === '/api/agent/status' && method === 'GET') {
+		const panel = deps.panelSession;
+		json(res, 200, {
+			available: Boolean(panel),
+			...(panel
+				? panel.status()
+				: { running: false, sessionId: null, messageId: null, harness: null })
+		});
 		return;
 	}
 

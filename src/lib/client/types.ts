@@ -157,6 +157,19 @@ export type Draft = {
 };
 
 /**
+ * PL-U7 — the agent panel runtime's own state. `available` is false whenever the
+ * MCP surface is off, which is the default: the panel is unusable without tools
+ * and says so rather than accepting turns that go nowhere.
+ */
+export type AgentStatus = {
+	available: boolean;
+	running: boolean;
+	sessionId: string | null;
+	messageId: string | null;
+	harness: string | null;
+};
+
+/**
  * PL-U3 — a send the agent asked for. It is not queued and never will be
  * unless the owner confirms it; `confirm-proposal` is frontend-only precisely
  * so that this row can only become an outbox row by way of a click.
@@ -277,6 +290,25 @@ export type ServerEvent =
 	 */
 	| { type: 'send-mode'; live: boolean; dry_run: boolean }
 	/** PL-A1 — streaming agent parts; see shared/agent-events.ts. */
+	/**
+	 * PL-U7 — the panel turn's own lifecycle, separate from its parts.
+	 *
+	 * Needed because "is a turn still running?" is not derivable from the parts.
+	 * A turn can end without a `step-finish` (a harness that exits mid-step, a
+	 * cancel, a spawn failure), and a turn's *first* part can arrive seconds after
+	 * the owner pressed Enter. Inferring the state from step markers therefore
+	 * either leaves the composer locked forever or unlocks it early; both are
+	 * worse than one explicit event. `reason` is what the panel shows when a turn
+	 * ended without finishing normally.
+	 */
+	| {
+			type: 'agent-turn';
+			phase: 'started' | 'finished';
+			sessionId: string;
+			messageId: string;
+			harness: string;
+			reason?: string;
+	  }
 	| { type: 'agent-part-updated'; part: AgentPart; delta?: string }
 	/** PL-A1 — closed client-command set; see shared/agent-events.ts. */
 	| { type: 'client-command'; command: ClientCommand };

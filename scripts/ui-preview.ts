@@ -43,6 +43,19 @@
  *   PREVIEW_CANCELLATION_NOTICE=1
  *     Seeds a durable notice that the agent cancelled an owner-approved send
  *     (PL-U5), shown above the chat list until dismissed.
+ *   PREVIEW_AGENT_PANEL=opencode|claude
+ *     PL-U7 — enables the `/mcp` surface and the named panel harness, so the
+ *     agent composer is live and a real turn can be photographed. This SPAWNS A
+ *     REAL HARNESS and therefore calls a real model; without it the panel renders
+ *     its honest "not enabled" state, which is the shipped default and also worth
+ *     a screenshot. PREVIEW_AGENT_MODEL picks the model (e.g.
+ *     `ollama/glm-5.2:cloud`).
+ *   PREVIEW_AGENT_TURN="<instruction>"
+ *     Fires that instruction at the panel a few seconds after boot, so a capture
+ *     run started alongside the server photographs a real tool trace rather than
+ *     an empty pane. Requires PREVIEW_AGENT_PANEL. PREVIEW_AGENT_TURN_DELAY_MS
+ *     (default 2500) is how long after boot it fires. It still cannot send: the
+ *     agent's only route toward one is a proposal the owner must confirm.
  *
  * It also covers what live data cannot. The owner's real database holds four
  * quoted messages — all of them plain text — and zero reactions, because
@@ -71,6 +84,7 @@ import { setSetting } from '../server/store/settings.js';
 import type { DraftProvider, DraftResult } from '../server/providers/provider.js';
 import { createDefaultProviderDiscovery } from '../server/providers/discovery.js';
 import { createPreviewChannel, isPreviewSessionMode } from './preview-channel.js';
+import { isPanelHarnessId } from '../server/agent/panel/index.js';
 import {
 	createPreviewProviderDiscovery,
 	isPreviewProvidersMode
@@ -544,6 +558,17 @@ const discovery =
 	providersMode === 'real'
 		? createDefaultProviderDiscovery()
 		: createPreviewProviderDiscovery(providersMode);
+
+/**
+ * PL-U7 — the panel harness. Off unless asked for, because turning it on spawns a
+ * real harness process and calls a real model, which a preview must never do by
+ * accident. The panel's "not enabled" state is the shipped default and the
+ * honest one, so it is what an unconfigured preview shows.
+ */
+const panelHarness = process.env.PREVIEW_AGENT_PANEL;
+if (panelHarness && !isPanelHarnessId(panelHarness)) {
+	throw new Error(`PREVIEW_AGENT_PANEL must be opencode or claude, got ${panelHarness}`);
+}
 const app = createApp({
   db,
   dataDir,
@@ -561,7 +586,20 @@ const app = createApp({
     drafting: true,
     model: null
   },
-  providerDiscovery: discovery
+  providerDiscovery: discovery,
+  // Both or neither: the panel is unusable with /mcp off, and enabling /mcp
+  // without a harness would only advertise a surface nothing drives.
+  ...(panelHarness && isPanelHarnessId(panelHarness)
+    ? {
+        mcp: true as const,
+        panel: {
+          harness: panelHarness,
+          ...(process.env.PREVIEW_AGENT_MODEL
+            ? { model: process.env.PREVIEW_AGENT_MODEL }
+            : {})
+        }
+      }
+    : {})
 });
 
 // PL-U3 — a pending proposal to photograph. Inserted directly rather than
@@ -610,6 +648,29 @@ if (process.env.PREVIEW_AGENT_EDIT === '1' && !sessionMode) {
 		app.events.emit({ type: 'draft-updated', draft: getDraft(db, DIRECT)! });
 	}, Number(process.env.PREVIEW_AGENT_EDIT_DELAY_MS ?? 15_000)).unref();
 }
+/**
+ * PL-U7 — fire a real panel turn shortly after boot so a capture run started
+ * alongside the server photographs an actual tool trace instead of an empty
+ * pane. Goes through the real REST route (with the Origin the CSRF check wants),
+ * not by reaching into the session manager, so what is photographed is the same
+ * path the composer uses.
+ */
+if (process.env.PREVIEW_AGENT_TURN && panelHarness) {
+	const text = process.env.PREVIEW_AGENT_TURN;
+	setTimeout(() => {
+		void fetch(`http://127.0.0.1:${app.port}/api/agent/turn`, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Origin: `http://127.0.0.1:${app.port}`
+			},
+			body: JSON.stringify({ text })
+		})
+			.then(async (r) => console.log(`[preview] agent turn → ${r.status} ${await r.text()}`))
+			.catch((error) => console.warn('[preview] agent turn failed', error));
+	}, Number(process.env.PREVIEW_AGENT_TURN_DELAY_MS ?? 2_500)).unref();
+}
+
 console.log(`
 UI preview ready — safe to screenshot.
 

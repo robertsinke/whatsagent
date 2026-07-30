@@ -1,5 +1,6 @@
 import {
 	ApiError,
+	type AgentStatus,
 	type CancellationNotice,
 	type Chat,
 	type Draft,
@@ -139,6 +140,28 @@ export const api = {
 				})
 			}
 		),
+
+	/**
+	 * PL-U7 — whether the agent panel can run at all. The panel needs the `/mcp`
+	 * surface, which ships off by default and is NOT enabled implicitly, so this
+	 * is how the composer knows whether to be usable. `available: false` is a
+	 * normal configuration, not an error.
+	 */
+	agentStatus: () => request<AgentStatus>('/agent/status'),
+
+	/**
+	 * PL-U7 — start a turn. 202 with correlation ids; the transcript arrives over
+	 * the WebSocket as `agent-part-updated`, so there is nothing to apply here.
+	 * A 409 means a turn is already running — refused, never queued.
+	 */
+	agentTurn: (text: string) =>
+		request<{ status: 'running'; session_id: string; message_id: string; harness: string }>(
+			'/agent/turn',
+			{ method: 'POST', body: JSON.stringify({ text }) }
+		),
+
+	/** PL-U7 — stop the running turn. Idempotent: no turn is a 200, not an error. */
+	cancelAgentTurn: () => request<AgentStatus>('/agent/cancel', { method: 'POST' }),
 
 	/** PL-U3 — pending proposals, for the first paint after a reload. */
 	proposals: () => request<{ items: SendProposal[] }>('/proposals'),
