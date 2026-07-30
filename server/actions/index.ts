@@ -16,6 +16,7 @@ import { getMessagesAction } from './get-messages.js';
 import { listChatsAction } from './list-chats.js';
 import { loadMediaAction } from './load-media.js';
 import { markReadAction } from './mark-read.js';
+import { openChatAction } from './open-chat.js';
 import { promoteVoiceSuggestionAction } from './promote-voice-suggestion.js';
 import { proposeSendAction } from './propose-send.js';
 import { reactAction } from './react.js';
@@ -47,6 +48,7 @@ const actions: ActionDefinition<unknown>[] = [
 	listChatsAction as ActionDefinition<unknown>,
 	loadMediaAction as ActionDefinition<unknown>,
 	markReadAction as ActionDefinition<unknown>,
+	openChatAction as ActionDefinition<unknown>,
 	promoteVoiceSuggestionAction as ActionDefinition<unknown>,
 	proposeSendAction as ActionDefinition<unknown>,
 	reactAction as ActionDefinition<unknown>,

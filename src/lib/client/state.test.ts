@@ -1335,6 +1335,40 @@ describe('AppState client-command', () => {
 });
 
 /**
+ * PANEL-S4 — the agent's `focus-chat` event selects a chat WITHOUT marking it
+ * read. The client-command `open-chat` marks read by default; this must not,
+ * and the difference is observable as the absence of a `/read` request.
+ */
+describe('AppState focus-chat (PANEL-S4)', () => {
+	afterEach(() => vi.restoreAllMocks());
+
+	it('selects the chat and does not mark it read', async () => {
+		const state = new AppState();
+		state.chats = [chatRow({ unread: 3 })];
+		let readCalled = false;
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.includes('/messages?')) return jsonResponse({ items: [inbound('m1', 1)] });
+			if (url.endsWith('/draft')) return jsonResponse({ error: 'Not found' }, 404);
+			if (url.includes('/read')) {
+				readCalled = true;
+				return jsonResponse(chatRow({ unread: 0 }));
+			}
+			throw new Error(`Unexpected request: ${url}`);
+		});
+
+		state.applyEvent({ type: 'focus-chat', jid: JID, name: 'Maya' });
+
+		expect(state.selectedJid).toBe(JID);
+		await vi.waitFor(() => expect(state.messages.map((m) => m.id)).toEqual(['m1']));
+		// The whole point: looking must not clear the unread badge.
+		expect(readCalled).toBe(false);
+		// The chat row the list renders still carries its unread count.
+		expect(state.chats.find((c) => c.jid === JID)?.unread).toBe(3);
+	});
+});
+
+/**
  * PL-U3 Half B — the client half of "approval binds to the reviewed text".
  *
  * The server guard is only as good as what the client pins. These tests exist

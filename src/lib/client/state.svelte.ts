@@ -1161,6 +1161,15 @@ export class AppState {
 					this.agentError = event.reason ?? null;
 				}
 				return;
+			case 'focus-chat':
+				// PANEL-S4 — open the chat the agent pointed at, but never mark it
+				// read. A tool that clears the unread badge as a side effect of
+				// looking would surprise the owner; `mark-read` is the explicit
+				// action for that. Fire-and-forget like `client-command`'s
+				// `open-chat`: `openChat` owns its own epoch guards so a late
+				// completion for a chat the owner already left cannot corrupt state.
+				void this.openChat(event.jid, { markRead: false });
+				return;
 			case 'client-command':
 				this.#applyClientCommand(event.command);
 				return;

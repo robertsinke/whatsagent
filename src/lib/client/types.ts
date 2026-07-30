@@ -325,6 +325,13 @@ export type ServerEvent =
 			reason?: string;
 	  }
 	| { type: 'agent-part-updated'; part: AgentPart; delta?: string }
+	/**
+	 * PANEL-S4 — focus a chat in the SPA without marking it read. Emitted by
+	 * the `open-chat` tool action. Distinct from `client-command`'s `open-chat`
+	 * (which marks read) so the closed client-command set stays honest about
+	 * its own side effects.
+	 */
+	| { type: 'focus-chat'; jid: string; name: string | null }
 	/** PL-A1 — closed client-command set; see shared/agent-events.ts. */
 	| { type: 'client-command'; command: ClientCommand };
 

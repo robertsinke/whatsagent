@@ -944,3 +944,121 @@ describe('skip-draft cancellation notice (PL-U5 Decision 3)', () => {
 		expect(n).toBe(0);
 	});
 });
+
+/**
+ * PANEL-S4 — the agent's tool to focus a chat in the UI. Tool-only, emits a
+ * `focus-chat` event (never marks read), validates the jid, and allows groups.
+ */
+describe('open-chat (PANEL-S4)', () => {
+	it('a tool caller opens a known 1:1 chat: 200, and the event is emitted once with the jid', async () => {
+		const deps = makeDeps();
+		const seen: import('../api/events.js').ServerEvent[] = [];
+		deps.events.subscribe((e) => seen.push(e));
+		upsertChat(db!, {
+			jid: 'alice@s.whatsapp.net',
+			kind: '1:1',
+			name: 'Alice',
+			last_msg_at: Date.now()
+		});
+
+		const result = await dispatch(
+			actionRegistry,
+			'open-chat',
+			{ chatJid: 'alice@s.whatsapp.net' },
+			{ caller: 'tool', deps }
+		);
+
+		expect(result).toMatchObject({ kind: 'json', status: 200 });
+		if (result.kind === 'json') {
+			expect(result.body).toMatchObject({
+				jid: 'alice@s.whatsapp.net',
+				name: 'Alice'
+			});
+		}
+		const focused = seen.filter((e) => e.type === 'focus-chat');
+		expect(focused).toHaveLength(1);
+		expect(focused[0]).toMatchObject({
+			type: 'focus-chat',
+			jid: 'alice@s.whatsapp.net',
+			name: 'Alice'
+		});
+	});
+
+	it('an unknown jid: 404, no event emitted', async () => {
+		const deps = makeDeps();
+		const seen: import('../api/events.js').ServerEvent[] = [];
+		deps.events.subscribe((e) => seen.push(e));
+
+		const result = await dispatch(
+			actionRegistry,
+			'open-chat',
+			{ chatJid: 'nope@s.whatsapp.net' },
+			{ caller: 'tool', deps }
+		);
+
+		expect(result).toEqual({
+			kind: 'error',
+			status: 404,
+			error: 'Chat not found',
+			extra: { jid: 'nope@s.whatsapp.net' }
+		});
+		expect(seen.filter((e) => e.type === 'focus-chat')).toHaveLength(0);
+	});
+
+	it('a group jid is allowed (R8 excludes groups from drafting, not the shell)', async () => {
+		const deps = makeDeps();
+		const seen: import('../api/events.js').ServerEvent[] = [];
+		deps.events.subscribe((e) => seen.push(e));
+		upsertChat(db!, {
+			jid: 'team@g.us',
+			kind: 'group',
+			name: 'Team',
+			last_msg_at: Date.now()
+		});
+
+		const result = await dispatch(
+			actionRegistry,
+			'open-chat',
+			{ chatJid: 'team@g.us' },
+			{ caller: 'tool', deps }
+		);
+
+		expect(result).toMatchObject({ kind: 'json', status: 200 });
+		expect(seen.filter((e) => e.type === 'focus-chat')).toHaveLength(1);
+	});
+
+	it('a frontend caller also opens the chat (both callers first-class)', async () => {
+		const deps = makeDeps();
+		const seen: import('../api/events.js').ServerEvent[] = [];
+		deps.events.subscribe((e) => seen.push(e));
+		upsertChat(db!, {
+			jid: 'alice@s.whatsapp.net',
+			kind: '1:1',
+			name: 'Alice',
+			last_msg_at: Date.now()
+		});
+
+		const result = await dispatch(
+			actionRegistry,
+			'open-chat',
+			{ chatJid: 'alice@s.whatsapp.net' },
+			{ caller: 'frontend', deps }
+		);
+
+		expect(result).toMatchObject({ kind: 'json', status: 200 });
+		expect(seen.filter((e) => e.type === 'focus-chat')).toHaveLength(1);
+	});
+
+	it('is advertised to both tool and frontend callers', () => {
+		const toolNames = listActionsForCaller(actionRegistry, 'tool').map((a) => a.name);
+		expect(toolNames).toContain('open-chat');
+		const frontendNames = listActionsForCaller(actionRegistry, 'frontend').map((a) => a.name);
+		expect(frontendNames).toContain('open-chat');
+	});
+
+	it('parse failure: missing chatJid', async () => {
+		const deps = makeDeps();
+		const result = await dispatch(actionRegistry, 'open-chat', {}, { caller: 'tool', deps });
+		expect(result).toMatchObject({ kind: 'error', status: 400, error: 'Expected { chatJid }' });
+	});
+});
