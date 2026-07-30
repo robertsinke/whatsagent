@@ -42,10 +42,12 @@ import { streamJsonLines } from './stream-process.js';
  * - A decoy file in the run directory was NOT readable, and the positive
  *   control (default tools, `permission: { '*': 'allow' }`) DID return its
  *   marker — so the negative is a real absence of the tool, not a shy model.
- * - With no disable block, the owner's own global MCP servers were injected even
- *   under `--pure`: `computer-use_*`, `open-knowledge_*` and `pencil_*` all
- *   showed up in the tool list. `--pure` means "without external plugins", not
- *   "without the user config" — it logs loading every user config path.
+ * - With no disable block, every MCP server from the developer's own user config
+ *   was injected even under `--pure`, each appearing in the tool list under its
+ *   own `<server>_*` prefix. `--pure` means "without external plugins", not
+ *   "without the user config" — it logs loading every user config path. The
+ *   server names are not reproduced here on purpose; see the note in
+ *   `server/providers/opencode-config.ts`.
  *
  * The bearer token goes in as `{env:...}` rather than a literal, which opencode
  * also accepts: a literal would write an account-adjacent credential to disk.

@@ -138,21 +138,24 @@ describe('buildOpenCodeEmptyToolsConfig (drafting)', () => {
 		expect(config.tools).toEqual({ ...OPENCODE_BUILTIN_TOOLS_OFF });
 	});
 
-	it('no longer carries any hardcoded MCP server name', () => {
-		// The four names that used to be baked in were owner-specific, shipped
-		// publicly, and silently wrong on anyone else's machine.
-		const serialised = JSON.stringify(
-			buildOpenCodeEmptyToolsConfig({
-				env: {},
-				home: '/h',
-				readFile: () => {
-					throw new Error('ENOENT');
-				}
-			})
-		);
-		for (const leaked of ['computer-use', 'legalwork-ui', 'open-knowledge', 'pencil']) {
-			expect(serialised).not.toContain(leaked);
-		}
+	it('carries no MCP server name when the user has no config', () => {
+		// Nothing is invented when there is nothing to inherit. The positive half
+		// of this property — an inherited server IS disabled by name — is asserted
+		// above with a fixture name.
+		//
+		// This deliberately does NOT assert against the four literal names that
+		// used to be hardcoded here: they are the owner's own MCP servers, and
+		// spelling them out in a tracked test re-ships exactly the information
+		// deriving them was meant to stop shipping. A blocklist written into the
+		// repo becomes an instance of what it blocks.
+		const config = buildOpenCodeEmptyToolsConfig({
+			env: {},
+			home: '/h',
+			readFile: () => {
+				throw new Error('ENOENT');
+			}
+		}) as { mcp: Record<string, unknown> };
+		expect(config.mcp).toEqual({});
 	});
 });
 

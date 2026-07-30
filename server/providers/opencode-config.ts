@@ -55,8 +55,8 @@ export const OPENCODE_BUILTIN_TOOLS_OFF = {
  * `--pure` does NOT suppress any of them — it means "without external
  * plugins", and the config files are still loaded and their MCP servers still
  * injected. Verified by enumerating the tool list under `--pure` with no
- * disable block: the owner's `computer-use_*`, `open-knowledge_*` and
- * `pencil_*` tools were all present. So this list is load-bearing, not
+ * disable block: every MCP tool from the developer's own user config was
+ * present, prefixed with its server name. So this list is load-bearing, not
  * defensive.
  */
 function userConfigPaths(env: NodeJS.ProcessEnv, home: string): string[] {
@@ -120,12 +120,13 @@ export type OpenCodeGlobalsOptions = {
  * Read the user's own opencode configs and return the MCP server names they
  * define, so both of this app's configs can disable them by name.
  *
- * WHY DERIVED RATHER THAN HARDCODED. This list used to be four literal names
- * (`computer-use`, `legalwork-ui`, `open-knowledge`, `pencil`) inside
- * `OPENCODE_EMPTY_TOOLS_CONFIG`. That is wrong twice over: it ships publicly
- * and leaks what other work the owner does, and it is silently incomplete on
- * anybody else's machine — a contributor with their own MCP servers got them
- * injected into a config whose entire purpose is having no tools.
+ * WHY DERIVED RATHER THAN HARDCODED. This list used to be four literal server
+ * names from one developer's machine, inside `OPENCODE_EMPTY_TOOLS_CONFIG`.
+ * That is wrong twice over: it ships publicly and discloses what other work
+ * that person does, and it is silently incomplete on anybody else's machine —
+ * a contributor with their own MCP servers got them injected into a config
+ * whose entire purpose is having no tools. The names are deliberately not
+ * repeated here; naming them would re-ship what deriving them removes.
  *
  * Failure is non-fatal by design: an unreadable or malformed user config yields
  * an empty list rather than throwing, because the alternative is drafting
