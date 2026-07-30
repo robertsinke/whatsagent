@@ -9,11 +9,11 @@
 	import * as Select from '$lib/components/ui/select/index.js';
 	import {
 		ArrowLeft,
+		Bot,
 		Check,
 		Eye,
 		Pencil,
 		Radio,
-		Bot,
 		RefreshCw,
 		ShieldAlert,
 		Sparkles,
@@ -109,6 +109,12 @@
 	 * WhatsApp; `false` (the fail-safe default) means approving a draft marks it
 	 * sent and nothing reaches the recipient.
 	 */
+	let sendsLive = $state(false);
+	let sendingMode = $state(false);
+	/** Confirmation dialog open state — only the unsafe direction (live) confirms. */
+	let confirmLiveOpen = $state(false);
+	let confirmLiveError = $state<string | null>(null);
+
 	/**
 	 * PANEL-S1 — the agent panel's opt-in. Three rows (`panel_enabled`,
 	 * `panel_harness`, `panel_model`) read at startup only, so the saved value
@@ -137,12 +143,11 @@
 	const panelHarnessChosen = $derived(
 		PANEL_HARNESSES.some((h) => h.value === values.panel_harness)
 	);
-
-	let sendsLive = $state(false);
-	let sendingMode = $state(false);
-	/** Confirmation dialog open state — only the unsafe direction (live) confirms. */
-	let confirmLiveOpen = $state(false);
-	let confirmLiveError = $state<string | null>(null);
+	const runningHarnessLabel = $derived(
+		agentStatus?.available && !agentStatus.restartRequired && panelEnabled
+			? (PANEL_HARNESSES.find((h) => h.value === values.panel_harness)?.label ?? null)
+			: null
+	);
 
 	/**
 	 * P3.4 Voice tab — editable with explicit save (never autosave). Conflict half
@@ -671,7 +676,11 @@
 							<span class="field-label">Agent panel</span>
 							<span class="panel-state" data-testid="panel-runtime-state">
 								{#if agentStatus?.available}
-									Running now{agentStatus.harness ? ` on ${agentStatus.harness}` : ''}.
+									<!-- `agentStatus.harness` is TURN state and is null while idle, so
+									     the name comes from the saved row — which `restartRequired: false`
+									     is the server's own proof matches what booted. With no row (the
+									     developer path) there is no name to claim, so none is claimed. -->
+									Running now{runningHarnessLabel ? ` on ${runningHarnessLabel}` : ''}.
 								{:else if agentStatus?.restartRequired}
 									Saved, but this app was started without it — restart to apply.
 								{:else}
@@ -697,9 +706,14 @@
 					</p>
 
 					{#if installedHarnesses.length === 0}
+						<!-- Never an empty picker: name the binaries, so the owner has
+						     something to go and install. Derived from the same list the
+						     picker filters, so the two cannot name different CLIs. -->
 						<p class="panel-warn" data-testid="panel-no-harness">
-							No harness found. Install the <code>opencode</code> or <code>claude</code> CLI and
-							re-scan above — the panel needs one of them to run.
+							No harness found. Install
+							{#each PANEL_HARNESSES as harness, i (harness.value)}<code>{harness.binary}</code
+								>{i < PANEL_HARNESSES.length - 1 ? ' or ' : ''}{/each} and press Re-scan above —
+							the panel needs one of them to run.
 						</p>
 					{:else}
 						<label class="field">
@@ -768,6 +782,11 @@
 							</Button>
 							{#if saved === 'panel_enabled'}
 								<span class="panel-saved"><Check class="size-3.5" /> Saved</span>
+							{:else if !panelEnabled && !panelHarnessChosen && installedHarnesses.length !== 1}
+								<!-- Disabled on purpose: enabling with no harness writes a row the
+								     boot path warns about and refuses to act on. Say which of the
+								     two fields is missing rather than leaving a dead button. -->
+								<span class="panel-hint" data-testid="panel-needs-harness">Pick a harness first.</span>
 							{/if}
 						</div>
 
@@ -1179,6 +1198,14 @@
 		border-radius: var(--radius-lg);
 		padding: 1rem;
 		min-height: 320px;
+		/* `.page` is a 100dvh flex column, so this section defaults to
+		   `flex-shrink: 1` and is squeezed to whatever height is left — its
+		   content then spills OUT of the raised surface and paints against the
+		   page background, rounded bottom edge and all. Pre-existing (the Voice
+		   tab already overflowed by ~90px); PANEL-S1 made it obvious because the
+		   Agent tab grew past the viewport too. `.page` already scrolls, so the
+		   fix is to stop shrinking and let it. */
+		flex-shrink: 0;
 	}
 	:global(.settings-tabs) {
 		width: 100%;
@@ -1399,6 +1426,10 @@
 		gap: 0.25rem;
 		font-size: 0.72rem;
 		color: var(--cobalt);
+	}
+	.panel-hint {
+		font-size: 0.72rem;
+		color: var(--ink-50);
 	}
 
 	/* W4-U10 / P3.4 — voice inspector + editor tab */

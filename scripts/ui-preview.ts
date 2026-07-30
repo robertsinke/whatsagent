@@ -582,9 +582,16 @@ if (panelHarness && !isPanelHarnessId(panelHarness)) {
  * reviewer actually has to look at.
  */
 const panelSavedOnly = process.env.PREVIEW_AGENT_PANEL_SAVED === '1';
-if (panelSavedOnly) {
+if (panelSavedOnly || (panelHarness && isPanelHarnessId(panelHarness))) {
+	// Seeded in the running case too, so the Settings card is in its enabled
+	// state and reports the harness by name — the option alone leaves the rows
+	// empty, which is the developer path, not the one an owner ever sees.
 	setSetting(db, 'panel_enabled', 'true');
-	setSetting(db, 'panel_harness', process.env.PREVIEW_AGENT_PANEL_SAVED_HARNESS ?? 'opencode');
+	setSetting(
+		db,
+		'panel_harness',
+		panelHarness ?? process.env.PREVIEW_AGENT_PANEL_SAVED_HARNESS ?? 'opencode'
+	);
 }
 const app = createApp({
   db,
