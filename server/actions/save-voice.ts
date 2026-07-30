@@ -16,19 +16,16 @@ export type SaveVoiceInput = {
 };
 
 /**
- * FRONTEND ONLY, and the reason is durable influence rather than an R9 break.
+ * FRONTEND ONLY — owner decision: the agent's path is the append-only
+ * `suggest-voice-note` (durable influence, not an R9 break).
  *
  * The voice document is prompt content for every future draft. A tool caller
  * that can rewrite it plants an instruction in a place the owner rarely
  * re-reads; every resulting draft still passes owner review, so R9 still holds,
- * but the agent has gained a durable channel into the owner's voice. The owner
- * closed that channel (PL-U5 Decision 1).
+ * but the agent has gained a durable channel into the owner's voice.
  *
- * The agent's half of a voice correction is `suggest-voice-note`, which appends
- * an inert suggestion the owner must promote — the same shape as
- * `propose-send` / `confirm-proposal`. Do NOT re-add `tool` here to "let the
- * agent fix a typo": that undoes the decision. Split work stays on the
- * suggestion path.
+ * Do NOT re-add `tool` here to "let the agent fix a typo": that undoes the
+ * decision. Split work stays on the suggestion / promote-discard path.
  *
  * The fix is a caller-policy change rather than a guard inside `run`, because
  * this registry's contract is that `callers` is enforced by the dispatcher and

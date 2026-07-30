@@ -4,11 +4,10 @@ import { actionError, actionJson } from './types.js';
 export type RegeneratePairingInput = Record<string, never>;
 
 /**
- * FRONTEND ONLY. Restarting the WhatsApp socket (and resetting auth when
- * already logged out) has no drafting reason for an agent, and the failure
- * mode is the app going offline until the owner scans a QR. The stated R9
- * rule does not reach this action — it removes an outbound path rather than
- * arming one — but the owner closed it anyway (PL-U5 Decision 2).
+ * FRONTEND ONLY — owner decision, 2026-07-30 (also PL-U5 Decision 2).
+ * Restarting the WhatsApp socket (and resetting auth when already logged out)
+ * has no drafting reason for an agent; the failure mode is the app going
+ * offline until the owner scans a QR.
  */
 export const regeneratePairingAction: ActionDefinition<RegeneratePairingInput> = {
 	name: 'regenerate-pairing',

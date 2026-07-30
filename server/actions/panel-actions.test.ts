@@ -528,21 +528,20 @@ describe('clear-agent-panel is frontend only', () => {
 
 describe('the caller policies U7 must not have weakened', () => {
 	it('still refuses every outbound and owner-only action for a tool caller', () => {
-		// Three of these were deliberate owner decisions; if U7 had needed to relax
-		// one to make a turn work, the answer was a new action, not this.
+		// Standing owner-only list after PANEL-S5: reject/promote/discard are
+		// both-callers now and must NOT appear here. If a turn needs a new
+		// capability, the answer is a new action, not widening one of these.
 		const toolNames = new Set(listActionsForCaller(actionRegistry, 'tool').map((a) => a.name));
 		for (const refused of [
 			'send',
 			'react',
 			'approve-draft',
 			'confirm-proposal',
-			'reject-proposal',
 			'set-send-mode',
 			'set-setting',
 			'save-voice',
 			'regenerate-pairing',
-			'promote-voice-suggestion',
-			'discard-voice-suggestion',
+			'dismiss-cancellation-notice',
 			'agent-demo',
 			'agent-turn',
 			'cancel-agent-turn',

@@ -7,8 +7,8 @@ export type SetSendModeInput = {
 };
 
 /**
- * Flip dry-run ↔ live. Does not send, but arms every outbound path —
- * callers: frontend only.
+ * Flip dry-run ↔ live. FRONTEND ONLY — arms live sending. Does not send, but
+ * arms every outbound path.
  */
 export const setSendModeAction: ActionDefinition<SetSendModeInput> = {
 	name: 'set-send-mode',

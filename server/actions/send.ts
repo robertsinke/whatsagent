@@ -11,8 +11,8 @@ export type SendInput = {
 };
 
 /**
- * Composer send → outbox only. Never calls WhatsApp send (R9).
- * Outbound effect — callers: frontend only.
+ * Composer send → outbox only. Never calls WhatsApp sendMessage (R9: only the
+ * outbox pacer does). FRONTEND ONLY — R9. The agent's path is `propose-send`.
  */
 export const sendAction: ActionDefinition<SendInput> = {
 	name: 'send',

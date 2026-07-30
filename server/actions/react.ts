@@ -9,8 +9,10 @@ export type ReactInput = {
 };
 
 /**
- * Reaction → outbox pacer (Baileys sendMessage). Outbound effect —
- * callers: frontend only. Empty emoji string removes a reaction.
+ * Reaction → outbox pacer (Baileys sendMessage). FRONTEND ONLY — outbound: it
+ * enqueues to the outbox and wakes the pacer. The agent's counterpart is
+ * `propose-reaction` (PANEL-S6); do not open this one. Empty emoji removes a
+ * reaction.
  */
 export const reactAction: ActionDefinition<ReactInput> = {
 	name: 'react',

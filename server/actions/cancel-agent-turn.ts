@@ -4,7 +4,8 @@ import { actionError, actionJson } from './types.js';
 export type CancelAgentTurnInput = Record<string, never>;
 
 /**
- * FRONTEND ONLY, for the mirror of `agent-turn`'s reason.
+ * FRONTEND ONLY — unbounded recursion and unbounded spend (mirror of
+ * `agent-turn`).
  *
  * A tool caller able to cancel is a tool caller able to stop the owner watching
  * it work: the panel's trace is the only place the owner sees what the agent did,

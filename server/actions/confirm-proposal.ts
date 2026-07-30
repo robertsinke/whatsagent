@@ -18,10 +18,9 @@ export type ConfirmProposalInput = {
 };
 
 /**
- * FRONTEND ONLY. This is the action that creates the outbox row for a
- * proposal, which is exactly why a tool caller must never reach it: it is the
- * owner's click, expressed as code. The agent's half of this exchange is
- * `propose-send`, which cannot enqueue anything.
+ * FRONTEND ONLY — an agent confirming its own proposal defeats the entire
+ * proposal mechanism. This is the action that creates the outbox row; the
+ * agent's half is `propose-send`, which cannot enqueue anything.
  *
  * `base_hash` is required rather than optional. There is no legacy caller to
  * accommodate — the action ships with this contract — and a proposal is text

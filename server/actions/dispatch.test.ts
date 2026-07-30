@@ -84,14 +84,13 @@ describe('action registry dispatch', () => {
 		'react',
 		'set-send-mode',
 		'confirm-proposal',
-		'reject-proposal',
 		'agent-demo',
 		// PL-U5 Decision 1 / 2 — durable influence and connection control.
 		'save-voice',
 		'regenerate-pairing',
-		'promote-voice-suggestion',
-		'discard-voice-suggestion',
 		'dismiss-cancellation-notice'
+		// PANEL-S5 opened reject-proposal, promote-voice-suggestion, and
+		// discard-voice-suggestion to both callers — they are not on this list.
 	] as const)(
 		'refuses tool caller for outbound action %s (dispatcher policy)',
 		async (name) => {
@@ -224,10 +223,10 @@ describe('action registry dispatch', () => {
 		// an outbound path belongs here, not only the ones that send. PANEL-S2 gave
 		// it a second such effect: a `panel_*` key arms or disarms `/mcp` and the
 		// panel runtime immediately, so a tool caller here could arm its own tools.
-		// PL-U3 adds the two halves of the owner's decision on a proposal. They
-		// belong on this list for the same reason `set-setting` does: confirming
-		// is what creates the outbox row, and rejecting would let an agent erase
-		// the evidence of what it asked for before the owner ever saw it.
+		// PL-U3: confirming a proposal is what creates the outbox row — stays
+		// frontend-only. PANEL-S5 opened `reject-proposal` (withdrawing cannot
+		// cause a send) and the voice promote/discard pair; those must NOT appear
+		// here. `react` stays closed pending PANEL-S6's `propose-reaction`.
 		for (const banned of [
 			'send',
 			'approve-draft',
@@ -235,16 +234,14 @@ describe('action registry dispatch', () => {
 			'set-send-mode',
 			'set-setting',
 			'confirm-proposal',
-			'reject-proposal',
 			// PL-U3 sweep: it forges the panel trace the owner reads. See the
 			// comment on the action itself.
 			'agent-demo',
-			// PL-U5: voice body write, pairing restart, suggestion promotion,
-			// and dismissing the agent's own cancellation notice.
+			// PL-U5: voice body write, pairing restart, and dismissing the
+			// agent's own cancellation notice. Promote/discard left this list
+			// in PANEL-S5.
 			'save-voice',
 			'regenerate-pairing',
-			'promote-voice-suggestion',
-			'discard-voice-suggestion',
 			'dismiss-cancellation-notice',
 			// PL-U7: an agent must not be able to start or cancel an agent turn.
 			// Tool access here is unbounded recursion and unbounded spend, which is
@@ -259,7 +256,15 @@ describe('action registry dispatch', () => {
 		]) {
 			expect(toolNames).not.toContain(banned);
 		}
-		expect(toolNames).toEqual(expect.arrayContaining(['suggest-voice-note', 'skip-draft']));
+		expect(toolNames).toEqual(
+			expect.arrayContaining([
+				'suggest-voice-note',
+				'skip-draft',
+				'reject-proposal',
+				'promote-voice-suggestion',
+				'discard-voice-suggestion'
+			])
+		);
 
 		upsertChat(db!, {
 			jid: 'alice@s.whatsapp.net',
@@ -628,6 +633,38 @@ describe('propose-send / confirm-proposal (PL-U3)', () => {
 		expect(late).toMatchObject({ kind: 'error', status: 409 });
 		expect(outboxCount()).toBe(0);
 	});
+
+	/**
+	 * PANEL-S5 — reject-proposal is open to tools. Withdrawing cannot enqueue
+	 * or wake the pacer; confirming stays the owner's click.
+	 */
+	it('a tool caller can reject its own proposal without queueing anything', async () => {
+		const deps = makeDeps();
+		let woke = false;
+		deps.wakeOutbox = () => {
+			woke = true;
+		};
+		seedChat(deps);
+		await dispatch(
+			actionRegistry,
+			'propose-send',
+			{ chatJid: 'alice@s.whatsapp.net', text: 'Yes — see you at seven.' },
+			{ caller: 'tool', deps }
+		);
+		const proposal = listPendingProposals(db!, 'alice@s.whatsapp.net')[0]!;
+
+		const result = await dispatch(
+			actionRegistry,
+			'reject-proposal',
+			{ id: proposal.id },
+			{ caller: 'tool', deps }
+		);
+
+		expect(result).toMatchObject({ kind: 'json', status: 200 });
+		expect(getProposal(db!, proposal.id)?.status).toBe('rejected');
+		expect(outboxCount()).toBe(0);
+		expect(woke).toBe(false);
+	});
 });
 
 /**
@@ -775,41 +812,6 @@ describe('suggest-voice-note / promote (PL-U5 Decision 1)', () => {
 		expect(readFileSync(join(dataDir!, 'voice', 'global.md'), 'utf8')).toBe(body);
 	});
 
-	it('refuses a tool caller on promote-voice-suggestion before run', async () => {
-		const deps = makeDeps();
-		const { writeFileSync, mkdirSync, readFileSync } = await import('node:fs');
-		const { join } = await import('node:path');
-		mkdirSync(join(dataDir!, 'voice'), { recursive: true });
-		const body = '- Short, lowercase replies.\n';
-		writeFileSync(join(dataDir!, 'voice', 'global.md'), body, 'utf8');
-
-		const suggested = await dispatch(
-			actionRegistry,
-			'suggest-voice-note',
-			{ stem: 'global', text: 'Prefer "cheers" over "thanks" with friends.' },
-			{ caller: 'tool', deps }
-		);
-		expect(suggested.kind).toBe('json');
-		const suggestionId =
-			suggested.kind === 'json'
-				? (suggested.body as { suggestion: { id: string } }).suggestion.id
-				: '';
-
-		const refused = await dispatch(
-			actionRegistry,
-			'promote-voice-suggestion',
-			{ stem: 'global', id: suggestionId },
-			{ caller: 'tool', deps }
-		);
-		expect(refused).toEqual({
-			kind: 'error',
-			status: 403,
-			error: 'Caller not permitted',
-			extra: { action: 'promote-voice-suggestion', caller: 'tool' }
-		});
-		expect(readFileSync(join(dataDir!, 'voice', 'global.md'), 'utf8')).toBe(body);
-	});
-
 	it('a frontend promotion writes the suggestion into the document', async () => {
 		const deps = makeDeps();
 		const { writeFileSync, mkdirSync, readFileSync } = await import('node:fs');
@@ -837,6 +839,82 @@ describe('suggest-voice-note / promote (PL-U5 Decision 1)', () => {
 		expect(promoted).toMatchObject({ kind: 'json', status: 200 });
 		const onDisk = readFileSync(join(dataDir!, 'voice', 'global.md'), 'utf8');
 		expect(onDisk).toContain('Prefer "cheers" over "thanks" with friends.');
+	});
+
+	/**
+	 * PANEL-S5 — promote is open to tools. Voice-document write only; no outbox.
+	 */
+	it('a tool caller can promote a suggestion into the document without waking the pacer', async () => {
+		const deps = makeDeps();
+		let woke = false;
+		deps.wakeOutbox = () => {
+			woke = true;
+		};
+		const { writeFileSync, mkdirSync, readFileSync } = await import('node:fs');
+		const { join } = await import('node:path');
+		mkdirSync(join(dataDir!, 'voice'), { recursive: true });
+		writeFileSync(join(dataDir!, 'voice', 'global.md'), '- Short replies.\n', 'utf8');
+
+		const suggested = await dispatch(
+			actionRegistry,
+			'suggest-voice-note',
+			{ stem: 'global', text: 'Prefer "cheers" over "thanks" with friends.' },
+			{ caller: 'tool', deps }
+		);
+		const suggestionId =
+			suggested.kind === 'json'
+				? (suggested.body as { suggestion: { id: string } }).suggestion.id
+				: '';
+
+		const promoted = await dispatch(
+			actionRegistry,
+			'promote-voice-suggestion',
+			{ stem: 'global', id: suggestionId },
+			{ caller: 'tool', deps }
+		);
+		expect(promoted).toMatchObject({ kind: 'json', status: 200 });
+		const onDisk = readFileSync(join(dataDir!, 'voice', 'global.md'), 'utf8');
+		expect(onDisk).toContain('Prefer "cheers" over "thanks" with friends.');
+		expect(woke).toBe(false);
+		expect((db!.prepare('SELECT COUNT(*) AS n FROM outbox').get() as { n: number }).n).toBe(0);
+	});
+
+	/**
+	 * PANEL-S5 — discard is open to tools. Sidecar only; voice body untouched.
+	 */
+	it('a tool caller can discard a suggestion without touching the document or outbox', async () => {
+		const deps = makeDeps();
+		let woke = false;
+		deps.wakeOutbox = () => {
+			woke = true;
+		};
+		const { writeFileSync, mkdirSync, readFileSync } = await import('node:fs');
+		const { join } = await import('node:path');
+		mkdirSync(join(dataDir!, 'voice'), { recursive: true });
+		const body = '- Short replies.\n';
+		writeFileSync(join(dataDir!, 'voice', 'global.md'), body, 'utf8');
+
+		const suggested = await dispatch(
+			actionRegistry,
+			'suggest-voice-note',
+			{ stem: 'global', text: 'Prefer "cheers" over "thanks" with friends.' },
+			{ caller: 'tool', deps }
+		);
+		const suggestionId =
+			suggested.kind === 'json'
+				? (suggested.body as { suggestion: { id: string } }).suggestion.id
+				: '';
+
+		const discarded = await dispatch(
+			actionRegistry,
+			'discard-voice-suggestion',
+			{ stem: 'global', id: suggestionId },
+			{ caller: 'tool', deps }
+		);
+		expect(discarded).toMatchObject({ kind: 'json', status: 200 });
+		expect(readFileSync(join(dataDir!, 'voice', 'global.md'), 'utf8')).toBe(body);
+		expect(woke).toBe(false);
+		expect((db!.prepare('SELECT COUNT(*) AS n FROM outbox').get() as { n: number }).n).toBe(0);
 	});
 });
 

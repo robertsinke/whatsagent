@@ -20,10 +20,10 @@ const REFUSED = [
 	'react',
 	'set-send-mode',
 	'set-setting',
-	// PL-U3: an agent may *propose* a send; confirming or discarding one is the
-	// owner's click and must not appear on this surface at all.
-	'confirm-proposal',
-	'reject-proposal'
+	// PL-U3 / PANEL-S5: an agent may *propose* a send; confirming is still the
+	// owner's click. Rejecting was opened to tools in PANEL-S5 (withdraw cannot
+	// cause a send) and therefore must NOT appear here.
+	'confirm-proposal'
 ] as const;
 
 let dataDir: string | undefined;
@@ -209,8 +209,11 @@ describe('MCP surface — registry tools', () => {
 			expect(names).toEqual(expected);
 			// PL-U3: a correctly-declared tool-only action appears here with no
 			// edit to this surface. `propose-send` is the proof — it was added to
-			// the registry alone.
+			// the registry alone. PANEL-S5 opened reject/promote/discard the same way.
 			expect(names).toContain('propose-send');
+			expect(names).toContain('reject-proposal');
+			expect(names).toContain('promote-voice-suggestion');
+			expect(names).toContain('discard-voice-suggestion');
 			for (const refused of REFUSED) {
 				expect(names).not.toContain(refused);
 			}

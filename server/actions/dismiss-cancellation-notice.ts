@@ -8,9 +8,8 @@ import { actionError, actionJson, parseError } from './types.js';
 export type DismissCancellationNoticeInput = { id: number };
 
 /**
- * FRONTEND ONLY. Acknowledging that the agent cancelled an approved send is
- * the owner's decision; a tool caller that could dismiss its own notices could
- * also clear the evidence before the owner ever saw it.
+ * FRONTEND ONLY — the notice exists to tell the owner the agent cancelled a
+ * queued message; letting the agent clear it lets it hide its own action.
  */
 export const dismissCancellationNoticeAction: ActionDefinition<DismissCancellationNoticeInput> =
 	{

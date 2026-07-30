@@ -12,8 +12,7 @@ export type AgentTurnInput = { text: string };
 const MAX_TURN_CHARS = 4_000;
 
 /**
- * FRONTEND ONLY, and the reason is recursion and spend rather than caution about
- * agents.
+ * FRONTEND ONLY — unbounded recursion and unbounded spend.
  *
  * `run` below starts a harness process that is itself given this app's tool
  * surface. So permitting `tool` here would let an agent start an agent, which is

@@ -23,7 +23,8 @@ const PANEL_SETTINGS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * FRONTEND ONLY, and the reason is R9 rather than caution about settings.
+ * FRONTEND ONLY — arms live sending, and since PANEL-S1 the panel and the
+ * `/mcp` surface too. The reason is R9 rather than caution about settings.
  *
  * `run` below deliberately reacts to `OUTBOX_DRY_RUN_SETTING` by calling
  * `setOutboxDryRun` — the same live/dry-run flip that `set-send-mode` performs.

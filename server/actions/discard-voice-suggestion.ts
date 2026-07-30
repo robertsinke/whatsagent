@@ -5,13 +5,14 @@ import { actionError, actionJson, parseError } from './types.js';
 export type DiscardVoiceSuggestionInput = { stem: string; id: string };
 
 /**
- * FRONTEND ONLY. Declining a suggestion is the owner's decision in the same
- * way promoting is; a tool caller that could discard its own suggestions could
- * also clear the evidence of what it asked for before the owner ever saw it.
+ * PANEL-S5 — both callers. Owner decision 2026-07-30: discarding a pending
+ * suggestion clears a sidecar row only. `run` calls `VoiceFiles.removeSuggestion`;
+ * it does not enqueue an outbox row, wake the pacer, write the voice `.md`
+ * body, or write `text_source: 'owner'`.
  */
 export const discardVoiceSuggestionAction: ActionDefinition<DiscardVoiceSuggestionInput> = {
 	name: 'discard-voice-suggestion',
-	callers: ['frontend'],
+	callers: ['frontend', 'tool'],
 	jsonSchema: {
 		type: 'object',
 		properties: {

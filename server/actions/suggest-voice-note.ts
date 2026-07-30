@@ -15,12 +15,12 @@ const MAX_SUGGESTION_BYTES = 8 * 1024;
 export type SuggestVoiceNoteInput = { stem: string; text: string };
 
 /**
- * TOOL ONLY, and it is the agent's *only* route toward changing the voice
+ * TOOL ONLY, and it is the agent's append-only route toward changing the voice
  * document. `run` below appends a suggestion to a sidecar and returns. It does
  * not call `writeOwnerEdit`, it does not touch the `.md` body, and there is
- * deliberately no branch in it that could: the document is updated by
- * `promote-voice-suggestion`, which is frontend-only, so the owner's click is
- * the sole thing that turns a suggestion into prompt content for future drafts.
+ * deliberately no branch in it that could. The document is updated by
+ * `promote-voice-suggestion` (both callers as of PANEL-S5); direct body
+ * rewrites stay on `save-voice` (frontend-only).
  *
  * Closing `save-voice` to tool callers without this action would leave the
  * agent with no honest way to surface a voice correction it noticed. Opening

@@ -21,8 +21,9 @@ export type ApproveDraftInput = {
 };
 
 /**
- * Approve draft → outbox. Outbound effect — callers: frontend only.
- * Stale-confirm variant uses confirmed_latest_inbound_id (same action).
+ * Approve draft → outbox. FRONTEND ONLY — approval IS the owner's authority;
+ * there is no agent equivalent by design. Stale-confirm uses
+ * confirmed_latest_inbound_id (same action).
  *
  * PL-U3 Half B — `base_hash` is what makes the click mean something.
  *

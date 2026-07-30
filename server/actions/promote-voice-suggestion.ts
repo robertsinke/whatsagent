@@ -5,18 +5,17 @@ import { actionError, actionJson, parseError } from './types.js';
 export type PromoteVoiceSuggestionInput = { stem: string; id: string };
 
 /**
- * FRONTEND ONLY. This is the action that writes a suggestion into the voice
- * document, which is exactly why a tool caller must never reach it: it is the
- * owner's click, expressed as code. The agent's half of this exchange is
- * `suggest-voice-note`, which cannot modify the document body.
+ * PANEL-S5 — both callers. Owner decision 2026-07-30: promoting a pending
+ * suggestion is a voice-document write, not an outbound path. `run` only calls
+ * `VoiceFiles.promoteSuggestion`; it does not enqueue an outbox row, wake the
+ * pacer, or write `text_source: 'owner'`. R9 is untouched.
  *
- * Same shape as `confirm-proposal` for the same reason — a pending row is a
- * claim on attention, not a mutation of the durable thing, until the owner
- * makes it one.
+ * Direct rewrites of the voice body stay on `save-voice` (frontend-only); the
+ * agent's append-only half remains `suggest-voice-note`.
  */
 export const promoteVoiceSuggestionAction: ActionDefinition<PromoteVoiceSuggestionInput> = {
 	name: 'promote-voice-suggestion',
-	callers: ['frontend'],
+	callers: ['frontend', 'tool'],
 	jsonSchema: {
 		type: 'object',
 		properties: {
