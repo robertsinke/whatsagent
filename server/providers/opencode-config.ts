@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { VERIFIED_HARNESS_VERSIONS } from '../../shared/harness-versions.js';
 
 /**
  * The opencode config pieces shared by the two configs this app writes:
@@ -21,11 +22,16 @@ import { join } from 'node:path';
  * Verbatim empty-toolset block from
  * `docs/evidence/2026-07-29-pl-s3-opencode-recheck.md` (PL-S3).
  *
- * Do not hand-roll a subset: on opencode 1.18.9 a five-key tools block
+ * Do not hand-roll a subset: on the pinned OpenCode version
+ * ({@link OPENCODE_VERIFIED_VERSION}) a five-key tools block
  * (bash/read/todoread/patch/task) can hang every run, while this thirteen-key
  * shape returns in seconds. If you must change it, re-prove with a decoy file
  * AND a positive control — a negative decoy result on its own proves nothing.
  */
+
+/** Pinned OpenCode version this tools block was verified against. */
+export const OPENCODE_VERIFIED_VERSION = VERIFIED_HARNESS_VERSIONS.codex;
+
 export const OPENCODE_BUILTIN_TOOLS_OFF = {
 	bash: false,
 	edit: false,

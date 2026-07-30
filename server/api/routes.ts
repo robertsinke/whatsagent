@@ -159,6 +159,12 @@ export type RoutesDeps = {
 	 * built by hand in a test simply has no runtime to reconcile.
 	 */
 	applyPanelSettings?: () => void;
+	/**
+	 * ONB-1 — injectable spawn for `install-provider` (vendor installer).
+	 * Tests inject a fake; production leaves this unset so the action uses the
+	 * real `/bin/bash -lc` path. Frontend-only — see the action file header.
+	 */
+	installProviderSpawn?: import('../providers/provider.js').SpawnProcess;
 };
 
 /**
@@ -680,6 +686,13 @@ async function handleApi(
 			searchPath: snapshot.searchPath,
 			probedAt: snapshot.probedAt
 		});
+		return;
+	}
+
+	// ONB-1 — owner-triggered pinned vendor install. Frontend-only action.
+	if (path === '/api/providers/install' && method === 'POST') {
+		const body = await readJsonBody(req);
+		await dispatchAction(deps, res, 'install-provider', body ?? {});
 		return;
 	}
 

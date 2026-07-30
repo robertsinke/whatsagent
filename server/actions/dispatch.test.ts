@@ -260,7 +260,10 @@ describe('action registry dispatch', () => {
 			'agent-turn',
 			'cancel-agent-turn',
 			// PANEL-S3: an agent that could wipe the transcript could hide what it did.
-			'clear-agent-panel'
+			'clear-agent-panel',
+			// ONB-1: installing software is a different threat model than any
+			// drafting or panel tool. Frontend-only — see install-provider.ts.
+			'install-provider'
 		]) {
 			expect(toolNames).not.toContain(banned);
 		}

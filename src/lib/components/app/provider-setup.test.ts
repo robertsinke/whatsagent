@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { ProviderInfo, ProvidersResponse } from '$lib/client/types.js';
+import { VERIFIED_HARNESS_VERSIONS } from '../../../../shared/harness-versions.js';
 import {
 	AUTH_DISCLAIMER,
 	anyProviderUsable,
+	panelSetupSummary,
+	providerRoleLabel,
 	providerSetupRows,
 	setupSummary
 } from './provider-setup.js';
@@ -51,19 +54,26 @@ const NONE_DETECTED = snapshot([
 ]);
 
 describe('providerSetupRows', () => {
-	it('names all three providers with an install link when nothing is detected', () => {
+	it('names all three providers with an install affordance when nothing is detected', () => {
 		const rows = providerSetupRows(NONE_DETECTED);
 		expect(rows.map((r) => r.name)).toEqual(['claude', 'codex', 'ollama']);
 		expect(rows.every((r) => r.status === 'missing')).toBe(true);
 		expect(rows.every((r) => r.showInstallLink)).toBe(true);
-		// The zero case must be a route onward, not a dead end: every row carries a
-		// resolvable install URL.
 		expect(rows.map((r) => r.installUrl)).toEqual([
 			'https://docs.anthropic.com/en/docs/claude-code',
 			'https://opencode.ai',
 			'https://ollama.com'
 		]);
 		expect(rows.find((r) => r.name === 'codex')?.title).toBe('OpenCode');
+		// Pinned shell commands for Claude and OpenCode; Ollama stays a docs link.
+		expect(rows.find((r) => r.name === 'claude')?.installCommand).toContain(
+			VERIFIED_HARNESS_VERSIONS.claude
+		);
+		expect(rows.find((r) => r.name === 'codex')?.installCommand).toContain(
+			`--version ${VERIFIED_HARNESS_VERSIONS.codex}`
+		);
+		expect(rows.find((r) => r.name === 'ollama')?.installCommand).toBeNull();
+		expect(rows.find((r) => r.name === 'ollama')?.installLinkReason).toMatch(/macOS|sudo/i);
 	});
 
 	it('reports a dead Ollama daemon as installed-but-not-running, with a start hint', () => {
@@ -118,6 +128,42 @@ describe('providerSetupRows', () => {
 		expect(rows.every((r) => r.status === 'missing')).toBe(true);
 		expect(rows.every((r) => r.hint?.includes('Re-scan'))).toBe(true);
 	});
+
+	it('labels drafting vs panel roles, and keeps Ollama drafting-only', () => {
+		const rows = providerSetupRows(NONE_DETECTED);
+		expect(providerRoleLabel(rows.find((r) => r.name === 'claude')!.roles)).toBe(
+			'Drafting · Agent panel'
+		);
+		expect(providerRoleLabel(rows.find((r) => r.name === 'codex')!.roles)).toBe(
+			'Drafting · Agent panel'
+		);
+		expect(providerRoleLabel(rows.find((r) => r.name === 'ollama')!.roles)).toBe('Drafting only');
+	});
+
+	it('shows a mismatch notice when detected version differs from the pin, not when it matches', () => {
+		const mismatched = providerSetupRows(
+			snapshot([
+				info({
+					name: 'claude',
+					installed: true,
+					version: '2.1.220',
+					unavailableReason: null
+				}),
+				info({
+					name: 'codex',
+					installed: true,
+					version: '1.18.10',
+					unavailableReason: null
+				}),
+				info({ name: 'ollama', installed: true, version: '0.32.4', unavailableReason: null })
+			])
+		);
+		expect(mismatched.find((r) => r.name === 'claude')?.versionMismatch).toBeNull();
+		expect(mismatched.find((r) => r.name === 'codex')?.versionMismatch).toBe(
+			`Verified against ${VERIFIED_HARNESS_VERSIONS.codex}, you have 1.18.10.`
+		);
+		expect(mismatched.find((r) => r.name === 'ollama')?.versionMismatch).toBeNull();
+	});
 });
 
 describe('anyProviderUsable', () => {
@@ -157,5 +203,23 @@ describe('setupSummary', () => {
 				])
 			)
 		).toBe('1 of 3 drafting tools found.');
+	});
+});
+
+describe('panelSetupSummary', () => {
+	it('says the panel needs Claude or OpenCode when neither is detected', () => {
+		expect(panelSetupSummary(NONE_DETECTED)).toMatch(/Claude Code or OpenCode/);
+	});
+
+	it('names which panel harnesses are ready', () => {
+		expect(
+			panelSetupSummary(
+				snapshot([
+					info({ name: 'claude', installed: true, unavailableReason: null }),
+					info({ name: 'codex' }),
+					info({ name: 'ollama', installed: true, unavailableReason: null })
+				])
+			)
+		).toContain('Claude Code');
 	});
 });

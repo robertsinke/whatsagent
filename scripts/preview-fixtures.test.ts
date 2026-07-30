@@ -106,9 +106,16 @@ describe('preview provider discovery', () => {
 	});
 
 	it('never fabricates a login: auth is unknown in every mode', async () => {
-		for (const mode of ['all', 'none', 'ollama-down'] as const) {
+		for (const mode of ['all', 'none', 'ollama-down', 'mismatch'] as const) {
 			const snapshot = await createPreviewProviderDiscovery(mode).snapshot();
 			expect(snapshot.providers.every((p) => p.auth === 'unknown')).toBe(true);
 		}
+	});
+
+	it('mismatch: OpenCode reports a version other than the pin', async () => {
+		const snapshot = await createPreviewProviderDiscovery('mismatch').snapshot();
+		const codex = snapshot.providers.find((p) => p.name === 'codex')!;
+		expect(codex.installed).toBe(true);
+		expect(codex.version).toBe('1.18.10');
 	});
 });

@@ -36,7 +36,8 @@ import { streamJsonLines } from './stream-process.js';
  * Built-in tools stay false here too — the panel needs OUR tools and still no
  * bash, no read, no write, no webfetch.
  *
- * Verified against the real surface (opencode 1.18.9):
+ * Verified against the real surface (OpenCode `OPENCODE_VERIFIED_VERSION` in
+ * `opencode-config.ts`):
  * - The 11 tool-permitted registry actions appeared as `whatsagent_<name>` and
  *   the kebab case survived, so the prefix strip lands on the registry name.
  * - A decoy file in the run directory was NOT readable, and the positive

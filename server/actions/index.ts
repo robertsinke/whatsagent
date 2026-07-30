@@ -14,6 +14,7 @@ import { editDraftAction } from './edit-draft.js';
 import { generateDraftAction } from './generate-draft.js';
 import { getDraftAction } from './get-draft.js';
 import { getMessagesAction } from './get-messages.js';
+import { installProviderAction } from './install-provider.js';
 import { listChatsAction } from './list-chats.js';
 import { loadMediaAction } from './load-media.js';
 import { markReadAction } from './mark-read.js';
@@ -48,6 +49,7 @@ const actions: ActionDefinition<unknown>[] = [
 	generateDraftAction as ActionDefinition<unknown>,
 	getDraftAction as ActionDefinition<unknown>,
 	getMessagesAction as ActionDefinition<unknown>,
+	installProviderAction as ActionDefinition<unknown>,
 	listChatsAction as ActionDefinition<unknown>,
 	loadMediaAction as ActionDefinition<unknown>,
 	markReadAction as ActionDefinition<unknown>,

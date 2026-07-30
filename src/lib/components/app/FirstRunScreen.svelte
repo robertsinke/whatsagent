@@ -28,8 +28,11 @@
 	import {
 		AUTH_DISCLAIMER,
 		anyProviderUsable,
+		panelSetupSummary,
+		providerRoleLabel,
 		providerSetupRows,
-		setupSummary
+		setupSummary,
+		type ProviderSetupRow
 	} from './provider-setup.js';
 
 	let { session, onregenerate }: { session: SessionView; onregenerate?: () => void } = $props();
@@ -56,9 +59,18 @@
 	let saveError = $state<string | null>(null);
 	let saving = $state(false);
 
+	/** Which missing row has its install panel open (explicit click, not auto). */
+	let installOpenFor = $state<string | null>(null);
+	let installBusy = $state<string | null>(null);
+	let installLog = $state<Record<string, { ok: boolean; output: string; version: string | null; error?: string }>>(
+		{}
+	);
+	let copyFlash = $state<string | null>(null);
+
 	const rows = $derived(providerSetupRows(snapshot));
 	const usable = $derived(anyProviderUsable(snapshot));
 	const stepIndex = $derived(STEPS.findIndex((s) => s.id === step));
+	const panelSummary = $derived(panelSetupSummary(snapshot));
 
 	async function loadProviders(refresh = false) {
 		providersLoading = true;
@@ -69,6 +81,54 @@
 			providersError = err instanceof Error ? err.message : String(err);
 		} finally {
 			providersLoading = false;
+		}
+	}
+
+	async function copyInstallCommand(row: ProviderSetupRow) {
+		if (!row.installCommand) return;
+		try {
+			await navigator.clipboard.writeText(row.installCommand);
+			copyFlash = row.name;
+			setTimeout(() => {
+				if (copyFlash === row.name) copyFlash = null;
+			}, 1500);
+		} catch {
+			// Fallback: leave the command visible for manual selection.
+		}
+	}
+
+	/**
+	 * ONB-1 — explicit install click. The command was already shown; this is
+	 * the only path that runs it. Never a side effect of opening the screen.
+	 */
+	async function runInstall(row: ProviderSetupRow) {
+		if (row.name !== 'claude' && row.name !== 'codex') return;
+		if (!row.installCommand) return;
+		installBusy = row.name;
+		try {
+			const result = await api.installProvider(row.name);
+			installLog = {
+				...installLog,
+				[row.name]: {
+					ok: result.ok,
+					output: result.output || (result.error ?? ''),
+					version: result.installedVersion,
+					...(result.error ? { error: result.error } : {})
+				}
+			};
+			await loadProviders(true);
+		} catch (err) {
+			installLog = {
+				...installLog,
+				[row.name]: {
+					ok: false,
+					output: err instanceof Error ? err.message : String(err),
+					version: null,
+					error: err instanceof Error ? err.message : String(err)
+				}
+			};
+		} finally {
+			installBusy = null;
 		}
 	}
 
@@ -180,6 +240,9 @@
 			<section class="pane" data-testid="provider-setup">
 				<h1>Drafting setup</h1>
 				<p class="summary" data-testid="provider-summary">{setupSummary(snapshot)}</p>
+				{#if panelSummary}
+					<p class="summary panel-summary" data-testid="panel-summary">{panelSummary}</p>
+				{/if}
 
 				{#if providersError}
 					<p class="warn">Could not scan for drafting tools: {providersError}</p>
@@ -190,7 +253,15 @@
 						<li class="provider-row" data-status={row.status} data-testid={`provider-${row.name}`}>
 							<div class="provider-main">
 								<span class="provider-title">{row.title}</span>
+								<span class="provider-roles" data-testid={`roles-${row.name}`}>
+									{providerRoleLabel(row.roles)}
+								</span>
 								<span class="provider-status" data-status={row.status}>{row.statusLabel}</span>
+								{#if row.versionMismatch}
+									<span class="provider-mismatch" data-testid={`mismatch-${row.name}`}>
+										{row.versionMismatch}
+									</span>
+								{/if}
 								{#if row.path}
 									<code class="provider-path">{row.path}</code>
 								{/if}
@@ -200,22 +271,79 @@
 										{row.hint}
 									</span>
 								{/if}
+
+								{#if row.showInstallLink && installOpenFor === row.name}
+									<div class="install-panel" data-testid={`install-panel-${row.name}`}>
+										{#if row.installCommand}
+											<p class="install-lead">
+												This runs the vendor’s installer, pinned to v{row.pinnedVersion}.
+												Read the command before you run it — nothing runs until you click
+												Install.
+											</p>
+											<pre class="install-command" data-testid={`install-command-${row.name}`}>{row.installCommand}</pre>
+											<div class="install-actions">
+												<Button
+													size="sm"
+													variant="outline"
+													onclick={() => void copyInstallCommand(row)}
+													data-testid={`copy-install-${row.name}`}
+												>
+													{copyFlash === row.name ? 'Copied' : 'Copy command'}
+												</Button>
+												<Button
+													size="sm"
+													onclick={() => void runInstall(row)}
+													disabled={installBusy === row.name}
+													data-testid={`run-install-${row.name}`}
+												>
+													{installBusy === row.name ? 'Installing…' : row.installLabel}
+												</Button>
+											</div>
+											{#if installLog[row.name]}
+												<pre
+													class="install-log"
+													data-ok={installLog[row.name].ok}
+													data-testid={`install-log-${row.name}`}
+												>{installLog[row.name].ok
+														? `Installed${installLog[row.name].version ? ` — v${installLog[row.name].version}` : ''}\n`
+														: `Failed${installLog[row.name].error ? `: ${installLog[row.name].error}` : ''}\n`}{installLog[row.name].output}</pre>
+											{/if}
+										{:else}
+											<p class="install-lead">{row.installLinkReason}</p>
+											<a
+												class="install"
+												href={row.installUrl}
+												target="_blank"
+												rel="noopener noreferrer"
+												data-testid={`install-${row.name}`}
+											>
+												{row.installLabel}
+												<ExternalLink class="size-3" />
+											</a>
+										{/if}
+									</div>
+								{/if}
 							</div>
 							{#if row.showInstallLink}
-								<!-- target="_blank" is required, not decorative: under Electron it
-								     routes through setWindowOpenHandler → shell.openExternal, so the
-								     page opens in the system browser. A bare href would navigate the
-								     app window to a page the user cannot get back from. -->
-								<a
-									class="install"
-									href={row.installUrl}
-									target="_blank"
-									rel="noopener noreferrer"
-									data-testid={`install-${row.name}`}
-								>
-									{row.installLabel}
-									<ExternalLink class="size-3" />
-								</a>
+								{#if installOpenFor === row.name}
+									<Button
+										size="sm"
+										variant="ghost"
+										onclick={() => (installOpenFor = null)}
+										data-testid={`hide-install-${row.name}`}
+									>
+										Hide
+									</Button>
+								{:else}
+									<Button
+										size="sm"
+										variant="outline"
+										onclick={() => (installOpenFor = row.name)}
+										data-testid={`show-install-${row.name}`}
+									>
+										{row.installLabel}
+									</Button>
+								{/if}
 							{/if}
 						</li>
 					{/each}
@@ -424,6 +552,10 @@
 		line-height: 1.5;
 		color: var(--ink-90);
 	}
+	.panel-summary {
+		font-size: 0.78rem;
+		color: var(--ink-70);
+	}
 	.warn {
 		margin: 0;
 		font-size: 0.78rem;
@@ -460,11 +592,16 @@
 		flex-direction: column;
 		gap: 0.2rem;
 		min-width: 0;
+		flex: 1;
 	}
 	.provider-title {
 		font-size: 0.85rem;
 		font-weight: 600;
 		color: var(--ink-90);
+	}
+	.provider-roles {
+		font-size: 0.68rem;
+		color: var(--ink-50);
 	}
 	.provider-status {
 		font-size: 0.75rem;
@@ -477,6 +614,11 @@
 		font-weight: 600;
 	}
 	.provider-status[data-status='not_running'] {
+		color: var(--cobalt);
+	}
+	.provider-mismatch {
+		font-size: 0.72rem;
+		line-height: 1.4;
 		color: var(--cobalt);
 	}
 	.provider-path {
@@ -500,6 +642,57 @@
 		color: var(--ink-90);
 		text-decoration: underline;
 		white-space: nowrap;
+	}
+	.install-panel {
+		margin-top: 0.45rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.45rem;
+		padding: 0.55rem 0.6rem;
+		border-radius: var(--radius-md);
+		border: 1px solid var(--hairline);
+		background: color-mix(in srgb, var(--surface-raised) 70%, var(--surface));
+	}
+	.install-lead {
+		margin: 0;
+		font-size: 0.72rem;
+		line-height: 1.45;
+		color: var(--ink-70);
+	}
+	.install-command {
+		margin: 0;
+		padding: 0.5rem 0.55rem;
+		border-radius: var(--radius-sm);
+		background: var(--surface);
+		border: 1px solid var(--hairline-soft);
+		font-size: 0.68rem;
+		line-height: 1.45;
+		color: var(--ink-90);
+		overflow-x: auto;
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+	}
+	.install-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.4rem;
+	}
+	.install-log {
+		margin: 0;
+		max-height: 8rem;
+		overflow: auto;
+		padding: 0.45rem 0.5rem;
+		border-radius: var(--radius-sm);
+		font-size: 0.65rem;
+		line-height: 1.4;
+		color: var(--ink-70);
+		background: var(--surface);
+		border: 1px solid var(--hairline-soft);
+		white-space: pre-wrap;
+	}
+	.install-log[data-ok='false'] {
+		color: var(--destructive);
+		border-color: color-mix(in srgb, var(--destructive) 40%, var(--hairline));
 	}
 
 	.picker {

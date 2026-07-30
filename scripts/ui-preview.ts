@@ -21,9 +21,10 @@
  *     Attaches the fake channel and drives the real session state machine to
  *     that state. Without it there is no channel and the session stays at
  *     `initializing` with a populated chat list — the pre-OSS-P3.4 behaviour.
- *   PREVIEW_PROVIDERS=real|all|none|ollama-down
+ *   PREVIEW_PROVIDERS=real|all|none|ollama-down|mismatch
  *     Stubs provider discovery. `none` is the first-run case that matters:
  *     nothing detected, three install links, pairing still reachable.
+ *     `mismatch` surfaces the verified-against notice on OpenCode.
  *   PREVIEW_SPLIT_IDENTITY=1
  *     Seeds the pre-merge LID/phone duplicate pair (W4-U13).
  *   PREVIEW_PROPOSAL=1
@@ -539,7 +540,7 @@ const sessionMode = isPreviewSessionMode(rawSession) ? rawSession : null;
 const rawProviders = process.env.PREVIEW_PROVIDERS;
 if (rawProviders !== undefined && !isPreviewProvidersMode(rawProviders)) {
 	throw new Error(
-		`PREVIEW_PROVIDERS=${rawProviders} is not a mode. Use real|all|none|ollama-down.`
+		`PREVIEW_PROVIDERS=${rawProviders} is not a mode. Use real|all|none|ollama-down|mismatch.`
 	);
 }
 const providersMode = isPreviewProvidersMode(rawProviders) ? rawProviders : 'real';
@@ -856,6 +857,7 @@ First-run screens to look at:
   PREVIEW_SESSION=qr_pending  PREVIEW_PROVIDERS=none        the case this exists for
   PREVIEW_SESSION=qr_pending  PREVIEW_PROVIDERS=all         all three detected
   PREVIEW_SESSION=qr_pending  PREVIEW_PROVIDERS=ollama-down installed but not running
+  PREVIEW_SESSION=qr_pending  PREVIEW_PROVIDERS=mismatch    version-mismatch notice
 `
 		: ''
 }

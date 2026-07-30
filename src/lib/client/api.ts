@@ -293,6 +293,25 @@ export const api = {
 		request<ProvidersResponse>('/providers?refresh=1'),
 
 	/**
+	 * ONB-1 — run the vendor's pinned installer for Claude Code or OpenCode.
+	 * Frontend-only on the server. The UI must show `command` before calling.
+	 */
+	installProvider: (provider: 'claude' | 'codex') =>
+		request<{
+			ok: boolean;
+			provider: 'claude' | 'codex';
+			command: string;
+			pinnedVersion: string;
+			exitCode: number | null;
+			output: string;
+			installedVersion: string | null;
+			error?: string;
+		}>('/providers/install', {
+			method: 'POST',
+			body: JSON.stringify({ provider })
+		}),
+
+	/**
 	 * W4-U8: outbox send-mode. `live: true` enables real WhatsApp sends through
 	 * the pacer (after owner confirmation in the UI); `live: false` is the safe
 	 * default and is never confirmed. Takes effect without a restart — the

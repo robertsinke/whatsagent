@@ -30,13 +30,14 @@ import type {
 	ProviderDiscoverySnapshot
 } from '../server/providers/discovery.js';
 
-export type PreviewProvidersMode = 'real' | 'all' | 'none' | 'ollama-down';
+export type PreviewProvidersMode = 'real' | 'all' | 'none' | 'ollama-down' | 'mismatch';
 
 export const PREVIEW_PROVIDERS_MODES: readonly PreviewProvidersMode[] = [
 	'real',
 	'all',
 	'none',
-	'ollama-down'
+	'ollama-down',
+	'mismatch'
 ];
 
 export function isPreviewProvidersMode(
@@ -102,6 +103,23 @@ function previewProviders(mode: Exclude<PreviewProvidersMode, 'real'>, probedAt:
 
 	const claudeOk = installed(claude, '/opt/homebrew/bin/claude', '2.1.220');
 	const codexOk = installed(codex, '/Users/owner/.opencode/bin/opencode', '1.18.9');
+
+	if (mode === 'mismatch') {
+		// ONB-1 — OpenCode reports a version other than the pin so the
+		// "verified against X, you have Y" notice is reachable in preview.
+		return [
+			claudeOk,
+			installed(codex, '/Users/owner/.opencode/bin/opencode', '1.18.10'),
+			{
+				...installed(ollama, '/opt/homebrew/bin/ollama', '0.32.4'),
+				models: [
+					{ value: 'llama3.2:3b', label: 'llama3.2:3b', note: '2.0 GB', source: 'live' }
+				],
+				modelsLive: true,
+				defaultModel: 'llama3.2:3b'
+			}
+		];
+	}
 
 	if (mode === 'ollama-down') {
 		return [
