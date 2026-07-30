@@ -25,6 +25,10 @@
  *     Stubs provider discovery. `none` is the first-run case that matters:
  *     nothing detected, three install links, pairing still reachable.
  *     `mismatch` surfaces the verified-against notice on OpenCode.
+ *   PREVIEW_HARNESS_ISOLATION=pass|fail
+ *     SEC-1 — seeds a last Tier-1 isolation check into settings so Settings →
+ *     Safety can be photographed without spawning a harness. `fail` is the
+ *     important capture (what the owner sees when something is wrong).
  *   PREVIEW_SPLIT_IDENTITY=1
  *     Seeds the pre-merge LID/phone duplicate pair (W4-U13).
  *   PREVIEW_PROPOSAL=1
@@ -581,6 +585,61 @@ if (!sessionMode) {
 	setSetting(db, 'provider_model', 'claude-haiku-9-9-undetected');
 }
 setSetting(db, 'memory', 'hindsight');
+
+/**
+ * SEC-1 — seed a last isolation check so Settings → Safety can be photographed
+ * without spawning a real harness. `pass` and `fail` are the two states that
+ * matter; omit the env to leave the card in its "never checked" state.
+ */
+const rawIsolation = process.env.PREVIEW_HARNESS_ISOLATION;
+if (rawIsolation === 'pass' || rawIsolation === 'fail') {
+	const now = Date.now();
+	const mk = (
+		harness: 'claude' | 'codex',
+		verdict: 'pass' | 'fail'
+	) => ({
+		harness,
+		binary: harness === 'codex' ? 'opencode' : 'claude',
+		surface: 'drafting' as const,
+		tier: 1 as const,
+		tier1Strength:
+			harness === 'codex'
+				? ('resolved-config-only' as const)
+				: ('realized-surface' as const),
+		pinnedVersion: harness === 'codex' ? '1.18.9' : '2.1.220',
+		detectedVersion: harness === 'codex' ? '1.18.10' : '2.1.220',
+		verdict,
+		summary:
+			verdict === 'pass'
+				? harness === 'codex'
+					? 'OpenCode: nothing extra is reachable while drafting.'
+					: 'Claude Code: nothing extra is reachable while drafting.'
+				: harness === 'codex'
+					? 'OpenCode: isolation check failed — Builtin tool read resolved to true, expected false'
+					: 'Claude Code: isolation check failed — Drafting realized 12 tool(s); expected none',
+		checkedAt: now,
+		findings:
+			verdict === 'fail'
+				? [
+						{
+							code: harness === 'codex' ? 'builtin_enabled' : 'tools_present',
+							detail:
+								harness === 'codex'
+									? 'Builtin tool read resolved to true, expected false'
+									: 'Drafting realized 12 tool(s); expected none'
+						}
+					]
+				: []
+	});
+	setSetting(
+		db,
+		'harness_isolation',
+		JSON.stringify({
+			claude: { drafting: mk('claude', rawIsolation) },
+			codex: { drafting: mk('codex', rawIsolation) }
+		})
+	);
+}
 
 const discovery =
 	providersMode === 'real'

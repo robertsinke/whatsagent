@@ -27,6 +27,7 @@
 	// OSS-P3.4 — the provider + model control is shared with first-run setup.
 	// Do not re-implement it here; the two screens must not drift apart.
 	import ProviderPicker from '$lib/components/app/ProviderPicker.svelte';
+	import HarnessIsolationCard from '$lib/components/app/HarnessIsolationCard.svelte';
 	import MarkdownEditor from '$lib/components/app/MarkdownEditor.svelte';
 	import { resolveVoiceSaveTarget } from '$lib/components/app/voice-save-target';
 
@@ -912,6 +913,12 @@
 						<span class="field-help">{field.help}</span>
 					</label>
 				{/each}
+
+				<HarnessIsolationCard
+					settingsRaw={values.harness_isolation ?? null}
+					{providersSnapshot}
+				/>
+
 				<h2>What this app will never do</h2>
 				<ul class="safety">
 					<li>The agent never sends. Every message leaves only after you press send or approve.</li>

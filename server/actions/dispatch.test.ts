@@ -263,7 +263,11 @@ describe('action registry dispatch', () => {
 			'clear-agent-panel',
 			// ONB-1: installing software is a different threat model than any
 			// drafting or panel tool. Frontend-only — see install-provider.ts.
-			'install-provider'
+			'install-provider',
+			// SEC-1: spawns harnesses to measure tool surface / can spend a
+			// subscription turn on Tier 2. Frontend-only — see
+			// verify-harness-isolation.ts.
+			'verify-harness-isolation'
 		]) {
 			expect(toolNames).not.toContain(banned);
 		}

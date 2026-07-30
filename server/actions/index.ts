@@ -16,6 +16,7 @@ import { getDraftAction } from './get-draft.js';
 import { getMessagesAction } from './get-messages.js';
 import { installProviderAction } from './install-provider.js';
 import { listChatsAction } from './list-chats.js';
+import { verifyHarnessIsolationAction } from './verify-harness-isolation.js';
 import { loadMediaAction } from './load-media.js';
 import { markReadAction } from './mark-read.js';
 import { openChatAction } from './open-chat.js';
@@ -50,6 +51,7 @@ const actions: ActionDefinition<unknown>[] = [
 	getDraftAction as ActionDefinition<unknown>,
 	getMessagesAction as ActionDefinition<unknown>,
 	installProviderAction as ActionDefinition<unknown>,
+	verifyHarnessIsolationAction as ActionDefinition<unknown>,
 	listChatsAction as ActionDefinition<unknown>,
 	loadMediaAction as ActionDefinition<unknown>,
 	markReadAction as ActionDefinition<unknown>,

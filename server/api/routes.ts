@@ -165,6 +165,11 @@ export type RoutesDeps = {
 	 * real `/bin/bash -lc` path. Frontend-only — see the action file header.
 	 */
 	installProviderSpawn?: import('../providers/provider.js').SpawnProcess;
+	/**
+	 * SEC-1 — injectable spawn for `verify-harness-isolation`. Tests inject a
+	 * fake so the suite never touches a real harness binary. Frontend-only.
+	 */
+	verifyHarnessSpawn?: import('../providers/provider.js').SpawnProcess;
 };
 
 /**
@@ -693,6 +698,13 @@ async function handleApi(
 	if (path === '/api/providers/install' && method === 'POST') {
 		const body = await readJsonBody(req);
 		await dispatchAction(deps, res, 'install-provider', body ?? {});
+		return;
+	}
+
+	// SEC-1 — owner-triggered harness tool-surface verification. Frontend-only.
+	if (path === '/api/providers/verify-isolation' && method === 'POST') {
+		const body = await readJsonBody(req);
+		await dispatchAction(deps, res, 'verify-harness-isolation', body ?? {});
 		return;
 	}
 

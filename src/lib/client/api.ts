@@ -312,6 +312,50 @@ export const api = {
 		}),
 
 	/**
+	 * SEC-1 — re-measure a harness tool surface (Tier 1 by default).
+	 * `deep: true` runs the decoy + positive-control path and spends a model call.
+	 */
+	verifyHarnessIsolation: (input: {
+		harness: 'claude' | 'codex';
+		surface?: 'drafting' | 'panel';
+		deep?: boolean;
+	}) =>
+		request<{
+			report: {
+				harness: 'claude' | 'codex';
+				binary: string;
+				surface: 'drafting' | 'panel';
+				tier: 1 | 2;
+				tier1Strength: 'realized-surface' | 'resolved-config-only';
+				pinnedVersion: string;
+				detectedVersion: string | null;
+				verdict: 'pass' | 'fail' | 'inconclusive' | 'unavailable';
+				summary: string;
+				checkedAt: number;
+				findings: Array<{ code: string; detail: string }>;
+			};
+			store: Record<
+				string,
+				Partial<
+					Record<
+						'drafting' | 'panel',
+						{
+							verdict: string;
+							summary: string;
+							pinnedVersion: string;
+							detectedVersion: string | null;
+							checkedAt: number;
+							tier1Strength?: string;
+						}
+					>
+				>
+			>;
+		}>('/providers/verify-isolation', {
+			method: 'POST',
+			body: JSON.stringify(input)
+		}),
+
+	/**
 	 * W4-U8: outbox send-mode. `live: true` enables real WhatsApp sends through
 	 * the pacer (after owner confirmation in the UI); `live: false` is the safe
 	 * default and is never confirmed. Takes effect without a restart — the
