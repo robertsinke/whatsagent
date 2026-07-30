@@ -1,11 +1,9 @@
 <script lang="ts">
 	/**
-	 * MarkdownEditor — Milkdown WYSIWYG markdown editor, Svelte 5 runes wrapper.
-	 *
-	 * This is the editable half of the Voice tab. It owns a Milkdown editor that
-	 * renders GFM markdown (commonmark + gfm presets) and emits `markdown` on
-	 * every internal edit. The read-only view lives in the Voice tab UI (P3.4)
-	 * and shares the `.mk-doc` typography system from `markdown-editor.css`.
+	 * MarkdownEditor — Milkdown WYSIWYG for the Voice tab, the sole presentation
+	 * of the voice document (PANEL-S11 dropped the raw `<pre>` View mode).
+	 * Renders GFM (commonmark + gfm presets) and emits `markdown` on every
+	 * internal edit. Typography comes from `.mk-doc` in `markdown-editor.css`.
 	 *
 	 * Why Milkdown and not a textarea: the owner's voice document (`voice/global.md`)
 	 * contains GFM tables, and a plain textarea round-trips them only by luck.

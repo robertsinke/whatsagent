@@ -11,8 +11,6 @@
 		ArrowLeft,
 		Bot,
 		Check,
-		Eye,
-		Pencil,
 		Radio,
 		RefreshCw,
 		ShieldAlert,
@@ -162,7 +160,6 @@
 	let voice = $state<VoiceView | null>(null);
 	let voiceLoading = $state(true);
 	let voiceError = $state<string | null>(null);
-	let voiceMode = $state<'view' | 'edit'>('view');
 	/** Live draft — what the editor holds / what Save writes. */
 	let voiceDraft = $state('');
 	/** Content as last loaded or successfully saved — dirty = draft !== baseline. */
@@ -187,6 +184,13 @@
 	let voiceSuggestionBusyId = $state<string | null>(null);
 	/** Live Milkdown instance — Save reads currentMarkdown() so the draft cannot lag the DOM. `$state.raw` so bind:this identity stays a plain ref (not a deep proxy). */
 	let voiceEditor = $state.raw<{ currentMarkdown?: () => string } | null>(null);
+	/**
+	 * Milkdown is code-split and mounts async. Until `onready`, show a status
+	 * line so the Voice tab is not a blank box. Tabs.Content keeps inactive
+	 * panels mounted (`hidden`) — do not reset this on tab leave, or the
+	 * loading line would stick forever (onready only fires once per mount).
+	 */
+	let voiceEditorReady = $state(false);
 
 	async function loadProviders(refresh = false) {
 		providersLoading = true;
@@ -291,9 +295,10 @@
 		if (!voice || voice.content === null) return;
 		// Live getMarkdown() only after an owner edit marked the draft dirty.
 		// Mount-time / idle serialization is lossy — never read it on a clean Save
-		// (PANEL-S13). See resolveVoiceSaveTarget.
+		// (PANEL-S13). See resolveVoiceSaveTarget. No voiceMode gate — editor is
+		// the only presentation (PANEL-S11).
 		let liveMarkdown: string | null = null;
-		if (voiceDirty && voiceMode === 'edit' && voiceEditor?.currentMarkdown) {
+		if (voiceDirty && voiceEditor?.currentMarkdown) {
 			try {
 				liveMarkdown = voiceEditor.currentMarkdown();
 			} catch {
@@ -509,7 +514,7 @@
 		void loadAgentStatus();
 
 		const onKey = (e: KeyboardEvent) => {
-			if (settingsTab !== 'voice' || voiceMode !== 'edit') return;
+			if (settingsTab !== 'voice') return;
 			if ((e.metaKey || e.ctrlKey) && e.key === 's') {
 				e.preventDefault();
 				void saveVoiceDocument();
@@ -524,7 +529,9 @@
 	});
 
 	// Prefetch Milkdown chunks when the Voice tab is selected — ProseMirror is
-	// the largest thing in the bundle and lives on one tab of one route.
+	// the largest thing in the bundle and lives on one tab of one route. With
+	// no read-only mode, the editor mounts as soon as the tab opens, so this
+	// prefetch overlaps the mount rather than racing a View→Edit click.
 	$effect(() => {
 		if (settingsTab !== 'voice') return;
 		void Promise.all([
@@ -986,22 +993,6 @@
 						</dl>
 
 						<div class="voice-toolbar">
-							<div class="voice-mode-toggle" role="group" aria-label="View or edit">
-								<Button
-									size="sm"
-									variant={voiceMode === 'view' ? 'default' : 'outline'}
-									onclick={() => (voiceMode = 'view')}
-								>
-									<Eye class="size-3.5" /> View
-								</Button>
-								<Button
-									size="sm"
-									variant={voiceMode === 'edit' ? 'default' : 'outline'}
-									onclick={() => (voiceMode = 'edit')}
-								>
-									<Pencil class="size-3.5" /> Edit
-								</Button>
-							</div>
 							<div class="voice-toolbar-actions">
 								<Button
 									size="sm"
@@ -1012,21 +1003,20 @@
 									<RefreshCw class="size-3.5" />
 									{voiceRefreshing ? 'Refreshing…' : 'Refresh now'}
 								</Button>
-								{#if voiceMode === 'edit'}
-									<Button
-										size="sm"
-										disabled={voiceSaving}
-										onclick={() => void saveVoiceDocument()}
-									>
-										{#if voiceSavedFlash}
-											<Check class="size-3.5" /> Saved
-										{:else if voiceSaving}
-											Saving…
-										{:else}
-											Save
-										{/if}
-									</Button>
-								{/if}
+								<Button
+									size="sm"
+									disabled={voiceSaving}
+									onclick={() => void saveVoiceDocument()}
+									data-testid="voice-save"
+								>
+									{#if voiceSavedFlash}
+										<Check class="size-3.5" /> Saved
+									{:else if voiceSaving}
+										Saving…
+									{:else}
+										Save
+									{/if}
+								</Button>
 							</div>
 						</div>
 
@@ -1102,25 +1092,25 @@
 							{/if}
 						{/if}
 
-						{#if voiceMode === 'view'}
-							<pre class="voice-body scrollbar-contextual" use:scrollActivity>{voiceDraft}</pre>
-						{:else}
-							<div class="voice-editor">
-								<MarkdownEditor
-									bind:this={voiceEditor}
-									value={voiceDraft}
-									onchange={onVoiceDraftChange}
-									variant="inline"
-									readability="compact"
-									width="wide"
-									class="voice-mk"
-								/>
-							</div>
-							<p class="voice-save-hint muted">
-								Explicit Save only — Cmd/Ctrl+S also saves. No autosave (each save records a
-								durable memory directive).
-							</p>
-						{/if}
+						<div class="voice-editor" data-ready={voiceEditorReady ? 'true' : 'false'}>
+							{#if !voiceEditorReady}
+								<p class="voice-editor-loading muted" role="status">Loading editor…</p>
+							{/if}
+							<MarkdownEditor
+								bind:this={voiceEditor}
+								value={voiceDraft}
+								onchange={onVoiceDraftChange}
+								onready={() => (voiceEditorReady = true)}
+								variant="inline"
+								readability="compact"
+								width="wide"
+								class="voice-mk"
+							/>
+						</div>
+						<p class="voice-save-hint muted">
+							Explicit Save only — Cmd/Ctrl+S also saves. No autosave (each save records a
+							durable memory directive).
+						</p>
 					{:else}
 						<p class="voice-empty">
 							No voice has been learned yet. It appears after the agent has observed enough
@@ -1591,10 +1581,9 @@
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
-		justify-content: space-between;
+		justify-content: flex-end;
 		gap: 0.5rem;
 	}
-	.voice-mode-toggle,
 	.voice-toolbar-actions,
 	.voice-conflict-actions {
 		display: flex;
@@ -1668,27 +1657,22 @@
 		line-height: 1.4;
 		color: color-mix(in srgb, var(--cobalt) 90%, var(--ink-90));
 	}
-	.voice-body {
-		margin: 0;
-		padding: 0.6rem 0.7rem;
-		max-height: 26rem;
-		overflow: auto;
-		white-space: pre-wrap;
-		word-break: break-word;
-		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-		font-size: 0.78rem;
-		line-height: 1.45;
-		color: var(--ink-90);
-		background: var(--surface-sunken);
-		border-radius: var(--radius-sm);
-		border: 1px solid var(--hairline-soft);
-	}
 	.voice-editor {
+		position: relative;
 		max-height: 26rem;
 		overflow: auto;
 		border-radius: var(--radius-sm);
 		border: 1px solid var(--hairline-soft);
 		background: var(--surface-sunken);
+	}
+	.voice-editor-loading {
+		margin: 0;
+		padding: 0.75rem 0.85rem;
+		font-size: 0.78rem;
+		line-height: 1.4;
+	}
+	.voice-editor[data-ready='true'] .voice-editor-loading {
+		display: none;
 	}
 	:global(.voice-mk) {
 		min-height: 12rem;
