@@ -62,6 +62,12 @@ export const api = {
 
 	chat: (jid: string) => request<Chat>(`/chats/${encodeURIComponent(jid)}`),
 
+	/**
+	 * Read a chat's messages. Without `focusMsgId`, the GET dispatches the
+	 * `get-messages` registry action (PANEL-S12) — same definition the agent
+	 * tool uses. With `focusMsgId`, the server keeps the direct store read:
+	 * quote-jump is view-local and deliberately not on the action.
+	 */
 	messages: (
 		jid: string,
 		options: { limit?: number; beforeTs?: number; beforeId?: string; focusMsgId?: string } = {}

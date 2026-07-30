@@ -789,10 +789,6 @@ async function handleApi(
 	}
 
 	if (rest === 'messages' && method === 'GET') {
-		if (!chat) {
-			error(res, 404, 'Chat not found', { jid });
-			return;
-		}
 		const limit = parsePositiveInt(url.searchParams.get('limit'), 50);
 		const beforeTsRaw = url.searchParams.get('beforeTs');
 		const beforeId = url.searchParams.get('beforeId') ?? undefined;
@@ -805,14 +801,26 @@ async function handleApi(
 		// former centers a page on a target (U5 jump-to-quote), the latter pages
 		// backward from a cursor (W2-U1 load-older). If both arrive, `focusMsgId`
 		// wins because a jump is an explicit navigation, not a continuation.
-		const items = focusMsgId
-			? listMessagesPage(db, jid, { limit, focusMsgId })
-			: listMessagesPage(db, jid, {
-					limit,
-					beforeTs: beforeTs !== undefined && Number.isFinite(beforeTs) ? beforeTs : undefined,
-					beforeId
-				});
-		json(res, 200, { items: items.map((message) => toMessageView(db, message)) });
+		//
+		// PANEL-S12 — the cursor / newest-page path dispatches `get-messages`,
+		// the same registry action the agent tool uses. `focusMsgId` stays on
+		// the direct store read: it is view-local quote-jump navigation and is
+		// deliberately NOT on the action (PANEL-S7 survey).
+		if (focusMsgId) {
+			if (!chat) {
+				error(res, 404, 'Chat not found', { jid });
+				return;
+			}
+			const items = listMessagesPage(db, jid, { limit, focusMsgId });
+			json(res, 200, { items: items.map((message) => toMessageView(db, message)) });
+			return;
+		}
+		await dispatchAction(deps, res, 'get-messages', {
+			chatJid: jid,
+			limit,
+			...(beforeTs !== undefined && Number.isFinite(beforeTs) ? { beforeTs } : {}),
+			...(beforeId ? { beforeId } : {})
+		});
 		return;
 	}
 

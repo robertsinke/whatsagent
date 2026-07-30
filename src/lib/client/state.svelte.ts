@@ -474,6 +474,12 @@ export class AppState {
 		}
 	}
 
+	/**
+	 * PANEL-S12 — page backward through history via `get-messages` (the GET
+	 * `/chats/:jid/messages` shim dispatches that registry action). Same
+	 * definition the agent tool uses; cursor / limit / unread-boundary
+	 * snapshot semantics unchanged.
+	 */
 	async loadOlder(): Promise<void> {
 		const jid = this.selectedJid;
 		const epoch = this.#conversationEpoch;

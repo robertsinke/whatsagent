@@ -589,6 +589,53 @@ describe('GET /api/chats/:jid/messages (focused page — U5 jump-to-quote)', () 
 	});
 });
 
+describe('GET /api/chats/:jid/messages (PANEL-S12 — dispatches get-messages)', () => {
+	it('returns the get-messages envelope (chronological + backward cursor)', async () => {
+		await startTestApp();
+		upsertChat(db!, { jid: 'chain@s.whatsapp.net', kind: '1:1', last_msg_at: 8 });
+		for (let i = 1; i <= 8; i++) {
+			upsertMessage(db!, {
+				id: `c${i}`,
+				chat_jid: 'chain@s.whatsapp.net',
+				from_me: false,
+				ts: i,
+				text: `msg ${i}`
+			});
+		}
+
+		const res = await api('/api/chats/chain%40s.whatsapp.net/messages?limit=3');
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			chat_jid: string;
+			items: Array<{ id: string; ts: number }>;
+			limit: number;
+			next_before_ts: number;
+			next_before_id: string;
+			has_more: boolean;
+		};
+		// Same shape the tool surface returns — one definition of reading history.
+		expect(body.chat_jid).toBe('chain@s.whatsapp.net');
+		expect(body.limit).toBe(3);
+		expect(body.items.map((m) => m.id)).toEqual(['c6', 'c7', 'c8']);
+		expect(body.next_before_ts).toBe(body.items[0]!.ts);
+		expect(body.next_before_id).toBe('c6');
+		expect(body.has_more).toBe(true);
+
+		const older = await api(
+			`/api/chats/chain%40s.whatsapp.net/messages?limit=3&beforeTs=${body.next_before_ts}&beforeId=${body.next_before_id}`
+		);
+		expect(older.status).toBe(200);
+		const olderBody = (await older.json()) as { items: Array<{ id: string }> };
+		expect(olderBody.items.map((m) => m.id)).toEqual(['c3', 'c4', 'c5']);
+	});
+
+	it('404s an unknown chat (action-owned, not a silent empty page)', async () => {
+		await startTestApp();
+		const res = await api('/api/chats/missing%40s.whatsapp.net/messages?limit=10');
+		expect(res.status).toBe(404);
+	});
+});
+
 describe('Origin/Host CSRF defense', () => {
 	it('rejects mutating REST with a foreign Origin', async () => {
 		await startTestApp();

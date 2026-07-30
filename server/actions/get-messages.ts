@@ -13,14 +13,16 @@ export type GetMessagesInput = {
 };
 
 /**
- * Deliberately tighter than the store's own `[1, 200]` clamp and tighter than
- * the SPA's default of 50. The SPA renders rows into a scroller the owner
- * skims; a tool result is tokens the model pays for and, on a cloud harness,
- * conversation text leaving the machine. 25 is enough to answer "what did they
- * say?"; anything more should be an explicit paged decision.
+ * Deliberately tighter than the store's own `[1, 200]` clamp. The SPA page
+ * size is 60 (`PAGE_SIZE` in `state.svelte.ts`); the hard cap matches that so
+ * the UI's `loadOlder` / open-chat window can round-trip through this action
+ * without silently shrinking. The *default* stays 25 — enough for a tool to
+ * answer "what did they say?" without a context bomb; anything more is an
+ * explicit paged decision (and conversation text leaving the machine).
  */
 const DEFAULT_LIMIT = 25;
-const MAX_LIMIT = 50;
+/** Must stay ≥ the SPA's `PAGE_SIZE` (60) or frontend paging shrinks. */
+const MAX_LIMIT = 60;
 
 /**
  * PL-U7 — read one chat's messages in chronological order, paged backward.
@@ -102,12 +104,11 @@ export const getMessagesAction: ActionDefinition<GetMessagesInput> = {
 			...(input.beforeTs !== undefined ? { beforeTs: input.beforeTs } : {}),
 			...(input.beforeId !== undefined ? { beforeId: input.beforeId } : {})
 		});
-		// `listMessagesPage` returns newest-FIRST (`ORDER BY ts DESC`) because the
-		// SPA normalizes through `mergeMessages`. A tool caller has no such step and
-		// reads the array as prose, so reverse into chronological order here — a
-		// conversation handed to a model backwards is a conversation it will
-		// misread. This is the one place the tool view deliberately differs from
-		// `GET /api/chats/:jid/messages`, and it is ordering only, not content.
+		// `listMessagesPage` returns newest-FIRST (`ORDER BY ts DESC`). Reverse
+		// into chronological order here so both surfaces agree: a tool reads the
+		// array as prose (backwards = misread), and the SPA's GET shim (PANEL-S12)
+		// returns the same body the tool sees — the client still normalizes via
+		// `mergeMessages`, which re-sorts. Ordering only, not content.
 		const items = rows.map((message) => toMessageView(db, message)).reverse();
 		const oldest = items[0];
 		return actionJson(200, {

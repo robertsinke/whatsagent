@@ -240,7 +240,7 @@ describe('get-messages', () => {
 		expect(second.body.items.map((m) => m.id)).toEqual(['m3', 'm4', 'm5']);
 	});
 
-	it('caps below the store clamp and below the UI default', async () => {
+	it('caps at the SPA page size, below the store clamp', async () => {
 		const deps = makeDeps();
 		seed(db!);
 		const result = await dispatch(
@@ -249,9 +249,10 @@ describe('get-messages', () => {
 			{ chatJid: DIRECT, limit: 500 },
 			{ caller: 'tool', deps }
 		);
-		// Tighter than the store's own [1,200] and than the SPA's 50: a tool result
-		// is conversation text leaving the machine, not rows in a scroller.
-		expect((result as { body: { limit: number } }).body.limit).toBe(50);
+		// Matches the SPA's PAGE_SIZE (60) so frontend loadOlder round-trips
+		// without shrinking; still well below the store's [1,200]. A tool
+		// result is conversation text leaving the machine — default stays 25.
+		expect((result as { body: { limit: number } }).body.limit).toBe(60);
 	});
 
 	it('404s an unknown chat', async () => {
