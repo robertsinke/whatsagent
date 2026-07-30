@@ -10,8 +10,9 @@ import remarkGfm from 'remark-gfm';
  * round trip. It does NOT prove the full editor round-trips: Milkdown
  * serializes through its ProseMirror schema, not remark alone, so this test
  * would have passed SlayZone's raw-HTML case while the real editor mangled it.
- * The real proof is the manual save-with-zero-edits diff in the Voice tab UI
- * task (P3.4), not this file.
+ * Zero-edit Save byte-identity is enforced by `voice-save-target.ts` (PANEL-S13),
+ * not by this remark pipeline. The manual Voice-tab proof still matters for the
+ * full editor render.
  *
  * The fixture mirrors the shape of the real `voice/global.md` tables: a
  * three-column header row, a separator, and a few body rows.

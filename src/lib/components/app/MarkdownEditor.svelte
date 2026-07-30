@@ -41,6 +41,7 @@
 	import { untrack } from 'svelte';
 	import type { Editor } from '@milkdown/core';
 	import type { Ctx } from '@milkdown/ctx';
+	import { VOICE_MILKDOWN_STRINGIFY_OPTIONS } from './milkdown-stringify-options';
 	import './markdown-editor.css';
 
 	let {
@@ -125,15 +126,21 @@
 		void (async () => {
 			// Dynamic import — ProseMirror is the largest thing in the bundle and
 			// is used on one tab of one route. Keeping these out of the main chunk.
-			const [{ Editor: EditorCtor, rootCtx, defaultValueCtx }, { commonmark }, { gfm }, { history }, { listener, listenerCtx }, { replaceAll, getMarkdown }] =
-				await Promise.all([
-					import('@milkdown/core'),
-					import('@milkdown/preset-commonmark'),
-					import('@milkdown/preset-gfm'),
-					import('@milkdown/plugin-history'),
-					import('@milkdown/plugin-listener'),
-					import('@milkdown/utils')
-				]);
+			const [
+				{ Editor: EditorCtor, rootCtx, defaultValueCtx, remarkStringifyOptionsCtx },
+				{ commonmark },
+				{ gfm },
+				{ history },
+				{ listener, listenerCtx },
+				{ replaceAll, getMarkdown }
+			] = await Promise.all([
+				import('@milkdown/core'),
+				import('@milkdown/preset-commonmark'),
+				import('@milkdown/preset-gfm'),
+				import('@milkdown/plugin-history'),
+				import('@milkdown/plugin-listener'),
+				import('@milkdown/utils')
+			]);
 
 			if (destroyed) return;
 
@@ -146,7 +153,18 @@
 				.config((ctx: Ctx) => {
 					ctx.set(rootCtx, host);
 					ctx.set(defaultValueCtx, initial);
+					// Keep `internal` as the loaded bytes. Mount-time getMarkdown() is
+					// lossy; treating it as the editor's content would mark a dirty
+					// echo and fight external-sync against the real `value` prop.
 					internal = initial;
+				})
+				.config((ctx: Ctx) => {
+					// Soften real-edit rewrites (hyphen bullets, compact tables). Not a
+					// substitute for the zero-edit Save guard in voice-save-target.ts.
+					ctx.update(remarkStringifyOptionsCtx, (prev) => ({
+						...prev,
+						...VOICE_MILKDOWN_STRINGIFY_OPTIONS
+					}));
 				})
 				.config((ctx: Ctx) => {
 					ctx.get(listenerCtx).markdownUpdated((_ctx, markdown, prevMarkdown) => {
@@ -177,19 +195,11 @@
 				return;
 			}
 
-			// Emit the post-parse serialization once on mount. Without this, a
-			// Save-with-zero-edits would write the raw file bytes and never prove
-			// the Milkdown round trip (markdownUpdated only fires on edits).
-			try {
-				const serialized = editor.action(getMarkdown());
-				internal = serialized;
-				if (serialized !== initial) {
-					onChangeRef.current(serialized);
-				}
-			} catch {
-				// Serializer not ready — leave internal as initial; first keystroke
-				// still goes through markdownUpdated.
-			}
+			// Do NOT emit getMarkdown() on mount. ProseMirror's serialization
+			// differs from the file (list markers, table padding, blank lines);
+			// firing onchange here made every open-and-Save rewrite disk and arm
+			// the mirror guard with no owner keystrokes (PANEL-S13). Real edits
+			// still flow through markdownUpdated.
 
 			editorRef = editor;
 			editorReady = true;
@@ -208,9 +218,11 @@
 
 	/**
 	 * Live serialization of what the editor is showing right now. Save must call
-	 * this rather than trusting the last `onchange` alone — ProseMirror can accept
-	 * DOM input that has not yet (or will not) emit `markdownUpdated`, and a Save
-	 * that writes a stale draft would silently drop the owner's visible edit.
+	 * this when the draft is already dirty — ProseMirror can accept DOM input that
+	 * has not yet (or will not) emit `markdownUpdated`, and a Save that writes a
+	 * stale draft would silently drop the owner's visible edit. Do NOT call this
+	 * on a clean (zero-edit) Save: getMarkdown() is lossy and would rewrite disk
+	 * (PANEL-S13 / resolveVoiceSaveTarget).
 	 */
 	export function currentMarkdown(): string {
 		const editor = editorRef;

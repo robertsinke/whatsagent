@@ -1737,6 +1737,28 @@ describe('PUT /api/voice/global (P3.2 save path)', () => {
 		expect(await loadHash()).toBe((await again.json()).hash);
 	});
 
+	it('a byte-identical Save is a no-op — does not re-arm or create the mirror guard', async () => {
+		// PANEL-S13: rewriting the same bytes through writeOwnerEdit still wrote an
+		// ownerHash sidecar and froze Hindsight updates. Zero-edit / identical
+		// content must leave the guard state alone.
+		await startTestApp();
+		mkdirSync(join(dataDir!, 'voice'), { recursive: true });
+		writeFileSync(join(dataDir!, 'voice', 'global.md'), DOC, 'utf8');
+		const hash = await loadHash();
+
+		const res = await api('/api/voice/global', {
+			method: 'PUT',
+			body: JSON.stringify({ content: DOC, baseHash: hash })
+		});
+		expect(res.status).toBe(200);
+		const body = await res.json();
+		expect(body.mirrorGuard).toBe(false);
+		expect(body.directive).toBe('skipped');
+		expect(body.hash).toBe(hash);
+		expect(readFileSync(join(dataDir!, 'voice', 'global.md'), 'utf8')).toBe(DOC);
+		expect(existsSync(join(dataDir!, 'voice', 'global.owner.json'))).toBe(false);
+	});
+
 	it('409s on a stale baseHash and leaves the file BYTE-IDENTICAL', async () => {
 		await startTestApp();
 		mkdirSync(join(dataDir!, 'voice'), { recursive: true });

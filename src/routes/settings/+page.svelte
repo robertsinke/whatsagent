@@ -30,6 +30,7 @@
 	// Do not re-implement it here; the two screens must not drift apart.
 	import ProviderPicker from '$lib/components/app/ProviderPicker.svelte';
 	import MarkdownEditor from '$lib/components/app/MarkdownEditor.svelte';
+	import { resolveVoiceSaveTarget } from '$lib/components/app/voice-save-target';
 
 	type TextField = {
 		kind: 'text';
@@ -288,15 +289,31 @@
 
 	async function saveVoiceDocument() {
 		if (!voice || voice.content === null) return;
-		// Prefer the live editor serialization when mounted — see MarkdownEditor.currentMarkdown.
-		if (voiceMode === 'edit' && voiceEditor?.currentMarkdown) {
+		// Live getMarkdown() only after an owner edit marked the draft dirty.
+		// Mount-time / idle serialization is lossy — never read it on a clean Save
+		// (PANEL-S13). See resolveVoiceSaveTarget.
+		let liveMarkdown: string | null = null;
+		if (voiceDirty && voiceMode === 'edit' && voiceEditor?.currentMarkdown) {
 			try {
-				voiceDraft = voiceEditor.currentMarkdown();
+				liveMarkdown = voiceEditor.currentMarkdown();
 			} catch {
 				// Fall through with the last onchange draft.
 			}
 		}
-		const target = voiceDraft;
+		const decided = resolveVoiceSaveTarget({
+			baseline: voiceBaseline,
+			draft: voiceDraft,
+			liveMarkdown
+		});
+		if (!decided.write) {
+			// Zero-edit Save: leave bytes alone; do not hit writeOwnerEdit / arm
+			// the mirror guard. Flash success so the button still feels responsive.
+			voiceSavedFlash = true;
+			setTimeout(() => (voiceSavedFlash = false), 1500);
+			return;
+		}
+		const target = decided.content;
+		voiceDraft = target;
 		// In-flight dedupe: identical concurrent saves collapse to one PUT.
 		if (voiceSavingTarget === target) return;
 		voiceSavingTarget = target;

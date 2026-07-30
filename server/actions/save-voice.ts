@@ -92,6 +92,23 @@ export const saveVoiceAction: ActionDefinition<SaveVoiceInput> = {
 			});
 		}
 
+		// Byte-identical Save: do not call writeOwnerEdit. Rewriting the same
+		// bytes still arms the mirror guard (ownerHash sidecar) and freezes
+		// Hindsight updates — the failure mode PANEL-S13 closes on the client.
+		// Defense in depth if a caller bypasses the Voice-tab short-circuit.
+		if (current.content !== null && input.content === current.content) {
+			return actionJson(200, {
+				stem: input.stem,
+				hash: current.hash,
+				byteLength: current.byteLength,
+				modifiedAt:
+					current.modifiedAt === null ? null : new Date(current.modifiedAt).toISOString(),
+				mirrorGuard: current.mirrorGuard,
+				looksLikeVoiceDocument: looksLikeVoiceDocument(input.content),
+				directive: 'skipped'
+			});
+		}
+
 		files.writeOwnerEdit(input.stem, input.content);
 
 		let directive: 'recorded' | 'skipped' | 'failed' = 'skipped';

@@ -118,10 +118,11 @@ import {
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const dataDir = mkdtempSync(join(tmpdir(), 'whatsagent-ui-preview-'));
 
-// W4-U10 / P3.4: seed a learned voice document so the Voice tab has real content
-// to screenshot, not the empty state. Includes a GFM table — the Voice tab's
-// save-with-zero-edits round-trip proof depends on it (Milkdown must preserve
-// the table). Synthetic, not derived from any real conversation.
+// W4-U10 / P3.4 / PANEL-S13: seed a learned voice document so the Voice tab has
+// real content to screenshot, not the empty state. TWO GFM tables — the owner's
+// real document has two, and the zero-edit Save proof must hold for that shape
+// (Milkdown must not rewrite disk when the owner typed nothing). Synthetic, not
+// derived from any real conversation.
 mkdirSync(join(dataDir, 'voice'), { recursive: true });
 writeFileSync(
   join(dataDir, 'voice', 'global.md'),
@@ -144,6 +145,13 @@ writeFileSync(
     '| WhatsApp | casual | low |',
     '| Email | professional | none |',
     '| Calendar | terse | none |',
+    '',
+    '## Habits',
+    '',
+    '| Habit | Evidence |',
+    '| --- | --- |',
+    '| Short replies | ok / later |',
+    '| Warm closers | xx |',
     '',
     '## Emoji',
     '- Emoji-light, typically at the end of a message.',
