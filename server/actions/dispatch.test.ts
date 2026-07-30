@@ -2,13 +2,13 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { hashApprovalText } from '../../shared/approval-hash.js';
+import { hashApprovalText, proposalApprovalText } from '../../shared/approval-hash.js';
 import { openDatabase, type AppDatabase } from '../store/db.js';
 import { upsertChat } from '../store/chats.js';
 import { getDraft, upsertDraft } from '../store/drafts.js';
 import { upsertMessage } from '../store/messages.js';
 import { getProposal, listPendingProposals } from '../store/proposals.js';
-import { enqueueDraftOutbox } from '../store/outbox.js';
+import { enqueueDraftOutbox, listOutbox } from '../store/outbox.js';
 import { getSetting } from '../store/settings.js';
 import { EventBus } from '../api/events.js';
 import type { RoutesDeps } from '../api/routes.js';
@@ -673,6 +673,166 @@ describe('propose-send / confirm-proposal (PL-U3)', () => {
 		expect(getProposal(db!, proposal.id)?.status).toBe('rejected');
 		expect(outboxCount()).toBe(0);
 		expect(woke).toBe(false);
+	});
+});
+
+/**
+ * PANEL-S6 — propose-reaction / confirm-proposal for reactions.
+ *
+ * Same invariant as propose-send: the tool writes an inert row; only a
+ * frontend confirm enqueues. Assert against `listOutbox`, not the response.
+ */
+describe('propose-reaction / confirm-proposal (PANEL-S6)', () => {
+	function seedChat(deps: RoutesDeps, jid = 'alice@s.whatsapp.net'): void {
+		upsertChat(deps.db, { jid, kind: '1:1', name: 'Alice', last_msg_at: Date.now() });
+		upsertMessage(deps.db, {
+			id: 'in-1',
+			chat_jid: jid,
+			from_me: false,
+			ts: Date.now(),
+			text: 'are you around?'
+		});
+	}
+
+	it('a tool caller proposing a reaction creates no outbox row and never wakes the pacer', async () => {
+		const deps = makeDeps();
+		let woke = false;
+		deps.wakeOutbox = () => {
+			woke = true;
+		};
+		seedChat(deps);
+
+		const result = await dispatch(
+			actionRegistry,
+			'propose-reaction',
+			{ messageId: 'in-1', emoji: '👍' },
+			{ caller: 'tool', deps }
+		);
+
+		expect(result).toMatchObject({ kind: 'json', status: 202 });
+		if (result.kind === 'json') {
+			expect(result.body).toMatchObject({ status: 'pending_confirmation' });
+		}
+		expect(listOutbox(db!, 10)).toHaveLength(0);
+		expect(woke).toBe(false);
+		const pending = listPendingProposals(db!, 'alice@s.whatsapp.net');
+		expect(pending).toHaveLength(1);
+		expect(pending[0]).toMatchObject({
+			kind: 'reaction',
+			reaction_emoji: '👍',
+			reaction_target_msg_id: 'in-1',
+			basis_msg_id: 'in-1',
+			text: '',
+			status: 'pending'
+		});
+	});
+
+	it('refuses a frontend caller on propose-reaction before run', async () => {
+		const deps = makeDeps();
+		seedChat(deps);
+		const result = await dispatch(
+			actionRegistry,
+			'propose-reaction',
+			{ messageId: 'in-1', emoji: '👍' },
+			{ caller: 'frontend', deps }
+		);
+		expect(result).toEqual({
+			kind: 'error',
+			status: 403,
+			error: 'Caller not permitted',
+			extra: { action: 'propose-reaction', caller: 'frontend' }
+		});
+		expect(listOutbox(db!, 10)).toHaveLength(0);
+		expect(listPendingProposals(db!, 'alice@s.whatsapp.net')).toHaveLength(0);
+	});
+
+	it('confirming a reaction proposal enqueues exactly one outbox row; confirming twice does not enqueue two', async () => {
+		const deps = makeDeps();
+		seedChat(deps);
+		await dispatch(
+			actionRegistry,
+			'propose-reaction',
+			{ messageId: 'in-1', emoji: '🎉' },
+			{ caller: 'tool', deps }
+		);
+		const proposal = listPendingProposals(db!, 'alice@s.whatsapp.net')[0]!;
+		const body = {
+			id: proposal.id,
+			base_hash: hashApprovalText(proposalApprovalText(proposal))
+		};
+
+		const first = await dispatch(actionRegistry, 'confirm-proposal', body, {
+			caller: 'frontend',
+			deps
+		});
+		expect(first).toMatchObject({ kind: 'json', status: 202 });
+		const rows = listOutbox(db!, 10);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatchObject({
+			payload_kind: 'reaction',
+			reaction_emoji: '🎉',
+			reaction_target_msg_id: 'in-1',
+			chat_jid: 'alice@s.whatsapp.net'
+		});
+		expect(getProposal(db!, proposal.id)?.status).toBe('confirmed');
+
+		const second = await dispatch(actionRegistry, 'confirm-proposal', body, {
+			caller: 'frontend',
+			deps
+		});
+		expect(second).toMatchObject({ kind: 'error', status: 409 });
+		expect(listOutbox(db!, 10)).toHaveLength(1);
+	});
+
+	it('existing send proposals still round-trip after the kind migration', async () => {
+		const deps = makeDeps();
+		seedChat(deps);
+		await dispatch(
+			actionRegistry,
+			'propose-send',
+			{ chatJid: 'alice@s.whatsapp.net', text: 'Yes — see you at seven.' },
+			{ caller: 'tool', deps }
+		);
+		const proposal = listPendingProposals(db!, 'alice@s.whatsapp.net')[0]!;
+		expect(proposal.kind).toBe('send');
+		expect(proposal.reaction_emoji).toBeNull();
+		expect(proposal.reaction_target_msg_id).toBeNull();
+
+		const result = await dispatch(
+			actionRegistry,
+			'confirm-proposal',
+			{ id: proposal.id, base_hash: hashApprovalText(proposalApprovalText(proposal)) },
+			{ caller: 'frontend', deps }
+		);
+		expect(result).toMatchObject({ kind: 'json', status: 202 });
+		const rows = listOutbox(db!, 10);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatchObject({
+			payload_kind: 'text',
+			text: 'Yes — see you at seven.'
+		});
+	});
+
+	it('rejecting a reaction proposal enqueues nothing', async () => {
+		const deps = makeDeps();
+		seedChat(deps);
+		await dispatch(
+			actionRegistry,
+			'propose-reaction',
+			{ messageId: 'in-1', emoji: '👍' },
+			{ caller: 'tool', deps }
+		);
+		const proposal = listPendingProposals(db!, 'alice@s.whatsapp.net')[0]!;
+
+		const result = await dispatch(
+			actionRegistry,
+			'reject-proposal',
+			{ id: proposal.id },
+			{ caller: 'frontend', deps }
+		);
+		expect(result).toMatchObject({ kind: 'json', status: 200 });
+		expect(getProposal(db!, proposal.id)?.status).toBe('rejected');
+		expect(listOutbox(db!, 10)).toHaveLength(0);
 	});
 });
 

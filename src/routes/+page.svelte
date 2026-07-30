@@ -180,6 +180,13 @@
 								stalePrompt={app.stalePrompt}
 								textConflict={app.textConflict}
 								proposals={app.selectedProposals}
+								proposalChatName={chatTitle}
+								proposalTargetText={(id) => {
+									const m = app.messages.find((msg) => msg.id === id);
+									if (!m) return null;
+									const t = m.text?.trim();
+									return t || m.type;
+								}}
 								proposalStalePrompt={app.proposalStalePrompt}
 								decidingProposalId={app.decidingProposalId}
 								agentEligible={app.selectedChat.kind === '1:1'}

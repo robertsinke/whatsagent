@@ -4,6 +4,7 @@ import {
 	approvalHashMatches,
 	describeTextSource,
 	hashApprovalText,
+	proposalApprovalText,
 	sha256Hex
 } from './approval-hash.js';
 
@@ -47,6 +48,44 @@ describe('hashApprovalText', () => {
 	it('changes for any change the owner could have seen', () => {
 		expect(hashApprovalText('see you at 8')).not.toBe(hashApprovalText('see you at 9'));
 		expect(hashApprovalText('ok')).not.toBe(hashApprovalText('Ok'));
+	});
+});
+
+describe('proposalApprovalText', () => {
+	it('returns the message text for send proposals', () => {
+		expect(
+			proposalApprovalText({
+				kind: 'send',
+				text: 'Yes — seven.',
+				reaction_emoji: null,
+				reaction_target_msg_id: null
+			})
+		).toBe('Yes — seven.');
+	});
+
+	it('binds reaction proposals to emoji and target message id', () => {
+		const a = proposalApprovalText({
+			kind: 'reaction',
+			text: '',
+			reaction_emoji: '👍',
+			reaction_target_msg_id: 'msg-1'
+		});
+		const retargeted = proposalApprovalText({
+			kind: 'reaction',
+			text: '',
+			reaction_emoji: '👍',
+			reaction_target_msg_id: 'msg-2'
+		});
+		const swapped = proposalApprovalText({
+			kind: 'reaction',
+			text: '',
+			reaction_emoji: '🎉',
+			reaction_target_msg_id: 'msg-1'
+		});
+		expect(a).toBe('reaction\0msg-1\0👍');
+		expect(a).not.toBe(retargeted);
+		expect(a).not.toBe(swapped);
+		expect(hashApprovalText(a)).not.toBe(hashApprovalText(retargeted));
 	});
 });
 

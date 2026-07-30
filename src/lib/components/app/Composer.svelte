@@ -23,6 +23,8 @@
 		stalePrompt = null,
 		textConflict = null,
 		proposals = [],
+		proposalChatName = null,
+		proposalTargetText = null,
 		proposalStalePrompt = null,
 		decidingProposalId = null,
 		agentEligible = false,
@@ -50,8 +52,12 @@
 		draft?: Draft | null;
 		stalePrompt?: StalePrompt | null;
 		textConflict?: TextConflictPrompt | null;
-		/** PL-U3 — agent-proposed sends awaiting this owner's decision. */
+		/** PANEL-S6 — agent proposals (send or reaction) awaiting this owner's decision. */
 		proposals?: SendProposal[];
+		/** Display name for the open chat — reaction cards show which chat. */
+		proposalChatName?: string | null;
+		/** Resolve a message id to preview text for reaction cards. */
+		proposalTargetText?: ((messageId: string) => string | null) | null;
 		proposalStalePrompt?: ProposalStalePrompt | null;
 		decidingProposalId?: number | null;
 		agentEligible?: boolean;
@@ -136,6 +142,12 @@
 	{#each proposals as proposal (proposal.id)}
 		<ProposalCard
 			{proposal}
+			chatName={proposalChatName}
+			targetMessageText={
+				proposal.kind === 'reaction' && proposal.reaction_target_msg_id
+					? (proposalTargetText?.(proposal.reaction_target_msg_id) ?? null)
+					: null
+			}
 			stale={proposalStalePrompt?.proposalId === proposal.id}
 			deciding={decidingProposalId === proposal.id}
 			onconfirm={() => onconfirmproposal?.(proposal.id)}
