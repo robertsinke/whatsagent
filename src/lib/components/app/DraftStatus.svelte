@@ -6,7 +6,8 @@
 	import { animate, spring } from 'motion';
 	import { AlertTriangle, Check, Pencil, RotateCw, Sparkles, X } from '@lucide/svelte';
 	import type { Draft, RefinementIntent } from '$lib/client/types.js';
-	import type { StalePrompt } from '$lib/client/state.svelte.js';
+	import type { StalePrompt, TextConflictPrompt } from '$lib/client/state.svelte.js';
+	import { describeTextSource } from '../../../../shared/approval-hash.js';
 	import { canApprove, canRefine, draftBadge, isVisibleDraftStatus } from '$lib/client/view.js';
 	import { draftPanelBranch } from './draft-panel.js';
 	import { refineControlsState } from './refine-controls.js';
@@ -14,6 +15,8 @@
 	let {
 		draft,
 		stalePrompt = null,
+		/** PL-U3 Half B — set when the draft changed after the owner read it. */
+		textConflict = null,
 		/** True for 1:1 chats — generate / empty-draft UI only where the agent may act. */
 		agentEligible = false,
 		/** True while a preview-only refinement request is in flight. */
@@ -28,11 +31,14 @@
 		onskip,
 		onconfirmstale,
 		ondismissstale,
+		onreviewchange,
+		ondismisschange,
 		onrefine,
 		ongenerate
 	}: {
 		draft: Draft | null;
 		stalePrompt?: StalePrompt | null;
+		textConflict?: TextConflictPrompt | null;
 		agentEligible?: boolean;
 		refining?: boolean;
 		refineError?: string | null;
@@ -42,13 +48,16 @@
 		onskip?: () => void;
 		onconfirmstale?: (text?: string) => boolean | void | Promise<boolean | void>;
 		ondismissstale?: () => void;
+		/** Owner has read the changed text — re-pins the reviewed hash. */
+		onreviewchange?: () => void;
+		ondismisschange?: () => void;
 		onrefine?: (intent: RefinementIntent, text?: string) => Promise<Draft | null>;
 		ongenerate?: () => void | Promise<unknown>;
 	} = $props();
 
 	const badge = $derived(draft ? draftBadge(draft.status) : null);
 	const visibleDraft = $derived(draft && isVisibleDraftStatus(draft.status) ? draft : null);
-	const branch = $derived(draftPanelBranch({ draft, stalePrompt, agentEligible }));
+	const branch = $derived(draftPanelBranch({ draft, stalePrompt, textConflict, agentEligible }));
 	let editing = $state(false);
 	let editedText = $state('');
 	let editingBasis = $state<string | null>(null);
@@ -171,7 +180,32 @@
 
 <svelte:window onkeydown={(event) => event.key === 'Escape' && editing && void closeEditor()} />
 
-{#if branch === 'stale'}
+{#if branch === 'text-changed' && textConflict}
+	<!--
+	  PL-U3 Half B. The draft is not the text the owner read — either the server
+	  refused a click with a `text-changed` 409, or a `draft-updated` arrived
+	  while they were reading. Deliberately NOT a retry button: the new text is
+	  shown, and the only way forward is an explicit acknowledgement that re-pins
+	  the reviewed hash. Approving straight from here would re-authorise text
+	  nobody read, which is the whole bug.
+	-->
+	<div class="draft stale">
+		<div class="draft-head">
+			<AlertTriangle class="size-3.5" />
+			<span class="draft-title">This draft changed since you read it</span>
+		</div>
+		<p class="draft-note">{describeTextSource(textConflict.source)} Read it before approving.</p>
+		<p class="draft-text changed-text">{textConflict.text}</p>
+		<div class="draft-actions">
+			<Button size="sm" onclick={() => onreviewchange?.()}>
+				<Check class="size-3.5" /> I've read this version
+			</Button>
+			<Button size="sm" variant="outline" onclick={() => ondismisschange?.()}>
+				<X class="size-3.5" /> Dismiss
+			</Button>
+		</div>
+	</div>
+{:else if branch === 'stale'}
 	<!--
 	  The server returned 409: newer inbound arrived after the draft's basis
 	  message. Approval must be re-confirmed against the refreshed conversation —
@@ -476,6 +510,19 @@
 		border-radius: var(--radius-sm);
 		background: color-mix(in srgb, var(--lime) 10%, var(--surface-sunken));
 		border: 1px solid color-mix(in srgb, var(--lime) 28%, var(--hairline));
+	}
+
+	/*
+	  Shown inside the warning card, so it must not wear the "ready to send" lime
+	  treatment — the owner is being asked to read this text, not to recognise it
+	  as something they already approved. Declared after `.draft-text` because it
+	  overrides it at equal specificity.
+	*/
+	.changed-text {
+		background: color-mix(in srgb, var(--surface-sunken) 92%, transparent);
+		border: 1px solid var(--hairline);
+		max-height: 9rem;
+		overflow-y: auto;
 	}
 	.draft-note {
 		margin: 0;

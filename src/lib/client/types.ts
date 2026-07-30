@@ -23,6 +23,8 @@ export type {
 	ClientCommand
 } from '../../../shared/agent-events.js';
 import type { AgentPart, ClientCommand } from '../../../shared/agent-events.js';
+export type { DraftTextSource } from '../../../shared/approval-hash.js';
+import type { DraftTextSource } from '../../../shared/approval-hash.js';
 
 export type ChatKind = '1:1' | 'group';
 
@@ -150,6 +152,26 @@ export type Draft = {
 	provider: string | null;
 	basis_msg_id: string | null;
 	original_text: string;
+	/** PL-U3 — who last wrote `text`; drives the re-confirmation copy. */
+	text_source: DraftTextSource;
+};
+
+/**
+ * PL-U3 — a send the agent asked for. It is not queued and never will be
+ * unless the owner confirms it; `confirm-proposal` is frontend-only precisely
+ * so that this row can only become an outbox row by way of a click.
+ */
+export type ProposalStatus = 'pending' | 'confirmed' | 'rejected';
+
+export type SendProposal = {
+	id: number;
+	chat_jid: string;
+	text: string;
+	status: ProposalStatus;
+	created_at: number;
+	basis_msg_id: string | null;
+	decided_at: number | null;
+	outbox_id: number | null;
 };
 
 export type OutboxRow = {
@@ -217,6 +239,8 @@ export type ServerEvent =
 	| { type: 'chat-removed'; jid: string; merged_into: string }
 	| { type: 'draft-updated'; draft: Draft }
 	| { type: 'draft-removed'; chat_jid: string }
+	/** PL-U3 — a proposed send appeared, or was confirmed/rejected by the owner. */
+	| { type: 'proposal-updated'; proposal: SendProposal }
 	| { type: 'outbox-updated'; outbox: OutboxRow }
 	| { type: 'connection'; state: string }
 	| { type: 'pairing-needed'; qr: string }

@@ -6,6 +6,7 @@ import { getChat, listChats } from '../store/chats.js';
 import { getDraft } from '../store/drafts.js';
 import { getMessage, listMessagesPage, type Message } from '../store/messages.js';
 import { listOutbox } from '../store/outbox.js';
+import { listPendingProposalsAll } from '../store/proposals.js';
 import {
 	getSetting,
 	listEffectiveSettings,
@@ -596,6 +597,25 @@ async function handleApi(
 	const outboxMatch = /^\/api\/outbox\/(\d+)$/.exec(path);
 	if (outboxMatch && method === 'DELETE') {
 		await dispatchAction(deps, res, 'cancel-outbox', { id: Number(outboxMatch[1]) });
+		return;
+	}
+
+	/**
+	 * PL-U3 — the owner's side of the permission channel. There is no POST that
+	 * *creates* a proposal here: `propose-send` is tool-only and reaches the
+	 * registry through the MCP surface, so the frontend can only ever decide one.
+	 */
+	if (path === '/api/proposals' && method === 'GET') {
+		json(res, 200, { items: listPendingProposalsAll(db) });
+		return;
+	}
+
+	const proposalMatch = /^\/api\/proposals\/(\d+)\/(confirm|reject)$/.exec(path);
+	if (proposalMatch && method === 'POST') {
+		const id = Number(proposalMatch[1]);
+		const body = (await readJsonBody(req)) as Record<string, unknown> | undefined;
+		const action = proposalMatch[2] === 'confirm' ? 'confirm-proposal' : 'reject-proposal';
+		await dispatchAction(deps, res, action, { ...(body ?? {}), id });
 		return;
 	}
 

@@ -5,6 +5,7 @@ import type { Draft } from '../store/drafts.js';
 import type { AppDatabase } from '../store/db.js';
 import type { Message } from '../store/messages.js';
 import type { OutboxRow } from '../store/outbox.js';
+import type { SendProposal } from '../store/proposals.js';
 import { chatViewFor, type ChatView } from './chat-view.js';
 import { toMessageView, type MessageView } from './message-view.js';
 import type { SessionView } from './session.js';
@@ -32,6 +33,13 @@ export type ServerEvent =
 	 */
 	| { type: 'chat-removed'; jid: string; merged_into: string }
 	| { type: 'draft-updated'; draft: Draft }
+	/**
+	 * PL-U3 — a send the agent proposed, or the owner's decision on one. The
+	 * panel renders pending proposals live from this; it is deliberately the
+	 * same channel every other store write uses rather than a parallel one, so
+	 * a proposal cannot arrive by a route the rest of the UI does not watch.
+	 */
+	| { type: 'proposal-updated'; proposal: SendProposal }
 	| { type: 'draft-removed'; chat_jid: string }
 	| { type: 'outbox-updated'; outbox: OutboxRow }
 	/**

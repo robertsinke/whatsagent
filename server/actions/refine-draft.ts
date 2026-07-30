@@ -51,7 +51,10 @@ export const refineDraftAction: ActionDefinition<RefineDraftInput> = {
 		const result = await ctx.deps.refineDraft({
 			chatJid: input.chatJid,
 			intent: input.intent,
-			preview: input.text
+			preview: input.text,
+			// PL-U3: a refinement rewrites the draft, so the owner has to be able
+			// to see whose idea it was when the approval hash stops matching.
+			requestedBy: ctx.caller === 'tool' ? 'agent' : 'owner'
 		});
 		if (result.kind === 'ready') {
 			return actionJson(200, result.draft);

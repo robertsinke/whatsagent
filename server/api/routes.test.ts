@@ -18,6 +18,9 @@ import {
 	setSetting
 } from '../store/settings.js';
 import { EventBus } from './events.js';
+import { actionRegistry, dispatch } from '../actions/index.js';
+import { listPendingProposals, type SendProposal } from '../store/proposals.js';
+import { hashApprovalText } from '../../shared/approval-hash.js';
 import type { Memory } from '../agent/memory/memory.js';
 import type { DraftProvider } from '../providers/provider.js';
 import type { ProviderDiscoverySnapshot } from '../providers/discovery.js';
@@ -2169,5 +2172,151 @@ describe('POST /api/dev/agent-demo (PL-A1 gated emitter)', () => {
 		expect(res.status).toBe(202);
 		await vi.waitFor(() => expect(seen).toContain('client-command'), { timeout: 2000 });
 		expect(seen).toContain('agent-part-updated');
+	});
+});
+
+/**
+ * PL-U3 — the proposal endpoints over HTTP. `propose-send` deliberately has no
+ * route: it is tool-only and reaches the registry through the MCP surface, so
+ * these tests drive it through the registry and assert the *frontend* half is
+ * the only thing that can queue anything.
+ */
+describe('proposal endpoints (PL-U3)', () => {
+	const JID = 'alice@s.whatsapp.net';
+
+	afterEach(async () => {
+		await app?.close();
+		app = undefined;
+		db?.close();
+		db = undefined;
+		if (dataDir) rmSync(dataDir, { recursive: true, force: true });
+		dataDir = undefined;
+	});
+
+	function seedChat(): void {
+		upsertChat(db!, { jid: JID, kind: '1:1', last_msg_at: 10 });
+		upsertMessage(db!, { id: 'in-1', chat_jid: JID, from_me: false, ts: 10, text: 'you around?' });
+	}
+
+	/**
+	 * The agent's side of the exchange. Dispatched directly with a `tool` caller
+	 * because there is no HTTP route for it — which is itself the point.
+	 */
+	async function propose(text: string): Promise<SendProposal> {
+		const result = await dispatch(
+			actionRegistry,
+			'propose-send',
+			{ chatJid: JID, text },
+			{
+				caller: 'tool',
+				deps: {
+					db: db!,
+					events: app!.events,
+					getConnectionStatus: () => ({ state: 'connected', qr: null }),
+					port: 0
+				}
+			}
+		);
+		expect(result).toMatchObject({ kind: 'json', status: 202 });
+		return listPendingProposals(db!, JID).at(-1)!;
+	}
+
+	it('lists pending proposals and confirms one into the outbox', async () => {
+		await startTestApp();
+		seedChat();
+		const proposal = await propose('Yes — seven works.');
+
+		const listed = await api('/api/proposals');
+		expect(listed.status).toBe(200);
+		expect(((await listed.json()) as { items: SendProposal[] }).items).toHaveLength(1);
+
+		const confirmed = await api(`/api/proposals/${proposal.id}/confirm`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ base_hash: hashApprovalText(proposal.text) })
+		});
+		expect(confirmed.status).toBe(202);
+		const rows = db!.prepare('SELECT * FROM outbox').all() as { text: string }[];
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.text).toBe('Yes — seven works.');
+	});
+
+	it('refuses a confirmation without a base hash, and queues nothing', async () => {
+		await startTestApp();
+		seedChat();
+		const proposal = await propose('Yes — seven works.');
+
+		const res = await api(`/api/proposals/${proposal.id}/confirm`, { method: 'POST' });
+		expect(res.status).toBe(400);
+		expect(db!.prepare('SELECT COUNT(*) AS n FROM outbox').get()).toEqual({ n: 0 });
+	});
+
+	it('rejects a proposal, and emits the decision on the event bus', async () => {
+		const events = new EventBus();
+		const seen: string[] = [];
+		events.subscribe((e) => seen.push(e.type));
+		await startTestApp(events);
+		seedChat();
+		const proposal = await propose('Yes — seven works.');
+		expect(seen).toContain('proposal-updated');
+
+		const res = await api(`/api/proposals/${proposal.id}/reject`, { method: 'POST' });
+		expect(res.status).toBe(200);
+		expect(listPendingProposals(db!, JID)).toHaveLength(0);
+		expect(db!.prepare('SELECT COUNT(*) AS n FROM outbox').get()).toEqual({ n: 0 });
+	});
+
+	it('refuses a cross-origin confirmation (localhost CSRF defence still applies)', async () => {
+		await startTestApp();
+		seedChat();
+		const proposal = await propose('Yes — seven works.');
+
+		const res = await api(`/api/proposals/${proposal.id}/confirm`, {
+			method: 'POST',
+			origin: 'http://evil.example',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ base_hash: hashApprovalText(proposal.text) })
+		});
+		expect(res.status).toBe(403);
+		expect(db!.prepare('SELECT COUNT(*) AS n FROM outbox').get()).toEqual({ n: 0 });
+	});
+});
+
+/** PL-U3 Half B over HTTP: a stale hash is refused and nothing is written. */
+describe('draft approval binds to the reviewed text (PL-U3)', () => {
+	const JID = 'alice@s.whatsapp.net';
+
+	afterEach(async () => {
+		await app?.close();
+		app = undefined;
+		db?.close();
+		db = undefined;
+		if (dataDir) rmSync(dataDir, { recursive: true, force: true });
+		dataDir = undefined;
+	});
+
+	it('409s a stale base_hash and leaves the outbox empty', async () => {
+		await startTestApp();
+		upsertChat(db!, { jid: JID, kind: '1:1', last_msg_at: 10 });
+		upsertMessage(db!, { id: 'basis', chat_jid: JID, from_me: false, ts: 10, text: 'q?' });
+		upsertDraft(db!, {
+			chat_jid: JID,
+			text: 'the text the owner read',
+			status: 'ready',
+			generated_at: 11,
+			basis_msg_id: 'basis'
+		});
+
+		const res = await api(`/api/chats/${encodeURIComponent(JID)}/draft/approve`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ base_hash: hashApprovalText('something the agent wrote later') })
+		});
+
+		expect(res.status).toBe(409);
+		const body = (await res.json()) as Record<string, unknown>;
+		expect(body.conflict).toBe('text-changed');
+		expect(body.current_text).toBe('the text the owner read');
+		expect(db!.prepare('SELECT COUNT(*) AS n FROM outbox').get()).toEqual({ n: 0 });
 	});
 });

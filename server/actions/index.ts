@@ -3,13 +3,16 @@ import type { ActionRegistry } from './dispatch.js';
 import { agentDemoAction } from './agent-demo.js';
 import { approveDraftAction } from './approve-draft.js';
 import { cancelOutboxAction } from './cancel-outbox.js';
+import { confirmProposalAction } from './confirm-proposal.js';
 import { deepenHistoryAction } from './deepen-history.js';
 import { editDraftAction } from './edit-draft.js';
 import { generateDraftAction } from './generate-draft.js';
 import { loadMediaAction } from './load-media.js';
 import { markReadAction } from './mark-read.js';
+import { proposeSendAction } from './propose-send.js';
 import { reactAction } from './react.js';
 import { refineDraftAction } from './refine-draft.js';
+import { rejectProposalAction } from './reject-proposal.js';
 import { refreshVoiceAction } from './refresh-voice.js';
 import { regeneratePairingAction } from './regenerate-pairing.js';
 import { saveVoiceAction } from './save-voice.js';
@@ -22,13 +25,16 @@ const actions: ActionDefinition<unknown>[] = [
 	agentDemoAction as ActionDefinition<unknown>,
 	approveDraftAction as ActionDefinition<unknown>,
 	cancelOutboxAction as ActionDefinition<unknown>,
+	confirmProposalAction as ActionDefinition<unknown>,
 	deepenHistoryAction as ActionDefinition<unknown>,
 	editDraftAction as ActionDefinition<unknown>,
 	generateDraftAction as ActionDefinition<unknown>,
 	loadMediaAction as ActionDefinition<unknown>,
 	markReadAction as ActionDefinition<unknown>,
+	proposeSendAction as ActionDefinition<unknown>,
 	reactAction as ActionDefinition<unknown>,
 	refineDraftAction as ActionDefinition<unknown>,
+	rejectProposalAction as ActionDefinition<unknown>,
 	refreshVoiceAction as ActionDefinition<unknown>,
 	regeneratePairingAction as ActionDefinition<unknown>,
 	saveVoiceAction as ActionDefinition<unknown>,

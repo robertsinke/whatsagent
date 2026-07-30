@@ -7,6 +7,7 @@ import {
 	type Message,
 	type OutboxRow,
 	type RefinementIntent,
+	type SendProposal,
 	type SessionView,
 	type AgentSessionView
 } from './types.js';
@@ -16,6 +17,11 @@ import {
 	type AgentPart
 } from '../../../shared/agent-events.js';
 import {
+	CONFLICT_TEXT_CHANGED,
+	hashApprovalText,
+	type DraftTextSource
+} from '../../../shared/approval-hash.js';
+import {
 	deriveUnreadBoundary,
 	deriveUnreadBoundaryFromCursor,
 	mergeMessages,
@@ -24,6 +30,9 @@ import {
 } from './view.js';
 
 const PAGE_SIZE = 60;
+
+/** Mirrors the server's approvable set — the only statuses a click can send. */
+const APPROVABLE_DRAFT_STATUSES: ReadonlySet<string> = new Set(['ready', 'stale', 'drafted']);
 
 /**
  * W4-U12. History sync writes chat and message rows straight to SQLite and
@@ -58,6 +67,30 @@ export type StalePrompt = {
 	latestInboundId: string | null;
 };
 
+/**
+ * PL-U3 Half B — the draft is no longer the text the owner read.
+ *
+ * Raised either by a `text-changed` 409, or locally when a `draft-updated`
+ * event carries text the owner has not acknowledged. Both hold the *new* text
+ * and the hash that goes with it: approving from here sends this hash, never
+ * one recomputed at click time, so the second click authorises the text this
+ * prompt actually displayed.
+ */
+export type TextConflictPrompt = {
+	chatJid: string;
+	text: string;
+	hash: string;
+	source: DraftTextSource;
+	/** True when the server refused a click; false when we caught it first. */
+	refused: boolean;
+};
+
+/** PL-U3 — a proposal whose confirmation the server refused as stale. */
+export type ProposalStalePrompt = {
+	proposalId: number;
+	latestInboundId: string;
+};
+
 export class AppState {
 	session = $state<SessionView>(EMPTY_SESSION);
 	chats = $state<Chat[]>([]);
@@ -70,6 +103,17 @@ export class AppState {
 	/** False once a page comes back short — otherwise "load earlier" never ends. */
 	hasMoreMessages = $state(false);
 	stalePrompt = $state<StalePrompt | null>(null);
+	/**
+	 * PL-U3 Half B — set when the open chat's draft changed under the owner.
+	 * While this is set, the approve buttons are not the owner's next action:
+	 * reading the new text is. See {@link acknowledgeDraftChange}.
+	 */
+	textConflict = $state<TextConflictPrompt | null>(null);
+	/** PL-U3 — pending agent proposals awaiting an owner decision. */
+	proposals = $state<SendProposal[]>([]);
+	proposalStalePrompt = $state<ProposalStalePrompt | null>(null);
+	/** Proposal id currently being confirmed/rejected, so the card can disable. */
+	decidingProposalId = $state<number | null>(null);
 	/**
 	 * True while a preview-only draft refinement request is in flight. The
 	 * editor stays open across success, failure, and 409; this flag only
@@ -170,6 +214,14 @@ export class AppState {
 	 * {@link deriveUnreadBoundary} is used as the fallback in that case.
 	 */
 	#cursorAtOpen: string | null = null;
+	/**
+	 * PL-U3 Half B — the hash of the draft text the owner has actually seen, per
+	 * chat. This is the whole guard: it is pinned when a draft is presented and
+	 * is NOT updated by an incoming `draft-updated`, because a silent re-pin is
+	 * exactly how "owner reads A, agent rewrites to B, owner approves B" used to
+	 * happen. Only {@link acknowledgeDraftChange} (an owner action) re-pins it.
+	 */
+	#reviewedDraftHash = new Map<string, string>();
 
 	constructor(options: { resyncDebounceMs?: number; resyncMaxWaitMs?: number } = {}) {
 		this.#resyncDebounceMs = options.resyncDebounceMs ?? RESYNC_DEBOUNCE_MS;
@@ -229,16 +281,20 @@ export class AppState {
 
 	async refresh(options: { preserveDeepenStatus?: boolean } = {}): Promise<void> {
 		try {
-			const [session, chats, outbox, sendMode] = await Promise.all([
+			const [session, chats, outbox, sendMode, proposals] = await Promise.all([
 				api.session().catch(() => EMPTY_SESSION),
 				api.chats(),
 				api.outbox(),
-				api.sendMode().catch(() => ({ live: false, dry_run: true }))
+				api.sendMode().catch(() => ({ live: false, dry_run: true })),
+				// A proposal outlives the socket that announced it, so the pending
+				// set is refetched rather than reconstructed from events.
+				api.proposals().catch(() => ({ items: [] as SendProposal[] }))
 			]);
 			this.session = session;
 			this.chats = chats;
 			this.outbox = outbox;
 			this.sendsLive = sendMode.live;
+			this.proposals = proposals.items;
 			// Session and chats have now both been seen — first-run can be decided.
 			this.hydrated = true;
 			if (this.selectedJid) {
@@ -322,6 +378,7 @@ export class AppState {
 			const draft = await api.draft(jid).catch(() => null);
 			if (epoch !== this.#conversationEpoch || this.selectedJid !== jid) return;
 			this.draft = draft;
+			this.#observeDraft(draft);
 			if (options.markRead !== false) {
 				const updated = await api.markRead(jid);
 				if (epoch !== this.#conversationEpoch || this.selectedJid !== jid) return;
@@ -433,29 +490,36 @@ export class AppState {
 	}
 
 	/**
-	 * Approve a draft. A 409 means the server saw newer inbound than the draft's
-	 * basis message — we surface a re-confirm prompt instead of sending, and we
-	 * never decide staleness ourselves.
+	 * Approve a draft. Two different 409s can come back and they are told apart
+	 * by `body.conflict`, never guessed: `stale-inbound` (the conversation moved
+	 * on) raises the re-read prompt, `text-changed` (the draft is not what was
+	 * on screen) raises the review prompt. Neither is retried automatically —
+	 * an automatic retry would re-authorise text the owner never saw, which is
+	 * the bug this whole path exists to prevent.
+	 *
+	 * `base_hash` is the pinned reviewed hash, not a hash of the text being
+	 * sent: the owner may have rewritten the message entirely, and the question
+	 * the server answers is whether the draft they started from still stands.
 	 */
 	async approveDraft(text?: string): Promise<boolean> {
 		const jid = this.selectedJid;
 		if (!jid) return false;
+		// A change we already caught locally must be acknowledged first; sending
+		// now would ship whatever arrived while the owner was reading.
+		if (this.textConflict && this.textConflict.chatJid === jid) return false;
 		try {
-			const { outbox, draft } = await api.approveDraft(jid, text);
+			const { outbox, draft } = await api.approveDraft(
+				jid,
+				text,
+				undefined,
+				this.#reviewedHashFor(jid)
+			);
 			this.#mergeOutbox(outbox);
-			this.draft = draft;
-			this.stalePrompt = null;
+			this.#applyApprovedDraft(draft);
 			return true;
 		} catch (err) {
 			if (err instanceof ApiError && err.status === 409) {
-				const stalePrompt = {
-					chatJid: jid,
-					basisMsgId: (err.body.basis_msg_id as string) ?? null,
-					latestInboundId: (err.body.latest_inbound_id as string) ?? null
-				};
-				await this.openChat(jid, { markRead: false });
-				if (this.selectedJid === jid) this.stalePrompt = stalePrompt;
-				return false;
+				return this.#applyApproveConflict(jid, err);
 			}
 			this.error = describeError(err);
 			return false;
@@ -466,23 +530,213 @@ export class AppState {
 	async confirmStaleDraft(text?: string): Promise<boolean> {
 		const prompt = this.stalePrompt;
 		if (!prompt || this.selectedJid !== prompt.chatJid || !prompt.latestInboundId) return false;
+		if (this.textConflict && this.textConflict.chatJid === prompt.chatJid) return false;
 		try {
 			const { outbox, draft } = await api.approveDraft(
 				prompt.chatJid,
 				text,
-				prompt.latestInboundId
+				prompt.latestInboundId,
+				this.#reviewedHashFor(prompt.chatJid)
 			);
 			this.#mergeOutbox(outbox);
-			this.draft = draft;
-			this.stalePrompt = null;
+			this.#applyApprovedDraft(draft);
 			return true;
 		} catch (err) {
 			if (err instanceof ApiError && err.status === 409) {
-				return this.approveDraft(text);
+				// Deliberately not a re-approve call: the old fallback re-issued the
+				// request and would now re-send a hash for text nobody re-read.
+				// Whichever conflict came back, the owner gets a prompt and decides.
+				return this.#applyApproveConflict(prompt.chatJid, err);
 			}
 			this.error = describeError(err);
 			return false;
 		}
+	}
+
+	/**
+	 * The owner has now read the changed draft. Re-pin the hash to what is on
+	 * screen, so the next click authorises *this* text. This is the only place
+	 * that advances a reviewed hash after the initial pin, and it exists only
+	 * as the result of an owner action.
+	 */
+	acknowledgeDraftChange(): void {
+		const prompt = this.textConflict;
+		if (!prompt) return;
+		this.#reviewedDraftHash.set(prompt.chatJid, prompt.hash);
+		if (this.draft?.chat_jid === prompt.chatJid && this.draft.text !== prompt.text) {
+			// The server's copy is authoritative over anything we cached.
+			this.draft = { ...this.draft, text: prompt.text };
+		}
+		this.textConflict = null;
+	}
+
+	/** Dismiss the prompt without adopting the new text — nothing is approved. */
+	dismissTextConflict(): void {
+		this.textConflict = null;
+	}
+
+	/** Pending proposals for the open chat — the only ones the pane renders. */
+	get selectedProposals(): SendProposal[] {
+		return this.proposals.filter((p) => p.chat_jid === this.selectedJid);
+	}
+
+	/**
+	 * PL-U3 — confirm an agent-proposed send. This is the click that creates the
+	 * outbox row; `propose-send` created nothing. The hash is taken from the
+	 * proposal text this client is holding (and therefore rendering), so a
+	 * server-side row that says something else is refused rather than sent.
+	 *
+	 * A stale 409 raises a prompt for a second, explicit confirmation carrying
+	 * the newer inbound id — the same contract as a stale draft.
+	 */
+	async confirmProposal(id: number, confirmedLatestInboundId?: string): Promise<boolean> {
+		const proposal = this.proposals.find((p) => p.id === id);
+		if (!proposal || this.decidingProposalId !== null) return false;
+		this.decidingProposalId = id;
+		try {
+			const { outbox, proposal: decided } = await api.confirmProposal(
+				id,
+				hashApprovalText(proposal.text),
+				confirmedLatestInboundId
+			);
+			this.#mergeOutbox(outbox);
+			this.proposals = this.proposals.filter((p) => p.id !== decided.id);
+			this.proposalStalePrompt = null;
+			return true;
+		} catch (err) {
+			if (err instanceof ApiError && err.status === 409) {
+				const latestInboundId = err.body.latest_inbound_id;
+				if (typeof latestInboundId === 'string') {
+					this.proposalStalePrompt = { proposalId: id, latestInboundId };
+				} else {
+					// Not stale: the proposal is gone or its text is not what we hold.
+					// Refetching is the honest answer — never re-hash and retry.
+					this.proposalStalePrompt = null;
+					this.error = describeError(err);
+					await this.refreshProposals();
+				}
+				return false;
+			}
+			this.error = describeError(err);
+			return false;
+		} finally {
+			this.decidingProposalId = null;
+		}
+	}
+
+	/** Second, explicit confirmation after the server called a proposal stale. */
+	async confirmStaleProposal(id: number): Promise<boolean> {
+		const prompt = this.proposalStalePrompt;
+		if (!prompt || prompt.proposalId !== id) return false;
+		return this.confirmProposal(id, prompt.latestInboundId);
+	}
+
+	async rejectProposal(id: number): Promise<boolean> {
+		if (this.decidingProposalId !== null) return false;
+		this.decidingProposalId = id;
+		try {
+			await api.rejectProposal(id);
+			this.proposals = this.proposals.filter((p) => p.id !== id);
+			if (this.proposalStalePrompt?.proposalId === id) this.proposalStalePrompt = null;
+			return true;
+		} catch (err) {
+			this.error = describeError(err);
+			return false;
+		} finally {
+			this.decidingProposalId = null;
+		}
+	}
+
+	async refreshProposals(): Promise<void> {
+		try {
+			this.proposals = (await api.proposals()).items;
+		} catch {
+			// Non-fatal: the WS event refills this, and a missing proposal card
+			// never causes a send.
+		}
+	}
+
+	#reviewedHashFor(jid: string): string | undefined {
+		const pinned = this.#reviewedDraftHash.get(jid);
+		if (pinned) return pinned;
+		// No pin (a draft that arrived before this chat was ever opened): fall
+		// back to what is currently on screen. That is still the text the owner
+		// is looking at right now, and the server re-checks it either way.
+		if (this.draft?.chat_jid === jid) return hashApprovalText(this.draft.text);
+		return undefined;
+	}
+
+	#pinReviewedDraft(draft: Draft | null): void {
+		if (!draft) return;
+		this.#reviewedDraftHash.set(draft.chat_jid, hashApprovalText(draft.text));
+	}
+
+	/**
+	 * Look at a draft the way the owner is about to. First sight pins the hash;
+	 * a later change to text they never acknowledged raises the review prompt
+	 * instead of quietly replacing what they were reading.
+	 *
+	 * Owner-sourced changes re-pin themselves. `text_source: 'owner'` can only
+	 * be written by a frontend dispatch (the dispatcher refuses `tool` on both
+	 * writers), so it is the owner's own edit arriving back over the socket —
+	 * prompting them to review their own typing would be noise, not safety.
+	 */
+	#observeDraft(draft: Draft | null): void {
+		if (!draft) return;
+		if (!APPROVABLE_DRAFT_STATUSES.has(draft.status) || !draft.text.trim()) return;
+		const hash = hashApprovalText(draft.text);
+		const pinned = this.#reviewedDraftHash.get(draft.chat_jid);
+		if (pinned === hash) {
+			if (this.textConflict?.chatJid === draft.chat_jid) this.textConflict = null;
+			return;
+		}
+		const ownerInitiated = draft.text_source === 'owner' || this.#generatingJid === draft.chat_jid;
+		if (pinned === undefined || ownerInitiated) {
+			this.#reviewedDraftHash.set(draft.chat_jid, hash);
+			if (this.textConflict?.chatJid === draft.chat_jid) this.textConflict = null;
+			return;
+		}
+		this.textConflict = {
+			chatJid: draft.chat_jid,
+			text: draft.text,
+			hash,
+			source: draft.text_source,
+			refused: false
+		};
+	}
+
+	#applyApprovedDraft(draft: Draft): void {
+		this.draft = draft;
+		this.stalePrompt = null;
+		this.textConflict = null;
+		this.#pinReviewedDraft(draft);
+	}
+
+	/** Route a 409 from the approve endpoint to the prompt it belongs to. */
+	async #applyApproveConflict(jid: string, err: ApiError): Promise<boolean> {
+		if (err.body.conflict === CONFLICT_TEXT_CHANGED) {
+			const text = typeof err.body.current_text === 'string' ? err.body.current_text : '';
+			this.textConflict = {
+				chatJid: jid,
+				text,
+				hash:
+					typeof err.body.current_hash === 'string'
+						? err.body.current_hash
+						: hashApprovalText(text),
+				source: (err.body.text_source as DraftTextSource) ?? 'system',
+				refused: true
+			};
+			this.stalePrompt = null;
+			return false;
+		}
+		const stalePrompt = {
+			chatJid: jid,
+			basisMsgId: (err.body.basis_msg_id as string) ?? null,
+			latestInboundId: (err.body.latest_inbound_id as string) ?? null
+		};
+		await this.openChat(jid, { markRead: false });
+		if (this.selectedJid === jid) this.stalePrompt = stalePrompt;
+		return false;
 	}
 
 	async skipDraft(): Promise<void> {
@@ -749,6 +1003,10 @@ export class AppState {
 				this.messages = replaceMessage(this.messages, event.message);
 				return;
 			case 'draft-updated':
+				// PL-U3 Half B: read the pin BEFORE settling the generate flag, or an
+				// owner-triggered generation and an agent rewrite become
+				// indistinguishable here.
+				if (event.draft.chat_jid === this.selectedJid) this.#observeDraft(event.draft);
 				// The run this owner asked for has produced a row — the card owns the
 				// progress display from here (it shimmers on 'drafting').
 				this.#settleGenerating(event.draft.chat_jid);
@@ -759,6 +1017,9 @@ export class AppState {
 				return;
 			case 'draft-removed':
 				this.#settleGenerating(event.chat_jid);
+				// The draft is gone, so there is nothing left to have reviewed.
+				this.#reviewedDraftHash.delete(event.chat_jid);
+				if (this.textConflict?.chatJid === event.chat_jid) this.textConflict = null;
 				if (event.chat_jid === this.selectedJid) this.draft = null;
 				this.chats = this.chats.map((c) =>
 					c.jid === event.chat_jid ? { ...c, draft_status: null } : c
@@ -766,6 +1027,21 @@ export class AppState {
 				return;
 			case 'outbox-updated':
 				this.#mergeOutbox(event.outbox);
+				return;
+			case 'proposal-updated':
+				this.proposals =
+					event.proposal.status === 'pending'
+						? [
+								...this.proposals.filter((p) => p.id !== event.proposal.id),
+								event.proposal
+							].sort((a, b) => a.id - b.id)
+						: this.proposals.filter((p) => p.id !== event.proposal.id);
+				if (
+					event.proposal.status !== 'pending' &&
+					this.proposalStalePrompt?.proposalId === event.proposal.id
+				) {
+					this.proposalStalePrompt = null;
+				}
 				return;
 			case 'send-mode':
 				this.sendsLive = event.live;

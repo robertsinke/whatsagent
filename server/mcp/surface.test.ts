@@ -14,7 +14,17 @@ import { actionRegistry, listActionsForCaller } from '../actions/index.js';
 import { mcpTokenPath } from './token.js';
 import { isMcpEnabled, MCP_PATH } from './surface.js';
 
-const REFUSED = ['send', 'approve-draft', 'react', 'set-send-mode', 'set-setting'] as const;
+const REFUSED = [
+	'send',
+	'approve-draft',
+	'react',
+	'set-send-mode',
+	'set-setting',
+	// PL-U3: an agent may *propose* a send; confirming or discarding one is the
+	// owner's click and must not appear on this surface at all.
+	'confirm-proposal',
+	'reject-proposal'
+] as const;
 
 let dataDir: string | undefined;
 let app: App | undefined;
@@ -178,6 +188,10 @@ describe('MCP surface — registry tools', () => {
 				.map((a) => a.name)
 				.sort();
 			expect(names).toEqual(expected);
+			// PL-U3: a correctly-declared tool-only action appears here with no
+			// edit to this surface. `propose-send` is the proof — it was added to
+			// the registry alone.
+			expect(names).toContain('propose-send');
 			for (const refused of REFUSED) {
 				expect(names).not.toContain(refused);
 			}

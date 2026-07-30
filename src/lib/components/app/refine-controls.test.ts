@@ -11,6 +11,7 @@ function draft(overrides: Partial<Draft> = {}): Draft {
 		provider: 'fake',
 		basis_msg_id: 'a1',
 		original_text: 'Yes, seven works for me.',
+		text_source: 'system',
 		...overrides
 	};
 }

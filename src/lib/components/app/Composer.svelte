@@ -3,9 +3,14 @@
 	import * as InputGroup from '$lib/components/ui/input-group/index.js';
 	import { Spinner } from '$lib/components/ui/spinner/index.js';
 	import { senderLabel } from '$lib/client/view.js';
-	import type { Draft, Message, RefinementIntent } from '$lib/client/types.js';
-	import type { StalePrompt } from '$lib/client/state.svelte.js';
+	import type { Draft, Message, RefinementIntent, SendProposal } from '$lib/client/types.js';
+	import type {
+		ProposalStalePrompt,
+		StalePrompt,
+		TextConflictPrompt
+	} from '$lib/client/state.svelte.js';
 	import DraftStatus from './DraftStatus.svelte';
+	import ProposalCard from './ProposalCard.svelte';
 
 	let {
 		value = $bindable(''),
@@ -16,6 +21,10 @@
 		onsend,
 		draft = null,
 		stalePrompt = null,
+		textConflict = null,
+		proposals = [],
+		proposalStalePrompt = null,
+		decidingProposalId = null,
 		agentEligible = false,
 		refining = false,
 		refineError = null,
@@ -25,6 +34,10 @@
 		onskip,
 		onconfirmstale,
 		ondismissstale,
+		onreviewchange,
+		ondismisschange,
+		onconfirmproposal,
+		onrejectproposal,
 		onrefine,
 		ongenerate
 	}: {
@@ -36,6 +49,11 @@
 		onsend?: (text: string) => boolean | void | Promise<boolean | void>;
 		draft?: Draft | null;
 		stalePrompt?: StalePrompt | null;
+		textConflict?: TextConflictPrompt | null;
+		/** PL-U3 — agent-proposed sends awaiting this owner's decision. */
+		proposals?: SendProposal[];
+		proposalStalePrompt?: ProposalStalePrompt | null;
+		decidingProposalId?: number | null;
 		agentEligible?: boolean;
 		refining?: boolean;
 		refineError?: string | null;
@@ -45,6 +63,10 @@
 		onskip?: () => void;
 		onconfirmstale?: (text?: string) => boolean | void | Promise<boolean | void>;
 		ondismissstale?: () => void;
+		onreviewchange?: () => void;
+		ondismisschange?: () => void;
+		onconfirmproposal?: (id: number) => void | Promise<unknown>;
+		onrejectproposal?: (id: number) => void | Promise<unknown>;
 		onrefine?: (intent: RefinementIntent, text?: string) => Promise<Draft | null>;
 		ongenerate?: () => void | Promise<unknown>;
 	} = $props();
@@ -107,9 +129,23 @@
   behaviour; this shell only owns the shared border.
 -->
 <div class="composer">
+	<!--
+	  PL-U3: proposals sit above the draft card because they are the newer claim
+	  on the owner's attention, and because confirming one is a send.
+	-->
+	{#each proposals as proposal (proposal.id)}
+		<ProposalCard
+			{proposal}
+			stale={proposalStalePrompt?.proposalId === proposal.id}
+			deciding={decidingProposalId === proposal.id}
+			onconfirm={() => onconfirmproposal?.(proposal.id)}
+			onreject={() => onrejectproposal?.(proposal.id)}
+		/>
+	{/each}
 	<DraftStatus
 		{draft}
 		{stalePrompt}
+		{textConflict}
 		{agentEligible}
 		{refining}
 		{refineError}
@@ -119,6 +155,8 @@
 		{onskip}
 		{onconfirmstale}
 		{ondismissstale}
+		{onreviewchange}
+		{ondismisschange}
 		{onrefine}
 		{ongenerate}
 	/>

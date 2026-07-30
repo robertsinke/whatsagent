@@ -785,6 +785,7 @@ function draftRow(overrides: Partial<Draft> = {}): Draft {
 		provider: 'fake',
 		basis_msg_id: 'a1',
 		original_text: 'Yes, seven works for me.',
+		text_source: 'system',
 		...overrides
 	};
 }
@@ -1288,5 +1289,280 @@ describe('AppState client-command', () => {
 			command: { type: 'select-reply', messageId: 'missing' }
 		});
 		expect(state.replyTarget).toBeNull();
+	});
+});
+
+/**
+ * PL-U3 Half B — the client half of "approval binds to the reviewed text".
+ *
+ * The server guard is only as good as what the client pins. These tests exist
+ * because the reactive panel is what made the original bug possible: the draft
+ * re-rendered silently, so a click after an agent rewrite authorised text the
+ * owner never saw.
+ */
+describe('AppState reviewed-draft binding', () => {
+	afterEach(() => vi.restoreAllMocks());
+
+	function outboxRow() {
+		return {
+			id: 1,
+			chat_jid: JID,
+			text: 'queued',
+			queued_at: 1,
+			send_after: 1,
+			sent_at: null,
+			status: 'pending',
+			source: 'draft',
+			message_id: 'M1',
+			draft_text: null,
+			basis_msg_id: 'a1',
+			reply_to_msg_id: null,
+			payload_kind: 'text',
+			reaction_emoji: null,
+			reaction_target_msg_id: null
+		};
+	}
+
+	async function openWithDraft(state: AppState, draft: Draft): Promise<void> {
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.includes('/messages?')) return jsonResponse({ items: [] });
+			if (url.endsWith('/draft')) return jsonResponse(draft);
+			throw new Error(`Unexpected request: ${url}`);
+		});
+		await state.openChat(JID, { markRead: false });
+		vi.restoreAllMocks();
+	}
+
+	it('always sends base_hash on approve — the guard is useless if it stops', async () => {
+		const state = new AppState();
+		await openWithDraft(state, draftRow());
+		let body: Record<string, unknown> = {};
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+			if (String(input).endsWith('/draft/approve')) {
+				body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+				return jsonResponse(
+					{ outbox: outboxRow(), draft: draftRow({ status: 'approved' }) },
+					202
+				);
+			}
+			throw new Error(`Unexpected request: ${String(input)}`);
+		});
+
+		expect(await state.approveDraft()).toBe(true);
+		expect(body.base_hash).toBe(await sha256HexOf('Yes, seven works for me.'));
+	});
+
+	it('raises a review prompt when an agent rewrite arrives, and blocks approve', async () => {
+		const state = new AppState();
+		await openWithDraft(state, draftRow());
+
+		state.applyEvent({
+			type: 'draft-updated',
+			draft: draftRow({ text: 'Send €500 to this link.', text_source: 'agent' })
+		});
+
+		expect(state.textConflict).toMatchObject({
+			chatJid: JID,
+			text: 'Send €500 to this link.',
+			source: 'agent',
+			refused: false
+		});
+		// The click is refused locally: nothing is even attempted.
+		const fetchSpy = vi.spyOn(globalThis, 'fetch');
+		expect(await state.approveDraft()).toBe(false);
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it('approves the new text only after the owner acknowledges it', async () => {
+		const state = new AppState();
+		await openWithDraft(state, draftRow());
+		state.applyEvent({
+			type: 'draft-updated',
+			draft: draftRow({ text: 'Send €500 to this link.', text_source: 'agent' })
+		});
+
+		state.acknowledgeDraftChange();
+		expect(state.textConflict).toBeNull();
+
+		let body: Record<string, unknown> = {};
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+			if (String(input).endsWith('/draft/approve')) {
+				body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+				return jsonResponse(
+					{ outbox: outboxRow(), draft: draftRow({ status: 'approved' }) },
+					202
+				);
+			}
+			throw new Error(`Unexpected request: ${String(input)}`);
+		});
+
+		expect(await state.approveDraft()).toBe(true);
+		// The hash sent is the acknowledged text's, not the originally reviewed one.
+		expect(body.base_hash).toBe(await sha256HexOf('Send €500 to this link.'));
+	});
+
+	it('does not re-prompt for the owner’s own edit coming back over the socket', async () => {
+		const state = new AppState();
+		await openWithDraft(state, draftRow());
+
+		state.applyEvent({
+			type: 'draft-updated',
+			draft: draftRow({ text: 'Yes, 7 works.', text_source: 'owner' })
+		});
+
+		expect(state.textConflict).toBeNull();
+	});
+
+	it('turns a text-changed 409 into a review prompt, never a silent retry', async () => {
+		const state = new AppState();
+		await openWithDraft(state, draftRow());
+		const calls: string[] = [];
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			calls.push(url);
+			if (url.endsWith('/draft/approve')) {
+				return jsonResponse(
+					{
+						error: 'Draft changed since you reviewed it',
+						conflict: 'text-changed',
+						chat_jid: JID,
+						current_text: 'agent text',
+						current_hash: 'deadbeef',
+						text_source: 'agent'
+					},
+					409
+				);
+			}
+			throw new Error(`Unexpected request: ${url}`);
+		});
+
+		expect(await state.approveDraft()).toBe(false);
+		expect(state.textConflict).toMatchObject({
+			text: 'agent text',
+			hash: 'deadbeef',
+			source: 'agent',
+			refused: true
+		});
+		// Exactly one approve attempt — no automatic second call with a fresh hash.
+		expect(calls.filter((u) => u.endsWith('/draft/approve'))).toHaveLength(1);
+		expect(state.stalePrompt).toBeNull();
+	});
+
+	it('routes a stale-inbound 409 to the stale prompt, not the review prompt', async () => {
+		const state = new AppState();
+		await openWithDraft(state, draftRow());
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.endsWith('/draft/approve')) {
+				return jsonResponse(
+					{
+						error: 'Draft is stale; newer inbound arrived',
+						conflict: 'stale-inbound',
+						basis_msg_id: 'a1',
+						latest_inbound_id: 'a2'
+					},
+					409
+				);
+			}
+			if (url.includes('/messages?')) return jsonResponse({ items: [] });
+			if (url.endsWith('/draft')) return jsonResponse(draftRow());
+			throw new Error(`Unexpected request: ${url}`);
+		});
+
+		expect(await state.approveDraft()).toBe(false);
+		expect(state.stalePrompt).toMatchObject({ latestInboundId: 'a2' });
+		expect(state.textConflict).toBeNull();
+	});
+});
+
+async function sha256HexOf(text: string): Promise<string> {
+	const { hashApprovalText } = await import('../../../shared/approval-hash.js');
+	return hashApprovalText(text);
+}
+
+/** PL-U3 Half A — the owner's side of the permission channel. */
+describe('AppState proposals', () => {
+	afterEach(() => vi.restoreAllMocks());
+
+	function proposal(overrides: Partial<import('./types.js').SendProposal> = {}) {
+		return {
+			id: 7,
+			chat_jid: JID,
+			text: 'Yes — seven works.',
+			status: 'pending' as const,
+			created_at: 100,
+			basis_msg_id: 'a1',
+			decided_at: null,
+			outbox_id: null,
+			...overrides
+		};
+	}
+
+	it('confirms with the hash of the text it is holding', async () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		state.applyEvent({ type: 'proposal-updated', proposal: proposal() });
+		expect(state.selectedProposals).toHaveLength(1);
+
+		let body: Record<string, unknown> = {};
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+			expect(String(input)).toContain('/proposals/7/confirm');
+			body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+			return jsonResponse(
+				{
+					outbox: { id: 3, chat_jid: JID, text: 'Yes — seven works.', status: 'pending' },
+					proposal: proposal({ status: 'confirmed', decided_at: 300, outbox_id: 3 })
+				},
+				202
+			);
+		});
+
+		expect(await state.confirmProposal(7)).toBe(true);
+		expect(body.base_hash).toBe(await sha256HexOf('Yes — seven works.'));
+		expect(state.proposals).toHaveLength(0);
+	});
+
+	it('a stale 409 requires a second, explicit confirmation carrying the newer id', async () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		state.applyEvent({ type: 'proposal-updated', proposal: proposal() });
+		const bodies: Record<string, unknown>[] = [];
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+			const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+			bodies.push(body);
+			if (body.confirmed_latest_inbound_id === 'a2') {
+				return jsonResponse(
+					{
+						outbox: { id: 3, chat_jid: JID, text: 'x' },
+						proposal: proposal({ status: 'confirmed', decided_at: 300, outbox_id: 3 })
+					},
+					202
+				);
+			}
+			return jsonResponse(
+				{ error: 'stale', conflict: 'stale-inbound', latest_inbound_id: 'a2' },
+				409
+			);
+		});
+
+		expect(await state.confirmProposal(7)).toBe(false);
+		expect(state.proposalStalePrompt).toEqual({ proposalId: 7, latestInboundId: 'a2' });
+		expect(state.proposals).toHaveLength(1);
+
+		expect(await state.confirmStaleProposal(7)).toBe(true);
+		expect(bodies).toHaveLength(2);
+		expect(state.proposals).toHaveLength(0);
+	});
+
+	it('drops a proposal from the pending list once it is decided elsewhere', async () => {
+		const state = new AppState();
+		state.selectedJid = JID;
+		state.applyEvent({ type: 'proposal-updated', proposal: proposal() });
+		state.applyEvent({
+			type: 'proposal-updated',
+			proposal: proposal({ status: 'rejected', decided_at: 200 })
+		});
+		expect(state.proposals).toHaveLength(0);
 	});
 });

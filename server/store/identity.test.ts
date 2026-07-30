@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { getChat, listChats, upsertChat } from './chats.js';
 import { linkContactIdentity } from './contacts.js';
-import { migrate, openDatabase, type AppDatabase } from './db.js';
+import { openDatabase, type AppDatabase } from './db.js';
+import { MIGRATIONS } from './migrations.generated.js';
 import { getDraft, upsertDraft } from './drafts.js';
 import { canonicalChatJid, linkIdentityAndMergeChats, mergeChats } from './identity.js';
 import { listMessages, upsertMessage, upsertMessageReaction } from './messages.js';
@@ -216,14 +217,20 @@ describe('linkIdentityAndMergeChats', () => {
 
 describe('migration 011', () => {
 	/**
-	 * Re-runs the real migration through the real runner: the temp DB is already
-	 * at the current version, so the recorded high-water mark is rolled back and
-	 * `migrate()` replays 011 over seeded duplicate rows. Asserting the SQL
-	 * itself matters — it repairs the owner's live database exactly once.
+	 * Re-runs the real 011 SQL — the file itself, from the generated bundle —
+	 * over seeded duplicate rows. Asserting the SQL matters: it repairs the
+	 * owner's live database exactly once.
+	 *
+	 * It replays that one migration rather than rolling the high-water mark back
+	 * to 10 and calling `migrate()`, because the runner would then also replay
+	 * everything above it, and later migrations are not written to run twice
+	 * (012's `ALTER TABLE drafts ADD COLUMN` fails outright on a second pass).
+	 * Replaying one file is also the more honest test of one file's SQL.
 	 */
 	function replayMigration011(database: AppDatabase): void {
-		database.prepare('DELETE FROM schema_version WHERE version >= 11').run();
-		migrate(database);
+		const migration = MIGRATIONS.find((m) => m.version === 11);
+		if (!migration) throw new Error('migration 011 is missing from the generated bundle');
+		database.exec(migration.sql);
 	}
 
 	it('merges a duplicated pair carrying drafts and outbox rows, losing nothing', () => {

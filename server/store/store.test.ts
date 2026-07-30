@@ -64,6 +64,7 @@ describe('migrations', () => {
 			'messages',
 			'outbox',
 			'schema_version',
+			'send_proposals',
 			'settings',
 			'wa_auth_creds',
 			'wa_auth_keys'

@@ -6,6 +6,7 @@ import {
 	type OutboxRow,
 	type ProvidersResponse,
 	type RefinementIntent,
+	type SendProposal,
 	type SessionView
 } from './types.js';
 
@@ -109,11 +110,21 @@ export const api = {
 		}),
 
 	/**
-	 * Approve → outbox. Throws `ApiError` with status 409 when the server has
-	 * newer inbound than the draft's basis message; the caller must re-confirm
-	 * rather than send. Staleness is never inferred client-side.
+	 * Approve → outbox. Throws `ApiError` with status 409 in two distinct cases,
+	 * told apart by `body.conflict`: `stale-inbound` (newer inbound than the
+	 * draft's basis message) and `text-changed` (the stored draft is no longer
+	 * the text `baseHash` was taken from). Neither is ever inferred client-side,
+	 * and neither may be retried automatically.
+	 *
+	 * `baseHash` is the hash of the draft text the owner *reviewed*, which is
+	 * not necessarily the `text` being sent — the owner may have rewritten it.
 	 */
-	approveDraft: (jid: string, text?: string, confirmedLatestInboundId?: string) =>
+	approveDraft: (
+		jid: string,
+		text?: string,
+		confirmedLatestInboundId?: string,
+		baseHash?: string
+	) =>
 		request<{ outbox: OutboxRow; draft: Draft }>(
 			`/chats/${encodeURIComponent(jid)}/draft/approve`,
 			{
@@ -122,10 +133,33 @@ export const api = {
 					...(text === undefined ? {} : { text }),
 					...(confirmedLatestInboundId
 						? { confirmed_latest_inbound_id: confirmedLatestInboundId }
-						: {})
+						: {}),
+					...(baseHash ? { base_hash: baseHash } : {})
 				})
 			}
 		),
+
+	/** PL-U3 — pending proposals, for the first paint after a reload. */
+	proposals: () => request<{ items: SendProposal[] }>('/proposals'),
+
+	/**
+	 * PL-U3 — the owner's confirmation. This is the call that creates the outbox
+	 * row for an agent-proposed send; `base_hash` is mandatory, so a proposal
+	 * cannot be confirmed without naming the text that was on screen.
+	 */
+	confirmProposal: (id: number, baseHash: string, confirmedLatestInboundId?: string) =>
+		request<{ outbox: OutboxRow; proposal: SendProposal }>(`/proposals/${id}/confirm`, {
+			method: 'POST',
+			body: JSON.stringify({
+				base_hash: baseHash,
+				...(confirmedLatestInboundId
+					? { confirmed_latest_inbound_id: confirmedLatestInboundId }
+					: {})
+			})
+		}),
+
+	rejectProposal: (id: number) =>
+		request<{ proposal: SendProposal }>(`/proposals/${id}/reject`, { method: 'POST' }),
 
 	skipDraft: (jid: string) =>
 		request<{ ok: true; chat: Chat }>(`/chats/${encodeURIComponent(jid)}/draft/skip`, {

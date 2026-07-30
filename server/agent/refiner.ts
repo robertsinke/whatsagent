@@ -1,3 +1,4 @@
+import type { DraftTextSource } from '../../shared/approval-hash.js';
 import { getChat } from '../store/chats.js';
 import type { AppDatabase } from '../store/db.js';
 import { getDraft, upsertDraft, type Draft } from '../store/drafts.js';
@@ -17,6 +18,13 @@ export type RefineDraftRequest = {
 	chatJid: string;
 	intent: RefinementIntent;
 	preview?: string;
+	/**
+	 * PL-U3: who asked for this refinement. The provider writes the words either
+	 * way, but the owner's question at approval time is *who caused my draft to
+	 * change*, and "the agent asked for a shorter version" is a different answer
+	 * from "I clicked shorter". Defaults to `system`.
+	 */
+	requestedBy?: DraftTextSource;
 };
 
 export type RefinementAttempt =
@@ -97,7 +105,8 @@ export async function refineDraft(
 				provider: options.providerName,
 				basis_msg_id: basisMsgId,
 				error_code: null,
-				original_text: result.text
+				original_text: result.text,
+				text_source: request.requestedBy ?? 'system'
 			});
 			return getDraft(options.db, request.chatJid);
 		});

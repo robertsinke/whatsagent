@@ -60,6 +60,31 @@ describe('draftPanelBranch', () => {
 		}
 	});
 
+	it('ranks an unreviewed text change above the stale prompt', () => {
+		// Both prompts can be live at once. The stale branch's own button queues
+		// the current draft, so if it rendered first the owner could confirm
+		// staleness and ship text they never read — PL-U3's whole subject.
+		expect(
+			draftPanelBranch({
+				draft: { status: 'ready' },
+				stalePrompt: { chatJid: 'a', basisMsgId: 'x', latestInboundId: 'y' },
+				textConflict: { chatJid: 'a', text: 'agent text', hash: 'h', source: 'agent' },
+				agentEligible: true
+			})
+		).toBe('text-changed');
+	});
+
+	it('falls back to the visible draft when nothing is contested', () => {
+		expect(
+			draftPanelBranch({
+				draft: { status: 'ready' },
+				stalePrompt: null,
+				textConflict: null,
+				agentEligible: true
+			})
+		).toBe('visible');
+	});
+
 	it('hides the panel for groups even with a terminal draft', () => {
 		expect(
 			draftPanelBranch({

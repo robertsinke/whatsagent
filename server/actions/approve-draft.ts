@@ -1,3 +1,9 @@
+import {
+	approvalHashMatches,
+	CONFLICT_STALE_INBOUND,
+	CONFLICT_TEXT_CHANGED,
+	hashApprovalText
+} from '../../shared/approval-hash.js';
 import { getChat } from '../store/chats.js';
 import { getDraft, upsertDraft } from '../store/drafts.js';
 import { recordDraftFeedback } from '../store/draft-feedback.js';
@@ -11,11 +17,31 @@ export type ApproveDraftInput = {
 	chatJid: string;
 	text?: string;
 	confirmed_latest_inbound_id?: string;
+	base_hash?: string;
 };
 
 /**
  * Approve draft → outbox. Outbound effect — callers: frontend only.
  * Stale-confirm variant uses confirmed_latest_inbound_id (same action).
+ *
+ * PL-U3 Half B — `base_hash` is what makes the click mean something.
+ *
+ * It hashes the draft the owner *reviewed*, not the text being sent: the owner
+ * may retype the message entirely, and the question this guard answers is
+ * "did the thing you were looking at change underneath you", exactly as
+ * `save-voice`'s `baseHash` does for the voice document.
+ * `basis_msg_id` detects that the *conversation* moved; it says nothing about
+ * the draft itself moving. `edit-draft` and `refine-draft` are tool-permitted,
+ * so an agent may rewrite a draft while the owner is reading it, the panel
+ * re-renders on `draft-updated`, and the next click would queue text the owner
+ * never saw. The hash of the rendered text closes that: a mismatch is a 409
+ * carrying the current text, and nothing is written.
+ *
+ * It is optional only because callers predating PL-U3 omit it, and every such
+ * caller is by definition a frontend one (the dispatcher refuses `tool` here
+ * before parse). The shipped client always sends it — `state.svelte.ts` has a
+ * test asserting that, because an optional guard that the real client silently
+ * stopped sending would be no guard at all.
  */
 export const approveDraftAction: ActionDefinition<ApproveDraftInput> = {
 	name: 'approve-draft',
@@ -25,7 +51,8 @@ export const approveDraftAction: ActionDefinition<ApproveDraftInput> = {
 		properties: {
 			chatJid: { type: 'string' },
 			text: { type: 'string' },
-			confirmed_latest_inbound_id: { type: 'string' }
+			confirmed_latest_inbound_id: { type: 'string' },
+			base_hash: { type: 'string' }
 		},
 		required: ['chatJid'],
 		additionalProperties: false
@@ -38,10 +65,14 @@ export const approveDraftAction: ActionDefinition<ApproveDraftInput> = {
 					chatJid?: unknown;
 					text?: string;
 					confirmed_latest_inbound_id?: string;
+					base_hash?: unknown;
 			  }
 			| undefined;
 		if (typeof body?.chatJid !== 'string' || !body.chatJid) {
 			return parseError(400, 'Expected { chatJid }');
+		}
+		if (body.base_hash !== undefined && typeof body.base_hash !== 'string') {
+			return parseError(400, 'Expected base_hash to be a string');
 		}
 		return {
 			ok: true,
@@ -50,7 +81,8 @@ export const approveDraftAction: ActionDefinition<ApproveDraftInput> = {
 				...(body.text !== undefined ? { text: body.text } : {}),
 				...(body.confirmed_latest_inbound_id !== undefined
 					? { confirmed_latest_inbound_id: body.confirmed_latest_inbound_id }
-					: {})
+					: {}),
+				...(typeof body.base_hash === 'string' ? { base_hash: body.base_hash } : {})
 			}
 		};
 	},
@@ -75,8 +107,22 @@ export const approveDraftAction: ActionDefinition<ApproveDraftInput> = {
 			input.confirmed_latest_inbound_id !== latestInbound.id
 		) {
 			return actionError(409, 'Draft is stale; newer inbound arrived', {
+				conflict: CONFLICT_STALE_INBOUND,
 				basis_msg_id: existing.basis_msg_id,
 				latest_inbound_id: latestInbound.id
+			});
+		}
+		// Half B. Nothing is written on this branch — the response carries the
+		// current text so the UI can show what changed and ask again. Re-hashing
+		// and retrying automatically would reintroduce the exact bug, so the 409
+		// names who changed it and the owner has to look.
+		if (input.base_hash !== undefined && !approvalHashMatches(existing.text, input.base_hash)) {
+			return actionError(409, 'Draft changed since you reviewed it', {
+				conflict: CONFLICT_TEXT_CHANGED,
+				chat_jid: input.chatJid,
+				current_text: existing.text,
+				current_hash: hashApprovalText(existing.text),
+				text_source: existing.text_source
 			});
 		}
 		const text = (input.text ?? existing.text).trim();
@@ -101,7 +147,9 @@ export const approveDraftAction: ActionDefinition<ApproveDraftInput> = {
 				basis_msg_id: existing.basis_msg_id,
 				created_at: now
 			});
-			upsertDraft(db, { ...existing, text, status: 'approved' });
+			// The approved text is by definition owner-reviewed, whether they typed
+			// it or accepted what was there.
+			upsertDraft(db, { ...existing, text, status: 'approved', text_source: 'owner' });
 			return { row: getOutbox(db, id)!, draft: getDraft(db, input.chatJid)! };
 		});
 		const { row, draft } = approve();

@@ -5,6 +5,14 @@ import { actionError, actionJson, parseError } from './types.js';
 
 export type EditDraftInput = { chatJid: string; text: string };
 
+/**
+ * Tool-permitted deliberately: PL-U3 did not close this door, because making a
+ * draft shorter is a capability the owner asked for. What PL-U3 added is that
+ * an edit here is recorded as `text_source: 'agent'`, and an unreviewed change
+ * invalidates a prior review — see the `base_hash` contract in
+ * `approve-draft.ts`. The mutation is allowed; passing it off as reviewed is
+ * not.
+ */
 export const editDraftAction: ActionDefinition<EditDraftInput> = {
 	name: 'edit-draft',
 	callers: ['frontend', 'tool'],
@@ -40,7 +48,11 @@ export const editDraftAction: ActionDefinition<EditDraftInput> = {
 		if (!['ready', 'stale', 'drafted'].includes(existing.status)) {
 			return actionError(409, 'Draft is not editable', { status: existing.status });
 		}
-		upsertDraft(db, { ...existing, text: input.text });
+		upsertDraft(db, {
+			...existing,
+			text: input.text,
+			text_source: ctx.caller === 'tool' ? 'agent' : 'owner'
+		});
 		const draft = getDraft(db, input.chatJid)!;
 		events.emit({ type: 'draft-updated', draft });
 		return actionJson(200, draft);

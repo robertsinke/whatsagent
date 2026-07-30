@@ -176,6 +176,10 @@
 								placeholder={`Message ${chatTitle}`}
 								draft={app.draft}
 								stalePrompt={app.stalePrompt}
+								textConflict={app.textConflict}
+								proposals={app.selectedProposals}
+								proposalStalePrompt={app.proposalStalePrompt}
+								decidingProposalId={app.decidingProposalId}
 								agentEligible={app.selectedChat.kind === '1:1'}
 								refining={app.refining}
 								refineError={app.refineError}
@@ -183,6 +187,13 @@
 								onconfirmstale={(text) => app.confirmStaleDraft(text)}
 								onskip={() => app.skipDraft()}
 								ondismissstale={() => (app.stalePrompt = null)}
+								onreviewchange={() => app.acknowledgeDraftChange()}
+								ondismisschange={() => app.dismissTextConflict()}
+								onconfirmproposal={(id) =>
+									app.proposalStalePrompt?.proposalId === id
+										? app.confirmStaleProposal(id)
+										: app.confirmProposal(id)}
+								onrejectproposal={(id) => app.rejectProposal(id)}
 								onrefine={(intent, text) => app.refineDraft(intent, text)}
 								generating={app.generating}
 								generateError={app.generateError}
