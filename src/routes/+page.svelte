@@ -120,9 +120,11 @@
 						session={app.session}
 						socketConnected={app.connected}
 						outbox={app.outbox}
+						cancellationNotices={app.cancellationNotices}
 						agentCollapsed={agentCollapsed}
 						ontoggleagent={toggleAgent}
 						oncancel={(id) => app.cancelOutbox(id)}
+						ondismissnotice={(id) => app.dismissCancellationNotice(id)}
 						onselect={openChat}
 					/>
 				</section>

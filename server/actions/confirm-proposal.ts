@@ -111,6 +111,17 @@ export const confirmProposalAction: ActionDefinition<ConfirmProposalInput> = {
 		// `decideProposal` is conditional on the row still being pending, so a
 		// double click (or a click racing a reject) enqueues once or not at all —
 		// the outbox insert only happens on the branch that won.
+		//
+		// MANUAL-PACED BY OWNER DECISION (PL-U5 Decision 4), not an oversight.
+		// A confirmed proposal enqueues through `enqueueManualOutbox`, so
+		// `send_after` is now and `deferPendingDrafts` only defers source=draft
+		// rows — several rapid confirmations are therefore not spaced by the
+		// jittered gap. The owner left this as manual-paced on the grounds that
+		// a confirmed proposal is equivalent to an owner-typed send and the
+		// click is the rate limit. If this is revisited, switch to draft-source
+		// enqueue carrying `basis_msg_id`: that brings both the jittered gap and
+		// the pacer's send-time staleness re-check. Do not "fix" the manual
+		// path without reopening that decision.
 		const confirm = db.transaction(() => {
 			if (!decideProposal(db, { id: proposal.id, status: 'confirmed', now })) return null;
 			const outboxId = enqueueManualOutbox(db, {

@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -71,6 +71,22 @@ export type VoiceDocumentView = {
 	mirrorGuard: boolean;
 };
 
+/**
+ * PL-U5 — an agent suggestion for the voice document. Inert until the owner
+ * promotes it: the sidecar never writes the document body, and promotion is a
+ * separate frontend-only action. Same shape as a send proposal for the same
+ * reason — the agent may ask; only a click may change the durable thing.
+ */
+export type VoiceSuggestion = {
+	id: string;
+	text: string;
+	/** ISO timestamp. Diagnostic; never an input to a guard. */
+	createdAt: string;
+};
+
+/** How many un-acted-on suggestions one stem may hold. Same rationale as proposals. */
+export const MAX_PENDING_VOICE_SUGGESTIONS = 5;
+
 /** Reads and mirrors the voice markdown documents. Never throws on a missing file. */
 export class VoiceFiles {
 	readonly #dir: string;
@@ -90,6 +106,16 @@ export class VoiceFiles {
 	/** Sidecar recording an owner edit. Absent = no guard armed. */
 	ownerEditPathFor(stem: string): string {
 		return join(this.#dir, `${stem}.owner.json`);
+	}
+
+	/**
+	 * PL-U5 — pending agent suggestions. A JSON array beside the document, not
+	 * a table: the voice area already lives on disk, suggestions are only ever
+	 * read from Settings next to that document, and a sidecar costs no migration.
+	 * Absent = none pending.
+	 */
+	suggestionsPathFor(stem: string): string {
+		return join(this.#dir, `${stem}.suggestions.json`);
 	}
 
 	/**
@@ -245,6 +271,69 @@ export class VoiceFiles {
 		rmSync(this.ownerEditPathFor(stem), { force: true });
 	}
 
+	/** Never throws: absent or corrupt reads as an empty list. */
+	listSuggestions(stem: string): VoiceSuggestion[] {
+		try {
+			const parsed = JSON.parse(readFileSync(this.suggestionsPathFor(stem), 'utf8')) as unknown;
+			if (!Array.isArray(parsed)) return [];
+			return parsed.filter(isVoiceSuggestion);
+		} catch {
+			return [];
+		}
+	}
+
+	/**
+	 * Append-only. Does not touch the document body — that is the whole point of
+	 * the suggestion path. Returns null when the pending cap is already full.
+	 */
+	appendSuggestion(stem: string, text: string): VoiceSuggestion | null {
+		const pending = this.listSuggestions(stem);
+		if (pending.length >= MAX_PENDING_VOICE_SUGGESTIONS) return null;
+		const suggestion: VoiceSuggestion = {
+			id: randomUUID(),
+			text,
+			createdAt: new Date().toISOString()
+		};
+		this.#writeFile(
+			this.suggestionsPathFor(stem),
+			`${JSON.stringify([...pending, suggestion], null, 2)}\n`
+		);
+		return suggestion;
+	}
+
+	/** Removes one suggestion. Returns it, or null when the id is unknown. */
+	removeSuggestion(stem: string, id: string): VoiceSuggestion | null {
+		const pending = this.listSuggestions(stem);
+		const index = pending.findIndex((s) => s.id === id);
+		if (index < 0) return null;
+		const [removed] = pending.splice(index, 1);
+		if (pending.length === 0) {
+			rmSync(this.suggestionsPathFor(stem), { force: true });
+		} else {
+			this.#writeFile(this.suggestionsPathFor(stem), `${JSON.stringify(pending, null, 2)}\n`);
+		}
+		return removed ?? null;
+	}
+
+	/**
+	 * Owner promotion: append the suggestion text to the document body (via the
+	 * owner-edit path so the mirror guard arms), then drop it from the sidecar.
+	 * Returns null when the id is unknown.
+	 */
+	promoteSuggestion(stem: string, id: string): { suggestion: VoiceSuggestion; view: VoiceDocumentView } | null {
+		const suggestion = this.listSuggestions(stem).find((s) => s.id === id);
+		if (!suggestion) return null;
+		const onDisk = this.#readRaw(stem);
+		const trimmed = onDisk.trimEnd();
+		const next =
+			trimmed.length === 0
+				? suggestion.text
+				: `${trimmed}\n\n## Agent suggestion\n\n${suggestion.text}\n`;
+		this.writeOwnerEdit(stem, next);
+		this.removeSuggestion(stem, id);
+		return { suggestion, view: this.inspect(stem) };
+	}
+
 	/** Raw file text, or `''` when absent — the input to every hash comparison. */
 	#readRaw(stem: string): string {
 		try {
@@ -259,6 +348,16 @@ export class VoiceFiles {
 		mkdirSync(this.#dir, { recursive: true });
 		writeFileSync(path, content, { encoding: 'utf8', mode: 0o600 });
 	}
+}
+
+function isVoiceSuggestion(value: unknown): value is VoiceSuggestion {
+	if (!value || typeof value !== 'object') return false;
+	const row = value as Partial<VoiceSuggestion>;
+	return (
+		typeof row.id === 'string' &&
+		typeof row.text === 'string' &&
+		typeof row.createdAt === 'string'
+	);
 }
 
 /** Truncates at a line boundary so a clipped markdown document never ends mid-sentence. */

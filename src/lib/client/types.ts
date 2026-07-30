@@ -174,6 +174,18 @@ export type SendProposal = {
 	outbox_id: number | null;
 };
 
+/**
+ * PL-U5 — durable warning that the agent cancelled a message the owner had
+ * already approved. `dismissed_at` is null while it still needs to be seen.
+ */
+export type CancellationNotice = {
+	id: number;
+	chat_jid: string;
+	cancelled_text: string;
+	created_at: number;
+	dismissed_at: number | null;
+};
+
 export type OutboxRow = {
 	id: number;
 	chat_jid: string;
@@ -241,6 +253,11 @@ export type ServerEvent =
 	| { type: 'draft-removed'; chat_jid: string }
 	/** PL-U3 — a proposed send appeared, or was confirmed/rejected by the owner. */
 	| { type: 'proposal-updated'; proposal: SendProposal }
+	/**
+	 * PL-U5 — the agent cancelled an approved send, or the owner dismissed that
+	 * notice. Open notices are also refetched on hydrate.
+	 */
+	| { type: 'cancellation-notice'; notice: CancellationNotice }
 	| { type: 'outbox-updated'; outbox: OutboxRow }
 	| { type: 'connection'; state: string }
 	| { type: 'pairing-needed'; qr: string }

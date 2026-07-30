@@ -37,6 +37,12 @@
  *     is acknowledged. PREVIEW_AGENT_EDIT_DELAY_MS (default 15000) is how long
  *     after boot it fires — long enough that a capture run started alongside
  *     the server has already loaded the page and opened the chat.
+ *   PREVIEW_VOICE_SUGGESTION=1
+ *     Seeds a pending agent voice suggestion (PL-U5) beside the global voice
+ *     document so Settings → Voice has promote/discard controls to photograph.
+ *   PREVIEW_CANCELLATION_NOTICE=1
+ *     Seeds a durable notice that the agent cancelled an owner-approved send
+ *     (PL-U5), shown above the chat list until dismissed.
  *
  * It also covers what live data cannot. The owner's real database holds four
  * quoted messages — all of them plain text — and zero reactions, because
@@ -57,6 +63,8 @@ import { upsertContact } from '../server/store/contacts.js';
 import { setMediaRef, upsertMessage, upsertMessageReaction } from '../server/store/messages.js';
 import { getDraft, upsertDraft } from '../server/store/drafts.js';
 import { insertProposal } from '../server/store/proposals.js';
+import { insertCancellationNotice } from '../server/store/cancellation-notices.js';
+import { VoiceFiles } from '../server/agent/memory/voice-files.js';
 import { linkContactIdentity } from '../server/store/contacts.js';
 import { linkIdentityAndMergeChats } from '../server/store/identity.js';
 import { setSetting } from '../server/store/settings.js';
@@ -564,6 +572,23 @@ if (process.env.PREVIEW_PROPOSAL === '1' && !sessionMode) {
 		chatJid: DIRECT,
 		text: 'Yes — eight works for me. I will bring the printouts.',
 		basisMsgId: 'u-2',
+		now: Date.now()
+	});
+}
+
+// PL-U5 — a pending voice suggestion to photograph in Settings → Voice.
+if (process.env.PREVIEW_VOICE_SUGGESTION === '1') {
+	new VoiceFiles(dataDir).appendSuggestion(
+		'global',
+		'Prefer "cheers" over "thanks" with close friends — keep "thanks" for work contacts.'
+	);
+}
+
+// PL-U5 — durable cancellation notice above the chat list.
+if (process.env.PREVIEW_CANCELLATION_NOTICE === '1') {
+	insertCancellationNotice(db, {
+		chatJid: DIRECT,
+		cancelledText: 'Yes — eight works for me. I will bring the printouts.',
 		now: Date.now()
 	});
 }

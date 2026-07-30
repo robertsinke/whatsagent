@@ -157,6 +157,11 @@ export function mergeChats(db: AppDatabase, from: string, to: string): boolean {
 		// message moved with `messages` above, and the proposal still cannot send
 		// without a click.
 		db.prepare('UPDATE send_proposals SET chat_jid = ? WHERE chat_jid = ?').run(to, from);
+		// PL-U5: same FK treatment for open/dismissed cancellation notices.
+		db.prepare('UPDATE agent_cancellation_notices SET chat_jid = ? WHERE chat_jid = ?').run(
+			to,
+			from
+		);
 
 		db.prepare('DELETE FROM chats WHERE jid = ?').run(from);
 	});

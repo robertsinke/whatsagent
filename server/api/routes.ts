@@ -6,6 +6,7 @@ import { getChat, listChats } from '../store/chats.js';
 import { getDraft } from '../store/drafts.js';
 import { getMessage, listMessagesPage, type Message } from '../store/messages.js';
 import { listOutbox } from '../store/outbox.js';
+import { listOpenCancellationNotices } from '../store/cancellation-notices.js';
 import { listPendingProposalsAll } from '../store/proposals.js';
 import {
 	getSetting,
@@ -485,6 +486,9 @@ async function handleApi(
 			// way to detect that the mirror moved the document under an open editor.
 			hash: view.hash,
 			mirrorGuard: view.mirrorGuard,
+			// PL-U5 — pending agent suggestions live next to the document they
+			// propose to change; Settings renders them from this same load.
+			suggestions: new VoiceFiles(dataDir).listSuggestions(stem),
 			memory: {
 				// Method presence, not a flag: a capability flag can disagree with the object.
 				available: typeof deps.memory?.refreshVoiceModels === 'function',
@@ -525,6 +529,27 @@ async function handleApi(
 			return;
 		}
 		await dispatchAction(deps, res, 'refresh-voice', { stem });
+		return;
+	}
+
+	/**
+	 * PL-U5 — owner's half of a voice suggestion. Creation is tool-only via
+	 * `suggest-voice-note` (MCP); the frontend can only promote or discard.
+	 */
+	const voiceSuggestionMatch =
+		/^\/api\/voice\/([^/]+)\/suggestions\/([^/]+)\/(promote|discard)$/.exec(path);
+	if (voiceSuggestionMatch && method === 'POST') {
+		const stem = decodeURIComponent(voiceSuggestionMatch[1]!);
+		const id = decodeURIComponent(voiceSuggestionMatch[2]!);
+		if (!VOICE_STEMS.has(stem)) {
+			error(res, 404, 'Not found');
+			return;
+		}
+		const action =
+			voiceSuggestionMatch[3] === 'promote'
+				? 'promote-voice-suggestion'
+				: 'discard-voice-suggestion';
+		await dispatchAction(deps, res, action, { stem, id });
 		return;
 	}
 
@@ -616,6 +641,23 @@ async function handleApi(
 		const body = (await readJsonBody(req)) as Record<string, unknown> | undefined;
 		const action = proposalMatch[2] === 'confirm' ? 'confirm-proposal' : 'reject-proposal';
 		await dispatchAction(deps, res, action, { ...(body ?? {}), id });
+		return;
+	}
+
+	/**
+	 * PL-U5 — durable notices that the agent cancelled an owner-approved send.
+	 * Loaded on hydrate so a toast that already faded is not the only signal.
+	 */
+	if (path === '/api/cancellation-notices' && method === 'GET') {
+		json(res, 200, { items: listOpenCancellationNotices(db) });
+		return;
+	}
+
+	const cancellationMatch = /^\/api\/cancellation-notices\/(\d+)\/dismiss$/.exec(path);
+	if (cancellationMatch && method === 'POST') {
+		await dispatchAction(deps, res, 'dismiss-cancellation-notice', {
+			id: Number(cancellationMatch[1])
+		});
 		return;
 	}
 

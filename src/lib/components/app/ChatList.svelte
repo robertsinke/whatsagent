@@ -4,8 +4,9 @@
 	import * as Empty from '$lib/components/ui/empty/index.js';
 	import { Input } from '$lib/components/ui/input/index.js';
 	import { Inbox, Search } from '@lucide/svelte';
-	import type { Chat, OutboxRow, SessionView } from '$lib/client/types.js';
+	import type { CancellationNotice, Chat, OutboxRow, SessionView } from '$lib/client/types.js';
 	import { displayName, filterChats, jidDigits, type ChatTab } from '$lib/client/view.js';
+	import CancellationNoticeBanner from './CancellationNoticeBanner.svelte';
 	import ChatRow from './ChatRow.svelte';
 	import FooterAgentToggle from './FooterAgentToggle.svelte';
 	import FooterSettings from './FooterSettings.svelte';
@@ -24,9 +25,11 @@
 		session,
 		socketConnected = true,
 		outbox = [],
+		cancellationNotices = [],
 		agentCollapsed = false,
 		ontoggleagent,
 		oncancel,
+		ondismissnotice,
 		onselect
 	}: {
 		chats: Chat[];
@@ -37,9 +40,11 @@
 		session: SessionView;
 		socketConnected?: boolean;
 		outbox?: OutboxRow[];
+		cancellationNotices?: CancellationNotice[];
 		agentCollapsed?: boolean;
 		ontoggleagent?: () => void;
 		oncancel?: (id: number) => void;
+		ondismissnotice?: (id: number) => void;
 		onselect?: (jid: string) => void;
 	} = $props();
 
@@ -78,6 +83,13 @@
 
 <div class="list">
 	<NeedsReplyTabs {chats} bind:value={tab} />
+
+	<CancellationNoticeBanner
+		notices={cancellationNotices}
+		{chats}
+		ondismiss={ondismissnotice}
+		{onselect}
+	/>
 
 	<div class="search">
 		<Search class="size-3.5 text-ink-50 search-icon" />

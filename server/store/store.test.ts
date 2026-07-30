@@ -56,6 +56,7 @@ describe('migrations', () => {
 			.all() as { name: string }[];
 
 		expect(tables.map((t) => t.name)).toEqual([
+			'agent_cancellation_notices',
 			'chats',
 			'contacts',
 			'draft_feedback',

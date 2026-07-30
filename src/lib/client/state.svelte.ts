@@ -2,6 +2,7 @@ import { api } from './api.js';
 import { createRealtime, type Realtime } from './ws.svelte.js';
 import {
 	ApiError,
+	type CancellationNotice,
 	type Chat,
 	type Draft,
 	type Message,
@@ -114,6 +115,12 @@ export class AppState {
 	proposalStalePrompt = $state<ProposalStalePrompt | null>(null);
 	/** Proposal id currently being confirmed/rejected, so the card can disable. */
 	decidingProposalId = $state<number | null>(null);
+	/**
+	 * PL-U5 — durable notices that the agent cancelled an owner-approved send.
+	 * Open until the owner dismisses; refetched on hydrate so a faded toast is
+	 * not the only signal.
+	 */
+	cancellationNotices = $state<CancellationNotice[]>([]);
 	/**
 	 * True while a preview-only draft refinement request is in flight. The
 	 * editor stays open across success, failure, and 409; this flag only
@@ -281,20 +288,22 @@ export class AppState {
 
 	async refresh(options: { preserveDeepenStatus?: boolean } = {}): Promise<void> {
 		try {
-			const [session, chats, outbox, sendMode, proposals] = await Promise.all([
+			const [session, chats, outbox, sendMode, proposals, notices] = await Promise.all([
 				api.session().catch(() => EMPTY_SESSION),
 				api.chats(),
 				api.outbox(),
 				api.sendMode().catch(() => ({ live: false, dry_run: true })),
 				// A proposal outlives the socket that announced it, so the pending
 				// set is refetched rather than reconstructed from events.
-				api.proposals().catch(() => ({ items: [] as SendProposal[] }))
+				api.proposals().catch(() => ({ items: [] as SendProposal[] })),
+				api.cancellationNotices().catch(() => ({ items: [] as CancellationNotice[] }))
 			]);
 			this.session = session;
 			this.chats = chats;
 			this.outbox = outbox;
 			this.sendsLive = sendMode.live;
 			this.proposals = proposals.items;
+			this.cancellationNotices = notices.items.filter((n) => n.dismissed_at === null);
 			// Session and chats have now both been seen — first-run can be decided.
 			this.hydrated = true;
 			if (this.selectedJid) {
@@ -648,6 +657,18 @@ export class AppState {
 			return false;
 		} finally {
 			this.decidingProposalId = null;
+		}
+	}
+
+	/** PL-U5 — acknowledge that the agent cancelled an approved send. */
+	async dismissCancellationNotice(id: number): Promise<boolean> {
+		try {
+			const { notice } = await api.dismissCancellationNotice(id);
+			this.cancellationNotices = this.cancellationNotices.filter((n) => n.id !== notice.id);
+			return true;
+		} catch (err) {
+			this.error = describeError(err);
+			return false;
 		}
 	}
 
@@ -1074,6 +1095,15 @@ export class AppState {
 				) {
 					this.proposalStalePrompt = null;
 				}
+				return;
+			case 'cancellation-notice':
+				this.cancellationNotices =
+					event.notice.dismissed_at === null
+						? [
+								...this.cancellationNotices.filter((n) => n.id !== event.notice.id),
+								event.notice
+							].sort((a, b) => b.id - a.id)
+						: this.cancellationNotices.filter((n) => n.id !== event.notice.id);
 				return;
 			case 'send-mode':
 				this.sendsLive = event.live;

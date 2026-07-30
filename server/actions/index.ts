@@ -5,10 +5,13 @@ import { approveDraftAction } from './approve-draft.js';
 import { cancelOutboxAction } from './cancel-outbox.js';
 import { confirmProposalAction } from './confirm-proposal.js';
 import { deepenHistoryAction } from './deepen-history.js';
+import { discardVoiceSuggestionAction } from './discard-voice-suggestion.js';
+import { dismissCancellationNoticeAction } from './dismiss-cancellation-notice.js';
 import { editDraftAction } from './edit-draft.js';
 import { generateDraftAction } from './generate-draft.js';
 import { loadMediaAction } from './load-media.js';
 import { markReadAction } from './mark-read.js';
+import { promoteVoiceSuggestionAction } from './promote-voice-suggestion.js';
 import { proposeSendAction } from './propose-send.js';
 import { reactAction } from './react.js';
 import { refineDraftAction } from './refine-draft.js';
@@ -20,6 +23,7 @@ import { sendAction } from './send.js';
 import { setSendModeAction } from './set-send-mode.js';
 import { setSettingAction } from './set-setting.js';
 import { skipDraftAction } from './skip-draft.js';
+import { suggestVoiceNoteAction } from './suggest-voice-note.js';
 
 const actions: ActionDefinition<unknown>[] = [
 	agentDemoAction as ActionDefinition<unknown>,
@@ -27,10 +31,13 @@ const actions: ActionDefinition<unknown>[] = [
 	cancelOutboxAction as ActionDefinition<unknown>,
 	confirmProposalAction as ActionDefinition<unknown>,
 	deepenHistoryAction as ActionDefinition<unknown>,
+	discardVoiceSuggestionAction as ActionDefinition<unknown>,
+	dismissCancellationNoticeAction as ActionDefinition<unknown>,
 	editDraftAction as ActionDefinition<unknown>,
 	generateDraftAction as ActionDefinition<unknown>,
 	loadMediaAction as ActionDefinition<unknown>,
 	markReadAction as ActionDefinition<unknown>,
+	promoteVoiceSuggestionAction as ActionDefinition<unknown>,
 	proposeSendAction as ActionDefinition<unknown>,
 	reactAction as ActionDefinition<unknown>,
 	refineDraftAction as ActionDefinition<unknown>,
@@ -41,7 +48,8 @@ const actions: ActionDefinition<unknown>[] = [
 	sendAction as ActionDefinition<unknown>,
 	setSendModeAction as ActionDefinition<unknown>,
 	setSettingAction as ActionDefinition<unknown>,
-	skipDraftAction as ActionDefinition<unknown>
+	skipDraftAction as ActionDefinition<unknown>,
+	suggestVoiceNoteAction as ActionDefinition<unknown>
 ];
 
 export function createActionRegistry(): ActionRegistry {

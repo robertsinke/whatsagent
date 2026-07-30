@@ -14,9 +14,16 @@
 		Pencil,
 		Radio,
 		RefreshCw,
-		ShieldAlert
+		ShieldAlert,
+		Sparkles,
+		X
 	} from '@lucide/svelte';
-	import { api, type VoiceDocumentResponse, type VoiceSaveResponse } from '$lib/client/api.js';
+	import {
+		api,
+		type VoiceDocumentResponse,
+		type VoiceSaveResponse,
+		type VoiceSuggestion
+	} from '$lib/client/api.js';
 	import { ApiError, type ProvidersResponse } from '$lib/client/types.js';
 	// OSS-P3.4 — the provider + model control is shared with first-run setup.
 	// Do not re-implement it here; the two screens must not drift apart.
@@ -137,6 +144,9 @@
 	let voiceLastSave = $state<VoiceSaveResponse | null>(null);
 	let voiceRefreshing = $state(false);
 	let voiceRefreshNote = $state<string | null>(null);
+	/** PL-U5 — pending agent suggestions; inert until promote/discard. */
+	let voiceSuggestions = $state<VoiceSuggestion[]>([]);
+	let voiceSuggestionBusyId = $state<string | null>(null);
 	/** Live Milkdown instance — Save reads currentMarkdown() so the draft cannot lag the DOM. `$state.raw` so bind:this identity stays a plain ref (not a deep proxy). */
 	let voiceEditor = $state.raw<{ currentMarkdown?: () => string } | null>(null);
 
@@ -163,6 +173,7 @@
 		voiceDiskChanged = false;
 		voiceConflict = null;
 		voiceSaveError = null;
+		voiceSuggestions = doc.suggestions ?? [];
 	}
 
 	async function loadVoice() {
@@ -188,7 +199,11 @@
 		if (!voice || voice.content === null) return;
 		try {
 			const doc = await api.voiceGlobal();
-			if (doc.hash === voiceBaseHash) return;
+			// Suggestions can arrive without the document body moving.
+			if (doc.hash === voiceBaseHash) {
+				voiceSuggestions = doc.suggestions ?? [];
+				return;
+			}
 			// Disk moved. Dirty OR an unresolved conflict banner → keep the banner;
 			// clean with no banner → silent reload (useWatchedFile contract).
 			// Without the voiceDiskChanged arm, a 409 on a clean Save (stale
@@ -332,6 +347,50 @@
 			voiceRefreshNote = err instanceof Error ? err.message : String(err);
 		} finally {
 			voiceRefreshing = false;
+		}
+	}
+
+	async function promoteVoiceSuggestion(id: string) {
+		if (voiceSuggestionBusyId) return;
+		voiceSuggestionBusyId = id;
+		voiceSaveError = null;
+		try {
+			const result = await api.promoteVoiceSuggestion(id);
+			voiceSuggestions = result.suggestions;
+			const content = result.content ?? '';
+			voiceDraft = content;
+			voiceBaseline = content;
+			voiceBaseHash = result.hash;
+			voiceDiskChanged = false;
+			voiceConflict = null;
+			if (voice) {
+				voice = {
+					...voice,
+					content: result.content,
+					hash: result.hash,
+					byteLength: result.byteLength,
+					modifiedAt: result.modifiedAt,
+					mirrorGuard: result.mirrorGuard,
+					suggestions: result.suggestions
+				};
+			}
+		} catch (err) {
+			voiceSaveError = err instanceof Error ? err.message : String(err);
+		} finally {
+			voiceSuggestionBusyId = null;
+		}
+	}
+
+	async function discardVoiceSuggestion(id: string) {
+		if (voiceSuggestionBusyId) return;
+		voiceSuggestionBusyId = id;
+		try {
+			const result = await api.discardVoiceSuggestion(id);
+			voiceSuggestions = result.suggestions;
+		} catch (err) {
+			voiceSaveError = err instanceof Error ? err.message : String(err);
+		} finally {
+			voiceSuggestionBusyId = null;
 		}
 	}
 
@@ -758,6 +817,39 @@
 							</div>
 						{/if}
 
+						{#if voiceSuggestions.length}
+							<div class="voice-suggestions" data-testid="voice-suggestions">
+								<p class="voice-suggestions-label">
+									<Sparkles class="size-3.5" />
+									Agent suggestions — inert until you promote one into the document
+								</p>
+								{#each voiceSuggestions as suggestion (suggestion.id)}
+									<div class="voice-suggestion" data-testid="voice-suggestion">
+										<p class="voice-suggestion-text">{suggestion.text}</p>
+										<div class="voice-suggestion-actions">
+											<Button
+												size="sm"
+												disabled={voiceSuggestionBusyId !== null}
+												onclick={() => void promoteVoiceSuggestion(suggestion.id)}
+											>
+												<Check class="size-3.5" />
+												Promote
+											</Button>
+											<Button
+												size="sm"
+												variant="outline"
+												disabled={voiceSuggestionBusyId !== null}
+												onclick={() => void discardVoiceSuggestion(suggestion.id)}
+											>
+												<X class="size-3.5" />
+												Discard
+											</Button>
+										</div>
+									</div>
+								{/each}
+							</div>
+						{/if}
+
 						{#if voiceSaveError}
 							<p class="error" role="alert">{voiceSaveError}</p>
 						{/if}
@@ -1135,6 +1227,45 @@
 	}
 	.voice-conflict p {
 		margin: 0;
+	}
+	.voice-suggestions {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		padding: 0.55rem 0.65rem;
+		border-radius: var(--radius-sm);
+		border: 1px solid var(--hairline);
+		background: var(--surface-sunken);
+	}
+	.voice-suggestions-label {
+		display: flex;
+		align-items: center;
+		gap: 0.35rem;
+		margin: 0;
+		font-size: 0.75rem;
+		font-weight: 600;
+		color: var(--ink-70);
+	}
+	.voice-suggestion {
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
+		padding: 0.45rem 0.5rem;
+		border-radius: var(--radius-sm);
+		border: 1px solid var(--hairline);
+		background: color-mix(in srgb, var(--surface) 92%, transparent);
+	}
+	.voice-suggestion-text {
+		margin: 0;
+		font-size: 0.82rem;
+		line-height: 1.4;
+		color: var(--ink-90);
+		white-space: pre-wrap;
+	}
+	.voice-suggestion-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.35rem;
 	}
 	.voice-refresh-note,
 	.voice-guard-line {

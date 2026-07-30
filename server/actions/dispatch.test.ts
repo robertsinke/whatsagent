@@ -8,6 +8,7 @@ import { upsertChat } from '../store/chats.js';
 import { getDraft, upsertDraft } from '../store/drafts.js';
 import { upsertMessage } from '../store/messages.js';
 import { getProposal, listPendingProposals } from '../store/proposals.js';
+import { enqueueDraftOutbox } from '../store/outbox.js';
 import { EventBus } from '../api/events.js';
 import type { RoutesDeps } from '../api/routes.js';
 import {
@@ -83,7 +84,13 @@ describe('action registry dispatch', () => {
 		'set-send-mode',
 		'confirm-proposal',
 		'reject-proposal',
-		'agent-demo'
+		'agent-demo',
+		// PL-U5 Decision 1 / 2 — durable influence and connection control.
+		'save-voice',
+		'regenerate-pairing',
+		'promote-voice-suggestion',
+		'discard-voice-suggestion',
+		'dismiss-cancellation-notice'
 	] as const)(
 		'refuses tool caller for outbound action %s (dispatcher policy)',
 		async (name) => {
@@ -228,10 +235,18 @@ describe('action registry dispatch', () => {
 			'reject-proposal',
 			// PL-U3 sweep: it forges the panel trace the owner reads. See the
 			// comment on the action itself.
-			'agent-demo'
+			'agent-demo',
+			// PL-U5: voice body write, pairing restart, suggestion promotion,
+			// and dismissing the agent's own cancellation notice.
+			'save-voice',
+			'regenerate-pairing',
+			'promote-voice-suggestion',
+			'discard-voice-suggestion',
+			'dismiss-cancellation-notice'
 		]) {
 			expect(toolNames).not.toContain(banned);
 		}
+		expect(toolNames).toEqual(expect.arrayContaining(['suggest-voice-note', 'skip-draft']));
 
 		upsertChat(db!, {
 			jid: 'alice@s.whatsapp.net',
@@ -642,5 +657,204 @@ describe('approve-draft base_hash (PL-U3)', () => {
 		expect(result).toMatchObject({ kind: 'json', status: 202 });
 		const row = db!.prepare('SELECT * FROM outbox').get() as { text: string };
 		expect(row.text).toBe('Seven is perfect, see you then.');
+	});
+});
+
+/**
+ * PL-U5 — capability decisions: voice suggestions, skip-draft cancellation
+ * warning, and the standing caller-policy expansions above.
+ */
+describe('suggest-voice-note / promote (PL-U5 Decision 1)', () => {
+	it('a tool suggestion leaves the voice document byte-identical', async () => {
+		const deps = makeDeps();
+		const { writeFileSync, mkdirSync, readFileSync } = await import('node:fs');
+		const { join } = await import('node:path');
+		mkdirSync(join(dataDir!, 'voice'), { recursive: true });
+		const body = '- Short, lowercase replies.\n';
+		writeFileSync(join(dataDir!, 'voice', 'global.md'), body, 'utf8');
+
+		const result = await dispatch(
+			actionRegistry,
+			'suggest-voice-note',
+			{ stem: 'global', text: 'Prefer "cheers" over "thanks" with friends.' },
+			{ caller: 'tool', deps }
+		);
+
+		expect(result).toMatchObject({ kind: 'json', status: 202 });
+		if (result.kind === 'json') {
+			expect(result.body).toMatchObject({ status: 'pending_promotion' });
+		}
+		expect(readFileSync(join(dataDir!, 'voice', 'global.md'), 'utf8')).toBe(body);
+	});
+
+	it('refuses a tool caller on promote-voice-suggestion before run', async () => {
+		const deps = makeDeps();
+		const { writeFileSync, mkdirSync, readFileSync } = await import('node:fs');
+		const { join } = await import('node:path');
+		mkdirSync(join(dataDir!, 'voice'), { recursive: true });
+		const body = '- Short, lowercase replies.\n';
+		writeFileSync(join(dataDir!, 'voice', 'global.md'), body, 'utf8');
+
+		const suggested = await dispatch(
+			actionRegistry,
+			'suggest-voice-note',
+			{ stem: 'global', text: 'Prefer "cheers" over "thanks" with friends.' },
+			{ caller: 'tool', deps }
+		);
+		expect(suggested.kind).toBe('json');
+		const suggestionId =
+			suggested.kind === 'json'
+				? (suggested.body as { suggestion: { id: string } }).suggestion.id
+				: '';
+
+		const refused = await dispatch(
+			actionRegistry,
+			'promote-voice-suggestion',
+			{ stem: 'global', id: suggestionId },
+			{ caller: 'tool', deps }
+		);
+		expect(refused).toEqual({
+			kind: 'error',
+			status: 403,
+			error: 'Caller not permitted',
+			extra: { action: 'promote-voice-suggestion', caller: 'tool' }
+		});
+		expect(readFileSync(join(dataDir!, 'voice', 'global.md'), 'utf8')).toBe(body);
+	});
+
+	it('a frontend promotion writes the suggestion into the document', async () => {
+		const deps = makeDeps();
+		const { writeFileSync, mkdirSync, readFileSync } = await import('node:fs');
+		const { join } = await import('node:path');
+		mkdirSync(join(dataDir!, 'voice'), { recursive: true });
+		writeFileSync(join(dataDir!, 'voice', 'global.md'), '- Short replies.\n', 'utf8');
+
+		const suggested = await dispatch(
+			actionRegistry,
+			'suggest-voice-note',
+			{ stem: 'global', text: 'Prefer "cheers" over "thanks" with friends.' },
+			{ caller: 'tool', deps }
+		);
+		const suggestionId =
+			suggested.kind === 'json'
+				? (suggested.body as { suggestion: { id: string } }).suggestion.id
+				: '';
+
+		const promoted = await dispatch(
+			actionRegistry,
+			'promote-voice-suggestion',
+			{ stem: 'global', id: suggestionId },
+			{ caller: 'frontend', deps }
+		);
+		expect(promoted).toMatchObject({ kind: 'json', status: 200 });
+		const onDisk = readFileSync(join(dataDir!, 'voice', 'global.md'), 'utf8');
+		expect(onDisk).toContain('Prefer "cheers" over "thanks" with friends.');
+	});
+});
+
+describe('skip-draft cancellation notice (PL-U5 Decision 3)', () => {
+	const JID = 'alice@s.whatsapp.net';
+
+	function seedApprovedDraft(text: string): void {
+		upsertChat(db!, { jid: JID, kind: '1:1', name: 'Alice', last_msg_at: Date.now() });
+		upsertMessage(db!, { id: 'in-1', chat_jid: JID, from_me: false, ts: Date.now(), text: 'hi' });
+		upsertDraft(db!, {
+			chat_jid: JID,
+			text,
+			original_text: text,
+			status: 'approved',
+			basis_msg_id: 'in-1',
+			generated_at: Date.now()
+		});
+		enqueueDraftOutbox(db!, {
+			chatJid: JID,
+			text,
+			draftText: text,
+			basisMsgId: 'in-1',
+			now: Date.now(),
+			jitterMs: 30_000
+		});
+	}
+
+	it('a tool skip of an approved draft produces a durable notice', async () => {
+		const deps = makeDeps();
+		seedApprovedDraft('See you at seven.');
+		const seen: unknown[] = [];
+		deps.events.subscribe((e) => seen.push(e));
+
+		const result = await dispatch(
+			actionRegistry,
+			'skip-draft',
+			{ chatJid: JID },
+			{ caller: 'tool', deps }
+		);
+
+		expect(result).toMatchObject({ kind: 'json', status: 200 });
+		if (result.kind === 'json') {
+			expect(result.body).toMatchObject({
+				cancellation_notice: {
+					chat_jid: JID,
+					cancelled_text: 'See you at seven.',
+					dismissed_at: null
+				}
+			});
+		}
+		const rows = db!
+			.prepare(`SELECT * FROM agent_cancellation_notices WHERE dismissed_at IS NULL`)
+			.all() as { cancelled_text: string }[];
+		expect(rows).toHaveLength(1);
+		expect(rows[0]!.cancelled_text).toBe('See you at seven.');
+		expect(seen.some((e) => (e as { type: string }).type === 'cancellation-notice')).toBe(true);
+	});
+
+	it('an owner skip of an approved draft produces no notice', async () => {
+		const deps = makeDeps();
+		seedApprovedDraft('See you at seven.');
+
+		const result = await dispatch(
+			actionRegistry,
+			'skip-draft',
+			{ chatJid: JID },
+			{ caller: 'frontend', deps }
+		);
+
+		expect(result).toMatchObject({ kind: 'json', status: 200 });
+		if (result.kind === 'json') {
+			expect(result.body).not.toHaveProperty('cancellation_notice');
+		}
+		const n = (
+			db!.prepare(`SELECT COUNT(*) AS n FROM agent_cancellation_notices`).get() as { n: number }
+		).n;
+		expect(n).toBe(0);
+	});
+
+	it('a tool skip with no outbox row produces no notice', async () => {
+		const deps = makeDeps();
+		upsertChat(db!, { jid: JID, kind: '1:1', name: 'Alice', last_msg_at: Date.now() });
+		upsertMessage(db!, { id: 'in-1', chat_jid: JID, from_me: false, ts: Date.now(), text: 'hi' });
+		upsertDraft(db!, {
+			chat_jid: JID,
+			text: 'Maybe later.',
+			original_text: 'Maybe later.',
+			status: 'ready',
+			basis_msg_id: 'in-1',
+			generated_at: Date.now()
+		});
+
+		const result = await dispatch(
+			actionRegistry,
+			'skip-draft',
+			{ chatJid: JID },
+			{ caller: 'tool', deps }
+		);
+
+		expect(result).toMatchObject({ kind: 'json', status: 200 });
+		if (result.kind === 'json') {
+			expect(result.body).not.toHaveProperty('cancellation_notice');
+		}
+		const n = (
+			db!.prepare(`SELECT COUNT(*) AS n FROM agent_cancellation_notices`).get() as { n: number }
+		).n;
+		expect(n).toBe(0);
 	});
 });

@@ -1,5 +1,6 @@
 import {
 	ApiError,
+	type CancellationNotice,
 	type Chat,
 	type Draft,
 	type Message,
@@ -161,6 +162,15 @@ export const api = {
 	rejectProposal: (id: number) =>
 		request<{ proposal: SendProposal }>(`/proposals/${id}/reject`, { method: 'POST' }),
 
+	/** PL-U5 — open cancellation notices (agent undid an owner-approved send). */
+	cancellationNotices: () =>
+		request<{ items: CancellationNotice[] }>('/cancellation-notices'),
+
+	dismissCancellationNotice: (id: number) =>
+		request<{ notice: CancellationNotice }>(`/cancellation-notices/${id}/dismiss`, {
+			method: 'POST'
+		}),
+
 	skipDraft: (jid: string) =>
 		request<{ ok: true; chat: Chat }>(`/chats/${encodeURIComponent(jid)}/draft/skip`, {
 			method: 'POST'
@@ -286,7 +296,26 @@ export const api = {
 		request<{ available: boolean; refreshed: string[]; error: string | null }>(
 			'/voice/global/refresh',
 			{ method: 'POST' }
+		),
+
+	/** PL-U5 — promote an agent voice suggestion into the document body. */
+	promoteVoiceSuggestion: (id: string) =>
+		request<VoicePromoteResponse>(`/voice/global/suggestions/${encodeURIComponent(id)}/promote`, {
+			method: 'POST'
+		}),
+
+	/** PL-U5 — discard an agent voice suggestion without touching the document. */
+	discardVoiceSuggestion: (id: string) =>
+		request<{ suggestion: VoiceSuggestion; suggestions: VoiceSuggestion[] }>(
+			`/voice/global/suggestions/${encodeURIComponent(id)}/discard`,
+			{ method: 'POST' }
 		)
+};
+
+export type VoiceSuggestion = {
+	id: string;
+	text: string;
+	createdAt: string;
 };
 
 export type VoiceDocumentResponse = {
@@ -297,6 +326,7 @@ export type VoiceDocumentResponse = {
 	path: string;
 	hash: string;
 	mirrorGuard: boolean;
+	suggestions: VoiceSuggestion[];
 	memory: { available: boolean; mode: string };
 };
 
@@ -309,4 +339,15 @@ export type VoiceSaveResponse = {
 	looksLikeVoiceDocument: boolean;
 	/** `recorded` — Hindsight took the correction. `skipped` — no memory service. `failed` — it did not answer; the file is saved regardless. */
 	directive: 'recorded' | 'skipped' | 'failed';
+};
+
+export type VoicePromoteResponse = {
+	stem: string;
+	suggestion: VoiceSuggestion;
+	hash: string;
+	byteLength: number;
+	modifiedAt: string | null;
+	mirrorGuard: boolean;
+	content: string | null;
+	suggestions: VoiceSuggestion[];
 };

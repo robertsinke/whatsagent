@@ -1525,7 +1525,8 @@ describe('GET /api/voice/global (W4-U10 inspector)', () => {
 			stem: 'global',
 			content: null,
 			byteLength: 0,
-			modifiedAt: null
+			modifiedAt: null,
+			suggestions: []
 		});
 		expect(typeof body.path).toBe('string');
 		expect(body.path).toContain('voice');
