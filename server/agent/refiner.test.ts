@@ -75,8 +75,10 @@ describe('refineDraft', () => {
 		expect(draft.mock.calls[0]![0].system).toContain('never return no_reply_needed');
 		expect(draft.mock.calls[0]![0].conversation.at(-1)).toEqual({
 			role: 'user',
-			content: 'Can we meet at seven?'
+			content: 'Can we meet at seven?',
+			ts: 200
 		});
+		expect(draft.mock.calls[0]![0].now).toBe(300);
 		expect(getDraft(database, 'alice@s.whatsapp.net')).toMatchObject({
 			text,
 			original_text: text,

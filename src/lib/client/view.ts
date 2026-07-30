@@ -103,6 +103,17 @@ export function formatMessageTime(ts: number): string {
 	});
 }
 
+/** Absolute date+time for the message stamp tooltip — visible stamp stays HH:MM. */
+export function formatMessageDateTime(ts: number): string {
+	return new Date(epochMilliseconds(ts)).toLocaleString(undefined, {
+		year: 'numeric',
+		month: 'short',
+		day: 'numeric',
+		hour: '2-digit',
+		minute: '2-digit'
+	});
+}
+
 /**
  * Conversation day-divider label. Same relative ladder as {@link formatChatTime}
  * (today / yesterday / this week / older), but worded for a readable chip rather

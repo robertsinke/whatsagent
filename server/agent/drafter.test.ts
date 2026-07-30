@@ -77,9 +77,10 @@ describe('draftChat', () => {
 		expect(draft.mock.calls[0]![0].system).toContain('Match the language');
 		expect(draft.mock.calls[0]![0].system).toContain('short, direct confirmations');
 		expect(draft.mock.calls[0]![0].conversation).toEqual([
-			{ role: 'assistant', content: 'Ja, klinkt goed.' },
-			{ role: 'user', content: 'Zullen we om zeven uur afspreken?' }
+			{ role: 'assistant', content: 'Ja, klinkt goed.', ts: 100 },
+			{ role: 'user', content: 'Zullen we om zeven uur afspreken?', ts: 200 }
 		]);
+		expect(draft.mock.calls[0]![0].now).toBe(500);
 		expect(getDraft(database, 'alice@s.whatsapp.net')).toMatchObject({
 			text: 'Ja, zeven uur is goed.',
 			status: 'ready',

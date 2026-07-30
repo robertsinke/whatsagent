@@ -14,6 +14,7 @@ import {
 	formatBytes,
 	formatDayDivider,
 	formatMessageTime,
+	formatMessageDateTime,
 	isFirstRun,
 	isVisibleDraftStatus,
 	mediaAffordance,
@@ -125,6 +126,17 @@ describe('chat row', () => {
 	it('renders Baileys epoch-second timestamps like equivalent milliseconds', () => {
 		const seconds = 1_700_000_000;
 		expect(formatMessageTime(seconds)).toBe(formatMessageTime(seconds * 1000));
+	});
+
+	it('keeps the visible stamp as hour:minute while exposing a full date for tooltips', () => {
+		const ts = new Date(2026, 5, 10, 14, 32, 0).getTime();
+		const visible = formatMessageTime(ts);
+		const full = formatMessageDateTime(ts);
+		expect(visible).toMatch(/32/);
+		expect(visible).not.toMatch(/2026/);
+		expect(full).toMatch(/2026/);
+		expect(full).toMatch(/Jun|6/);
+		expect(full).toMatch(/32/);
 	});
 });
 

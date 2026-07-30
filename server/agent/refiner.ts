@@ -78,7 +78,8 @@ export async function refineDraft(
 	const input = buildRefinementInput(
 		conversationFor(options.db, request.chatJid, options.conversationLimit ?? 50),
 		request.intent,
-		preview
+		preview,
+		(options.now ?? Date.now)()
 	);
 
 	try {

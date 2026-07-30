@@ -71,7 +71,8 @@ export function conversationFor(db: AppDatabase, chatJid: string, limit: number)
 		.reverse()
 		.map((message) => ({
 			role: message.from_me ? ('assistant' as const) : ('user' as const),
-			content: messageContent(message)
+			content: messageContent(message),
+			ts: message.ts
 		}));
 }
 
@@ -82,6 +83,7 @@ async function buildDraftInput(
 	memory: Memory,
 	chat: Chat,
 	conversationLimit: number,
+	nowMs: number,
 	ownerRequested = false
 ): Promise<DraftInput> {
 	let style: string | null = null;
@@ -99,6 +101,7 @@ async function buildDraftInput(
 	return {
 		system:
 			'Draft a natural reply as the owner. Match the language used in this conversation. ' +
+			'Use each message send time and the current time — do not treat weeks-old plans as still upcoming. ' +
 			'Use the owner voice, stay concise, and return no_reply_needed when no response is warranted.' +
 			// The owner-requested path is entered precisely when automatic classification
 			// declined, most often because the owner spoke last. Without this the base
@@ -110,7 +113,8 @@ async function buildDraftInput(
 					' message (in that case write a natural follow-up). Do not return no_reply_needed.'
 				: '') +
 			styleInstruction,
-		conversation: conversationFor(db, chat.jid, conversationLimit)
+		conversation: conversationFor(db, chat.jid, conversationLimit),
+		now: nowMs
 	};
 }
 
@@ -206,6 +210,7 @@ export async function draftChat(options: DraftChatOptions): Promise<DraftAttempt
 			options.memory,
 			chat,
 			options.conversationLimit ?? 50,
+			now(),
 			options.ownerRequested
 		);
 		const beforeCall = getLastMessage(options.db, options.chatJid);

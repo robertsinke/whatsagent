@@ -13,7 +13,7 @@
 	import MessageContent from '$lib/components/ai-elements/message-content.svelte';
 	import MediaAttachment from './MediaAttachment.svelte';
 	import type { Message as ChatMessage } from '$lib/client/types.js';
-	import { formatMessageTime, quotePreview, reactionChip } from '$lib/client/view.js';
+	import { formatMessageDateTime, formatMessageTime, quotePreview, reactionChip } from '$lib/client/view.js';
 
 	let {
 		message,
@@ -162,7 +162,7 @@
 					{/if}
 				</div>
 			{/if}
-			<span class="stamp">{formatMessageTime(message.ts)}</span>
+			<span class="stamp" title={formatMessageDateTime(message.ts)}>{formatMessageTime(message.ts)}</span>
 		</div>
 		{#if chips.length > 0}
 			<div class="reactions" role="group" aria-label="Reactions">
