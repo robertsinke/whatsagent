@@ -297,3 +297,50 @@ export function panelTimeline(
 
 	return out;
 }
+
+/**
+ * PANEL-S8 — content fingerprint for scroll-follow. Changes when a text snapshot
+ * grows in place (agent parts re-arrive as they lengthen), not only when a new
+ * timeline row appears. Length alone is enough: the follow effect only needs to
+ * know that the scroller's content got taller.
+ */
+export function panelContentSignature(timeline: readonly PanelTimelineEntry[]): string {
+	return timeline
+		.map((entry) => {
+			if (entry.kind === 'owner') {
+				return `o:${entry.messageId}:${entry.text.length}`;
+			}
+			const parts = entry.turn.parts
+				.map((p) => {
+					if (p.kind === 'text') return `txt:${p.partId}:${p.text.length}`;
+					if (p.kind === 'tool') return `tool:${p.partId}:${p.state}`;
+					return `${p.kind}:${p.partId}`;
+				})
+				.join(',');
+			return `t:${entry.turn.id}:${entry.turn.inFlight ? 1 : 0}:${parts}`;
+		})
+		.join('|');
+}
+
+/**
+ * PANEL-S8 — same discipline as ConversationStream, adapted for snapshot growth:
+ * - a new timeline row (owner echo or turn) re-pins, even if the owner had
+ *   scrolled up — a new turn is a deliberate jump back to the live end;
+ * - in-place growth (streaming text) follows only while pinned;
+ * - first paint of any content lands at the bottom.
+ */
+export type PanelScrollFollowDecision = 'pin' | 'follow' | 'none';
+
+export function panelScrollFollowDecision(input: {
+	prevEntryCount: number;
+	entryCount: number;
+	prevContentSig: string;
+	contentSig: string;
+	isAtBottom: boolean;
+	firstPaint: boolean;
+}): PanelScrollFollowDecision {
+	if (input.entryCount === 0) return 'none';
+	if (input.firstPaint || input.entryCount > input.prevEntryCount) return 'pin';
+	if (input.contentSig !== input.prevContentSig && input.isAtBottom) return 'follow';
+	return 'none';
+}

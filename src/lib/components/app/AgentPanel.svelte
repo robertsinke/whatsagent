@@ -2,7 +2,11 @@
 	import Message from '$lib/components/ai-elements/message.svelte';
 	import MessageContent from '$lib/components/ai-elements/message-content.svelte';
 	import Shimmer from '$lib/components/ai-elements/shimmer.svelte';
-	import { scrollActivity } from '$lib/actions/scroll-activity.svelte.js';
+	import {
+		Conversation,
+		ConversationContent,
+		ConversationScrollButton
+	} from '$lib/components/ai-elements/conversation/index.js';
 	import { CornerDownLeft, Eraser, Sparkles, Square, Wrench, TriangleAlert } from '@lucide/svelte';
 	import * as InputGroup from '$lib/components/ui/input-group/index.js';
 	import { Spinner } from '$lib/components/ui/spinner/index.js';
@@ -10,6 +14,7 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import type { AppState } from '$lib/client/state.svelte.js';
 	import AgentMarkdown from './AgentMarkdown.svelte';
+	import AgentPanelScrollFollow from './AgentPanelScrollFollow.svelte';
 	import {
 		hasActiveSessions,
 		isTurnInFlight,
@@ -36,6 +41,12 @@
 	 * gap). The recessed surface (sunken fill + inset shadow) is kept from
 	 * PL-A2 — symmetric depth axis: two recessed rails flank one raised
 	 * conversation.
+	 *
+	 * SCROLL (PANEL-S8). The middle region reuses the conversation pane's
+	 * Conversation / ConversationContent / ConversationScrollButton machinery
+	 * (pin while streaming, detach on owner scroll-up, jump-to-bottom). Do not
+	 * reimplement that here — AgentPanelScrollFollow only decides *when* to ask
+	 * the shared context to move.
 	 *
 	 * RENDERING. The scroll region renders `AppState.agentSessions` — the real
 	 * event stream accumulated by `state.svelte.ts` from `agent-part-updated`
@@ -128,88 +139,95 @@
 		{/if}
 	</header>
 
-	<div class="agent-scroll scrollbar-contextual" use:scrollActivity>
-		{#if !anyActive}
-			<div class="agent-empty" data-testid="agent-empty">
-				<Sparkles class="size-5 empty-icon" />
-				<p class="empty-title" data-panel-state={emptyState.state}>{emptyState.title}</p>
-				<p class="empty-body">{emptyState.body}</p>
-			</div>
-		{:else}
-			{#each timeline as entry, i (entry.kind === 'owner' ? `owner-${entry.messageId}` : entry.turn.id)}
-				{#if entry.kind === 'owner'}
-					{@const prev = timeline[i - 1]}
-					<div
-						class="turn owner-turn"
-						class:turn-sep={prev !== undefined}
-						data-testid="agent-owner-message"
-						data-message-id={entry.messageId}
-					>
-						<Message from="user">
-							<MessageContent>{entry.text}</MessageContent>
-						</Message>
-					</div>
-				{:else}
-					{@const turn = entry.turn}
-					{@const prev = timeline[i - 1]}
-					<div
-						class="turn"
-						class:in-flight={isTurnInFlight(turn)}
-						class:turn-sep={prev !== undefined && prev.kind === 'turn'}
-						data-testid="agent-turn"
-						data-message-id={entry.messageId}
-					>
-						{#each turn.parts as part (part.partId)}
-							{#if part.kind === 'text'}
+	<Conversation class="agent-conv">
+		<ConversationContent class="agent-scroll" data-testid="agent-scroll">
+			<AgentPanelScrollFollow {timeline} />
+			{#if !anyActive}
+				<div class="agent-empty" data-testid="agent-empty">
+					<Sparkles class="size-5 empty-icon" />
+					<p class="empty-title" data-panel-state={emptyState.state}>{emptyState.title}</p>
+					<p class="empty-body">{emptyState.body}</p>
+				</div>
+			{:else}
+				{#each timeline as entry, i (entry.kind === 'owner' ? `owner-${entry.messageId}` : entry.turn.id)}
+					{#if entry.kind === 'owner'}
+						{@const prev = timeline[i - 1]}
+						<div
+							class="turn owner-turn"
+							class:turn-sep={prev !== undefined}
+							data-testid="agent-owner-message"
+							data-message-id={entry.messageId}
+						>
+							<Message from="user">
+								<MessageContent>{entry.text}</MessageContent>
+							</Message>
+						</div>
+					{:else}
+						{@const turn = entry.turn}
+						{@const prev = timeline[i - 1]}
+						<div
+							class="turn"
+							class:in-flight={isTurnInFlight(turn)}
+							class:turn-sep={prev !== undefined && prev.kind === 'turn'}
+							data-testid="agent-turn"
+							data-message-id={entry.messageId}
+						>
+							{#each turn.parts as part (part.partId)}
+								{#if part.kind === 'text'}
+									<Message from="assistant">
+										<MessageContent>
+											<AgentMarkdown source={part.text} />
+										</MessageContent>
+									</Message>
+								{:else if part.kind === 'tool'}
+									{@const result = toolResultSummary(part)}
+									<div
+										class="tool-line"
+										data-state={part.state}
+										data-testid="agent-tool"
+										data-tool-name={part.name}
+									>
+										<span class="tool-icon">
+											{#if part.state === 'pending' || part.state === 'running'}
+												<Spinner />
+											{:else if part.state === 'error'}
+												<TriangleAlert class="size-3.5" />
+											{:else}
+												<Wrench class="size-3.5" />
+											{/if}
+										</span>
+										<span class="tool-name">{part.name}</span>
+										{#if toolArgSummary(part.input)}
+											<span class="tool-arg">{toolArgSummary(part.input)}</span>
+										{/if}
+										<span class="tool-state" data-state={part.state}>
+											{toolStateLabel(part.state)}
+										</span>
+										{#if result}
+											<span class="tool-result" data-testid="agent-tool-result">
+												→ {result}
+											</span>
+										{/if}
+									</div>
+								{/if}
+							{/each}
+							{#if isTurnInFlight(turn) && !turn.parts.some((p) => p.kind === 'tool' && (p.state === 'pending' || p.state === 'running'))}
 								<Message from="assistant">
 									<MessageContent>
-										<AgentMarkdown source={part.text} />
+										<Shimmer children="Thinking…" />
 									</MessageContent>
 								</Message>
-							{:else if part.kind === 'tool'}
-								{@const result = toolResultSummary(part)}
-								<div
-									class="tool-line"
-									data-state={part.state}
-									data-testid="agent-tool"
-									data-tool-name={part.name}
-								>
-									<span class="tool-icon">
-										{#if part.state === 'pending' || part.state === 'running'}
-											<Spinner />
-										{:else if part.state === 'error'}
-											<TriangleAlert class="size-3.5" />
-										{:else}
-											<Wrench class="size-3.5" />
-										{/if}
-									</span>
-									<span class="tool-name">{part.name}</span>
-									{#if toolArgSummary(part.input)}
-										<span class="tool-arg">{toolArgSummary(part.input)}</span>
-									{/if}
-									<span class="tool-state" data-state={part.state}>
-										{toolStateLabel(part.state)}
-									</span>
-									{#if result}
-										<span class="tool-result" data-testid="agent-tool-result">
-											→ {result}
-										</span>
-									{/if}
-								</div>
 							{/if}
-						{/each}
-						{#if isTurnInFlight(turn) && !turn.parts.some((p) => p.kind === 'tool' && (p.state === 'pending' || p.state === 'running'))}
-							<Message from="assistant">
-								<MessageContent>
-									<Shimmer children="Thinking…" />
-								</MessageContent>
-							</Message>
-						{/if}
-					</div>
-				{/if}
-			{/each}
-		{/if}
-	</div>
+						</div>
+					{/if}
+				{/each}
+			{/if}
+		</ConversationContent>
+		<ConversationScrollButton
+			data-testid="agent-scroll-bottom"
+			aria-label="Scroll to bottom"
+		/>
+	</Conversation>
 
 	<form class="agent-input" onsubmit={submit}>
 		{#if app.agentError}
@@ -332,12 +350,13 @@
 		color: var(--ink-90);
 		background: color-mix(in srgb, var(--ink-50) 12%, transparent);
 	}
-	.agent-scroll {
+	/* Conversation owns flex-1 / overflow; Content is the scroller. Match the
+	   panel's denser rhythm — ConversationContent defaults to gap-8 / p-4. */
+	:global(.agent-conv) {
 		flex: 1;
 		min-height: 0;
-		overflow-y: auto;
-		display: flex;
-		flex-direction: column;
+	}
+	:global(.agent-scroll) {
 		gap: 0.55rem;
 		padding: 0.75rem 0.9rem;
 	}
