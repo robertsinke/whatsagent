@@ -15,6 +15,7 @@
 	import type { AppState } from '$lib/client/state.svelte.js';
 	import AgentMarkdown from './AgentMarkdown.svelte';
 	import AgentPanelScrollFollow from './AgentPanelScrollFollow.svelte';
+	import CalendarProposalCard from './CalendarProposalCard.svelte';
 	import {
 		hasActiveSessions,
 		isTurnInFlight,
@@ -54,6 +55,10 @@
 	 * owner's local-echo prompts so ordering is owner → reply across turns.
 	 * Agent text is markdown (safe node render, never raw HTML).
 	 *
+	 * CAL-5 — panel-originated calendar proposals (`chat_jid` null) sit above
+	 * the composer; chat-scoped ones stay in Composer. Calendar confirm/discard
+	 * writes an outcome line into the transcript (app-written, no model turn).
+	 *
 	 * THE INPUT IS WIRED (PL-U7). `submit` below calls `app.sendAgentTurn`.
 	 * PANEL-S3: the composer stays typable while a turn runs; submitting then
 	 * cancels and starts (steering). Stop still works alone.
@@ -63,7 +68,9 @@
 
 	const sessions = $derived(Object.values(app.agentSessions));
 	const anyActive = $derived(
-		hasActiveSessions(app.agentSessions) || app.agentOwnerEchoes.length > 0
+		hasActiveSessions(app.agentSessions) ||
+			app.agentOwnerEchoes.length > 0 ||
+			app.agentCalendarOutcomes.length > 0
 	);
 	const working = $derived(
 		sessions.some((s) =>
@@ -74,8 +81,10 @@
 	/** Flat timeline across sessions (normally one) with owner echoes interleaved. */
 	const timeline = $derived.by(() => {
 		const parts = sessions.flatMap((s) => s.parts);
-		return panelTimeline(parts, app.agentOwnerEchoes);
+		return panelTimeline(parts, app.agentOwnerEchoes, app.agentCalendarOutcomes);
 	});
+
+	const panelProposals = $derived(app.panelCalendarProposals);
 
 	let value = $state('');
 	let clearConfirmOpen = $state(false);
@@ -149,7 +158,7 @@
 					<p class="empty-body">{emptyState.body}</p>
 				</div>
 			{:else}
-				{#each timeline as entry, i (entry.kind === 'owner' ? `owner-${entry.messageId}` : entry.turn.id)}
+				{#each timeline as entry, i (entry.kind === 'owner' ? `owner-${entry.messageId}` : entry.kind === 'outcome' ? `outcome-${entry.id}` : entry.turn.id)}
 					{#if entry.kind === 'owner'}
 						{@const prev = timeline[i - 1]}
 						<div
@@ -161,6 +170,21 @@
 							<Message from="user">
 								<MessageContent>{entry.text}</MessageContent>
 							</Message>
+						</div>
+					{:else if entry.kind === 'outcome'}
+						{@const prev = timeline[i - 1]}
+						<div
+							class="turn outcome-turn"
+							class:turn-sep={prev !== undefined}
+							data-testid="agent-calendar-outcome"
+							data-status={entry.status}
+						>
+							<p class="outcome-line">
+								{#if entry.status === 'confirmed'}
+									<span class="outcome-tick" aria-hidden="true">✓</span>
+								{/if}
+								{entry.text}
+							</p>
 						</div>
 					{:else}
 						{@const turn = entry.turn}
@@ -230,6 +254,18 @@
 	</Conversation>
 
 	<form class="agent-input" onsubmit={submit}>
+		{#if panelProposals.length}
+			<div class="panel-proposals" data-testid="agent-panel-calendar-proposals">
+				{#each panelProposals as proposal (proposal.id)}
+					<CalendarProposalCard
+						{proposal}
+						deciding={app.decidingCalendarProposalId === proposal.id}
+						onconfirm={() => app.confirmCalendarProposal(proposal.id)}
+						onreject={() => app.rejectCalendarProposal(proposal.id)}
+					/>
+				{/each}
+			</div>
+		{/if}
 		{#if app.agentError}
 			<p class="agent-error" role="status" data-testid="agent-error">
 				<TriangleAlert class="size-3" />
@@ -460,6 +496,39 @@
 	}
 	.tool-line[data-state='error'] .tool-icon {
 		color: var(--destructive);
+	}
+	.outcome-line {
+		display: flex;
+		align-items: flex-start;
+		gap: 0.35rem;
+		margin: 0;
+		font-size: 0.78rem;
+		line-height: 1.4;
+		color: var(--ink-70);
+		padding: 0.35rem 0.5rem;
+		border-radius: var(--radius-md);
+		background: color-mix(in srgb, var(--surface-raised) 55%, transparent);
+		border: 1px solid var(--hairline-soft);
+	}
+	.outcome-tick {
+		flex: none;
+		font-weight: 700;
+		color: var(--cobalt);
+	}
+	.panel-proposals {
+		display: flex;
+		flex-direction: column;
+		gap: 0.35rem;
+		margin: 0 0 0.45rem;
+		border-radius: var(--radius-md);
+		overflow: hidden;
+		border: 1px solid var(--hairline);
+		background: var(--surface-raised);
+		box-shadow: var(--shadow-raised);
+	}
+	.panel-proposals :global([data-testid='calendar-proposal-card']) {
+		border-bottom: none;
+		background: transparent;
 	}
 	.agent-input {
 		flex: none;

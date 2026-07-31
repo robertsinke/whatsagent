@@ -52,6 +52,12 @@ export const rejectCalendarEventAction: ActionDefinition<RejectCalendarEventInpu
 		}
 		const rejected = getCalendarProposal(db, proposal.id)!;
 		events.emit({ type: 'calendar-proposal-updated', proposal: rejected });
+		// CAL-5 — so the panel agent's next turn does not still say "pending".
+		ctx.deps.panelSession?.recordCalendarOutcome?.({
+			status: 'rejected',
+			summary: rejected.summary,
+			start: rejected.start
+		});
 		return actionJson(200, { proposal: rejected });
 	}
 };

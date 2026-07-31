@@ -157,6 +157,14 @@ describe('AppState agent panel', () => {
 		const state = new AppState();
 		state.agent = { ...AVAILABLE, running: true, sessionId: 's1', messageId: 'm1' };
 		state.agentOwnerEchoes = [{ messageId: 'm1', text: 'hi' }];
+		state.agentCalendarOutcomes = [
+			{
+				id: 'cal-1-confirmed',
+				status: 'confirmed',
+				summary: 'Lunch',
+				start: '2026-08-01T11:00:00.000Z'
+			}
+		];
 		state.agentSessions = {
 			s1: {
 				sessionId: 's1',
@@ -185,6 +193,7 @@ describe('AppState agent panel', () => {
 		expect(await state.clearAgentPanel()).toBe(true);
 		expect(state.agentSessions).toEqual({});
 		expect(state.agentOwnerEchoes).toEqual([]);
+		expect(state.agentCalendarOutcomes).toEqual([]);
 		expect(state.agent.running).toBe(false);
 	});
 
@@ -301,5 +310,83 @@ describe('AppState agent panel', () => {
 		const parts = state.agentSessions.s1!.parts;
 		expect(parts).toHaveLength(1);
 		expect(parts[0]).toMatchObject({ name: 'list-chats', state: 'complete' });
+	});
+
+	it('calendar-proposal-updated confirmed/rejected appends a panel outcome (CAL-5)', () => {
+		const state = new AppState();
+		state.calendarProposals = [
+			{
+				id: 7,
+				summary: 'Lunch with Maya',
+				start: '2026-08-01T11:00:00.000Z',
+				end: '2026-08-01T12:30:00.000Z',
+				location: 'Cafe Nero',
+				chat_jid: null,
+				status: 'pending',
+				created_at: 1,
+				decided_at: null,
+				google_event_id: null
+			}
+		];
+		expect(state.panelCalendarProposals).toHaveLength(1);
+		expect(state.visibleCalendarProposals).toEqual([]);
+
+		state.applyEvent({
+			type: 'calendar-proposal-updated',
+			proposal: {
+				id: 7,
+				summary: 'Lunch with Maya',
+				start: '2026-08-01T11:00:00.000Z',
+				end: '2026-08-01T12:30:00.000Z',
+				location: 'Cafe Nero',
+				chat_jid: null,
+				status: 'confirmed',
+				created_at: 1,
+				decided_at: 99,
+				google_event_id: 'uid@whatsagent.local'
+			}
+		});
+		expect(state.calendarProposals).toEqual([]);
+		expect(state.agentCalendarOutcomes).toEqual([
+			{
+				id: 'cal-7-confirmed-99',
+				status: 'confirmed',
+				summary: 'Lunch with Maya',
+				start: '2026-08-01T11:00:00.000Z'
+			}
+		]);
+	});
+
+	it('routes chat-scoped calendar proposals to the composer, not the panel', () => {
+		const state = new AppState();
+		state.selectedJid = 'maya@s.whatsapp.net';
+		state.calendarProposals = [
+			{
+				id: 1,
+				summary: 'Panel one',
+				start: '2026-08-01T11:00:00.000Z',
+				end: '2026-08-01T12:00:00.000Z',
+				location: null,
+				chat_jid: null,
+				status: 'pending',
+				created_at: 1,
+				decided_at: null,
+				google_event_id: null
+			},
+			{
+				id: 2,
+				summary: 'Chat one',
+				start: '2026-08-02T11:00:00.000Z',
+				end: '2026-08-02T12:00:00.000Z',
+				location: null,
+				chat_jid: 'maya@s.whatsapp.net',
+				status: 'pending',
+				created_at: 2,
+				decided_at: null,
+				google_event_id: null
+			}
+		];
+		expect(state.panelCalendarProposals.map((p) => p.id)).toEqual([1]);
+		expect(state.visibleCalendarProposals.map((p) => p.id)).toEqual([2]);
 	});
 });

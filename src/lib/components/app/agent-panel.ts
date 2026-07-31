@@ -250,22 +250,76 @@ export type OwnerEcho = {
 };
 
 /**
+ * CAL-5 — an app-written acknowledgement that the owner confirmed or discarded
+ * a calendar proposal. Not a model turn: the click already happened, and the
+ * panel refuses concurrent turns, so inventing one would either race or lie.
+ */
+export type PanelCalendarOutcomeEcho = {
+	id: string;
+	status: 'confirmed' | 'rejected';
+	summary: string;
+	/** ISO start from the proposal row — formatted for display by {@link formatCalendarOutcomeLocalStart}. */
+	start: string;
+};
+
+/**
  * One row in the panel transcript: the owner's message for a turn, then that
  * turn's agent parts. Built so ordering is owner → reply → owner → reply across
- * turns, never all owners stacked above all replies.
+ * turns, never all owners stacked above all replies. CAL-5 adds calendar
+ * outcomes at the end — app-written, chronological after the turns that
+ * proposed them.
  */
 export type PanelTimelineEntry =
 	| { kind: 'owner'; messageId: string; text: string }
-	| { kind: 'turn'; messageId: string; turn: AgentTurn };
+	| { kind: 'turn'; messageId: string; turn: AgentTurn }
+	| {
+			kind: 'outcome';
+			id: string;
+			status: 'confirmed' | 'rejected';
+			summary: string;
+			start: string;
+			text: string;
+	  };
+
+/**
+ * Local-time start for an outcome line. Pure (Date only) so agent-panel stays
+ * DOM-free; the browser's default locale is fine for a single-user desktop app.
+ */
+export function formatCalendarOutcomeLocalStart(iso: string): string {
+	const d = new Date(iso);
+	if (!Number.isFinite(d.getTime())) return iso;
+	return d.toLocaleString(undefined, {
+		weekday: 'short',
+		month: 'short',
+		day: 'numeric',
+		hour: 'numeric',
+		minute: '2-digit'
+	});
+}
+
+/** Owner-visible acknowledgement copy for a calendar decision. */
+export function formatCalendarOutcomeText(
+	status: 'confirmed' | 'rejected',
+	summary: string,
+	start: string
+): string {
+	const when = formatCalendarOutcomeLocalStart(start);
+	if (status === 'confirmed') {
+		return `Added to your calendar: ${summary} · ${when}`;
+	}
+	return `Discarded: ${summary}`;
+}
 
 /**
  * Interleave owner echoes with the agent turns that share their messageId.
  * Echoes with no parts yet still render (optimistic). Turns whose messageId was
  * never echoed (dev emitter, older sessions) still render so nothing is dropped.
+ * Calendar outcomes append after the conversation rows (CAL-5).
  */
 export function panelTimeline(
 	parts: readonly AgentPart[],
-	ownerEchoes: readonly OwnerEcho[]
+	ownerEchoes: readonly OwnerEcho[],
+	outcomes: readonly PanelCalendarOutcomeEcho[] = []
 ): PanelTimelineEntry[] {
 	const turns = groupTurns(parts);
 	const turnsByMessage = new Map<string, AgentTurn[]>();
@@ -295,6 +349,17 @@ export function panelTimeline(
 		}
 	}
 
+	for (const outcome of outcomes) {
+		out.push({
+			kind: 'outcome',
+			id: outcome.id,
+			status: outcome.status,
+			summary: outcome.summary,
+			start: outcome.start,
+			text: formatCalendarOutcomeText(outcome.status, outcome.summary, outcome.start)
+		});
+	}
+
 	return out;
 }
 
@@ -309,6 +374,9 @@ export function panelContentSignature(timeline: readonly PanelTimelineEntry[]): 
 		.map((entry) => {
 			if (entry.kind === 'owner') {
 				return `o:${entry.messageId}:${entry.text.length}`;
+			}
+			if (entry.kind === 'outcome') {
+				return `c:${entry.id}:${entry.status}:${entry.text.length}`;
 			}
 			const parts = entry.turn.parts
 				.map((p) => {

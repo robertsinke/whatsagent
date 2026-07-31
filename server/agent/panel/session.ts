@@ -1,7 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentPart } from '../../../shared/agent-events.js';
 import type { EventBus } from '../../api/events.js';
-import { MAX_HISTORY_TURNS, type PanelHarness, type PanelTurnSummary } from './harness.js';
+import {
+	MAX_HISTORY_OUTCOMES,
+	MAX_HISTORY_TURNS,
+	type PanelCalendarOutcome,
+	type PanelHarness,
+	type PanelTurnSummary
+} from './harness.js';
 import { PanelTurnError } from './stream-process.js';
 
 /**
@@ -70,6 +76,12 @@ export class PanelSessionManager {
 	 * this stays a no-op on what any harness is sent.
 	 */
 	private history: PanelTurnSummary[] = [];
+	/**
+	 * CAL-5 — owner calendar decisions for the next turn's prompt. Capped to
+	 * {@link MAX_HISTORY_OUTCOMES} so they never crowd conversation turns out of
+	 * {@link MAX_HISTORY_TURNS}. Cleared with history.
+	 */
+	private outcomes: PanelCalendarOutcome[] = [];
 	private current: { start: PanelTurnStart; controller: AbortController } | null = null;
 	/**
 	 * PANEL-S3 — messageIds whose parts must not reach the EventBus. Set when the
@@ -133,15 +145,26 @@ export class PanelSessionManager {
 	 * Owner-visible reset: drop the rendered history so the next turn starts cold.
 	 * Cancels any in-flight turn first, suppresses its leftover parts, and rotates
 	 * the session id so the client can empty its transcript without the abort
-	 * stream writing back into it.
+	 * stream writing back into it. CAL-5 — also drops recorded calendar outcomes
+	 * so a cleared panel cannot keep describing them as pending/decided.
 	 */
 	clearHistory(): { cancelled: boolean; sessionId: string } {
 		const running = this.current;
 		const cancelled = this.cancel();
 		if (running) this.suppressedMessageIds.add(running.start.messageId);
 		this.history = [];
+		this.outcomes = [];
 		this.sessionId = `panel-${this.newId()}`;
 		return { cancelled, sessionId: this.sessionId };
+	}
+
+	/**
+	 * CAL-5 — record that the owner confirmed or discarded a calendar proposal.
+	 * Called from the confirm/reject actions via {@link RoutesDeps.panelSession};
+	 * the next turn's prompt includes these so the agent stops saying "pending".
+	 */
+	recordCalendarOutcome(outcome: PanelCalendarOutcome): void {
+		this.outcomes = [...this.outcomes, outcome].slice(-MAX_HISTORY_OUTCOMES);
 	}
 
 	async stop(): Promise<void> {
@@ -157,7 +180,8 @@ export class PanelSessionManager {
 			sessionId: start.sessionId,
 			messageId: start.messageId,
 			text,
-			history: this.history
+			history: this.history,
+			outcomes: this.outcomes
 		};
 		/** Text parts only — what goes into the next turn's rendered history. */
 		/** Latest snapshot per text partId — text parts are snapshots, not deltas. */
