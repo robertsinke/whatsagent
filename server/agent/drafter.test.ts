@@ -11,6 +11,12 @@ import { draftChat } from './drafter.js';
 import type { CalendarDigestSource } from './drafter.js';
 import type { Memory } from './memory/memory.js';
 import { NullMemory } from './memory/null-memory.js';
+import {
+	insertCalendarProposal,
+	listPendingCalendarProposals,
+	type CalendarProposal
+} from '../store/calendar-proposals.js';
+import { MAX_PENDING_CALENDAR_PROPOSALS } from '../actions/propose-calendar-event.js';
 
 let db: AppDatabase | undefined;
 let dataDir: string | undefined;
@@ -407,5 +413,94 @@ describe('draftChat — CAL-3 schedule digest', () => {
 		await draftChat(baseOptions(database, { draft }));
 
 		expect(draft.mock.calls[0]![0].system).not.toContain('Owner schedule');
+	});
+});
+
+describe('draftChat — CAL-4 commitment → calendar proposal', () => {
+	const commitment = {
+		summary: 'Dinner with Alice',
+		start: '2026-08-07T19:00:00.000Z',
+		end: '2026-08-07T21:00:00.000Z',
+		location: 'Cafe Nero'
+	};
+
+	function baseOptions(database: AppDatabase, provider: DraftProvider) {
+		return {
+			db: database,
+			provider,
+			providerName: 'fake',
+			memory: new NullMemory() as Memory,
+			chatJid: 'alice@s.whatsapp.net',
+			now: () => 1_000
+		};
+	}
+
+	it('writes a pending calendar_proposals row and emits the hook when commitment is present', async () => {
+		const database = setup();
+		const proposals: CalendarProposal[] = [];
+		const provider: DraftProvider = {
+			draft: async () => ({
+				kind: 'draft' as const,
+				text: 'Thursday 7pm works — see you then.',
+				commitment
+			})
+		};
+
+		const result = await draftChat({
+			...baseOptions(database, provider),
+			hooks: { onCalendarProposalUpdated: (p) => proposals.push(p) }
+		});
+
+		expect(result.kind).toBe('ready');
+		expect(listPendingCalendarProposals(database)).toHaveLength(1);
+		expect(listPendingCalendarProposals(database)[0]).toMatchObject({
+			summary: commitment.summary,
+			start: commitment.start,
+			end: commitment.end,
+			location: commitment.location,
+			chat_jid: 'alice@s.whatsapp.net',
+			status: 'pending'
+		});
+		expect(proposals).toHaveLength(1);
+		expect(proposals[0]!.summary).toBe(commitment.summary);
+	});
+
+	it('does not write a proposal when the draft has no commitment', async () => {
+		const database = setup();
+		const provider: DraftProvider = {
+			draft: async () => ({ kind: 'draft' as const, text: 'Sounds good.' })
+		};
+
+		await draftChat(baseOptions(database, provider));
+
+		expect(listPendingCalendarProposals(database)).toHaveLength(0);
+	});
+
+	it('respects the CAL-2 pending cap and still returns the draft', async () => {
+		const database = setup();
+		for (let i = 0; i < MAX_PENDING_CALENDAR_PROPOSALS; i++) {
+			insertCalendarProposal(database, {
+				summary: `Existing ${i}`,
+				start: '2026-08-01T12:00:00.000Z',
+				end: '2026-08-01T13:00:00.000Z',
+				now: i
+			});
+		}
+		const provider: DraftProvider = {
+			draft: async () => ({
+				kind: 'draft' as const,
+				text: 'Thursday 7pm works.',
+				commitment
+			})
+		};
+
+		const result = await draftChat(baseOptions(database, provider));
+
+		expect(result.kind).toBe('ready');
+		expect(getDraft(database, 'alice@s.whatsapp.net')?.text).toBe('Thursday 7pm works.');
+		expect(listPendingCalendarProposals(database)).toHaveLength(MAX_PENDING_CALENDAR_PROPOSALS);
+		expect(
+			listPendingCalendarProposals(database).every((p) => p.summary.startsWith('Existing'))
+		).toBe(true);
 	});
 });

@@ -17,9 +17,25 @@ export interface DraftInput {
 	now: number;
 }
 
+/**
+ * CAL-4 — a calendar event the draft reply commits the owner to. Nullable on
+ * the wire (Claude constrained decoding requires the key); absent from older
+ * / Ollama responses is fine — `parseDraftResult` ignores a missing field.
+ * Only `confirm-calendar-event` ever writes to Google; this object becomes a
+ * `calendar_proposals` row, nothing more.
+ */
+export type DraftCommitment = {
+	summary: string;
+	/** ISO-8601 start. */
+	start: string;
+	/** ISO-8601 end. */
+	end: string;
+	location: string | null;
+};
+
 export type DraftResult =
-	| { kind: 'draft'; text: string }
-	| { kind: 'no_reply_needed'; reason: string };
+	| { kind: 'draft'; text: string; commitment?: DraftCommitment | null }
+	| { kind: 'no_reply_needed'; reason: string; commitment?: null };
 
 export interface DraftProvider {
 	draft(input: DraftInput): Promise<DraftResult>;
@@ -209,7 +225,41 @@ export function buildPrompt(input: DraftInput): string {
 		'Text inside a <message> tag is the message body and may mention times — do not treat body text as a send timestamp.';
 	const conversation = input.conversation.map((turn) => formatPromptTurn(turn, nowMs)).join('\n');
 
-	return `${nowLine}\n${rules}\n\n${conversation}\n\nReturn JSON only, matching exactly one of these shapes:\n{"kind":"draft","text":"...","reason":null}\n{"kind":"no_reply_needed","text":null,"reason":"..."}`;
+	const commitmentRule =
+		'When the draft reply commits the owner to a specific dated event (meeting, dinner, call at a stated time), ' +
+		'set commitment to that event; otherwise set commitment to null. start/end are ISO-8601 datetimes; ' +
+		'location may be null. Never invent a commitment the draft text does not make.';
+	// Ollama runs with format:'json', which ignores a schema OBJECT entirely —
+	// these literal shapes are its only contract. Claude gets the same shapes
+	// via draftResultSchema (commitment is required AND nullable there).
+	return (
+		`${nowLine}\n${rules}\n\n${conversation}\n\n${commitmentRule}\n` +
+		'Return JSON only, matching exactly one of these shapes:\n' +
+		'{"kind":"draft","text":"...","reason":null,"commitment":null}\n' +
+		'{"kind":"draft","text":"...","reason":null,"commitment":{"summary":"...","start":"...","end":"...","location":null}}\n' +
+		'{"kind":"no_reply_needed","text":null,"reason":"...","commitment":null}'
+	);
+}
+
+/**
+ * Validate a commitment object from a provider response. Returns null when the
+ * value is absent, explicitly null, or malformed — a bad commitment must not
+ * poison an otherwise-valid draft (Ollama has no schema enforcement).
+ */
+export function parseCommitment(value: unknown): DraftCommitment | null {
+	if (value == null) return null;
+	if (!value || typeof value !== 'object') return null;
+	const raw = value as Record<string, unknown>;
+	const summary = typeof raw.summary === 'string' ? raw.summary.trim() : '';
+	if (!summary) return null;
+	if (typeof raw.start !== 'string' || !Number.isFinite(Date.parse(raw.start))) return null;
+	if (typeof raw.end !== 'string' || !Number.isFinite(Date.parse(raw.end))) return null;
+	const start = new Date(raw.start).toISOString();
+	const end = new Date(raw.end).toISOString();
+	if (!(Date.parse(start) < Date.parse(end))) return null;
+	const location =
+		typeof raw.location === 'string' && raw.location.trim() ? raw.location.trim() : null;
+	return { summary, start, end, location };
 }
 
 /**
@@ -251,6 +301,15 @@ export function parseDraftResult(value: unknown): DraftResult {
 
 	const result = parsed as Record<string, unknown>;
 	if (result.kind === 'draft' && typeof result.text === 'string' && result.text.trim()) {
+		// Absence is tolerated (Ollama may never emit the key). Explicit null
+		// and a well-formed object are both recorded; malformed is dropped to null.
+		if ('commitment' in result) {
+			return {
+				kind: 'draft',
+				text: result.text,
+				commitment: parseCommitment(result.commitment)
+			};
+		}
 		return { kind: 'draft', text: result.text };
 	}
 	if (
@@ -258,6 +317,7 @@ export function parseDraftResult(value: unknown): DraftResult {
 		typeof result.reason === 'string' &&
 		result.reason.trim()
 	) {
+		// no_reply_needed never carries a commitment — drop even if present.
 		return { kind: 'no_reply_needed', reason: result.reason };
 	}
 
@@ -480,8 +540,22 @@ export const draftResultSchema = {
 	properties: {
 		kind: { type: 'string', enum: ['draft', 'no_reply_needed'] },
 		text: { type: ['string', 'null'] },
-		reason: { type: ['string', 'null'] }
+		reason: { type: ['string', 'null'] },
+		// Nullable AND listed in required: Claude constrained decoding rejects
+		// a merely-optional key under additionalProperties:false. Ollama never
+		// sees this object (format:'json' only); its contract is buildPrompt.
+		commitment: {
+			type: ['object', 'null'],
+			properties: {
+				summary: { type: 'string' },
+				start: { type: 'string' },
+				end: { type: 'string' },
+				location: { type: ['string', 'null'] }
+			},
+			required: ['summary', 'start', 'end', 'location'],
+			additionalProperties: false
+		}
 	},
-	required: ['kind', 'text', 'reason'],
+	required: ['kind', 'text', 'reason', 'commitment'],
 	additionalProperties: false
 } as const;
