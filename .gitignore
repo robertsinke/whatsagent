@@ -1,6 +1,11 @@
 .remember/
 .DS_Store
-node_modules/
+# No trailing slash on purpose: `node_modules/` matches directories ONLY, and a
+# git worktree that symlinks node_modules back to the main tree therefore shows
+# it as untracked (git does not treat a symlink as a directory). Verified: with
+# the slash, `git status` reports `?? node_modules` for a symlink; without it,
+# clean. Both a real directory and a symlink are covered by the bare name.
+node_modules
 /build
 /.svelte-kit
 /dist
