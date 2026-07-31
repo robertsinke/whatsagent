@@ -3,13 +3,14 @@
 	import * as InputGroup from '$lib/components/ui/input-group/index.js';
 	import { Spinner } from '$lib/components/ui/spinner/index.js';
 	import { senderLabel } from '$lib/client/view.js';
-	import type { Draft, Message, RefinementIntent, SendProposal } from '$lib/client/types.js';
+	import type { CalendarProposal, Draft, Message, RefinementIntent, SendProposal } from '$lib/client/types.js';
 	import type {
 		ProposalStalePrompt,
 		StalePrompt,
 		TextConflictPrompt
 	} from '$lib/client/state.svelte.js';
 	import DraftStatus from './DraftStatus.svelte';
+	import CalendarProposalCard from './CalendarProposalCard.svelte';
 	import ProposalCard from './ProposalCard.svelte';
 
 	let {
@@ -23,10 +24,12 @@
 		stalePrompt = null,
 		textConflict = null,
 		proposals = [],
+		calendarProposals = [],
 		proposalChatName = null,
 		proposalTargetText = null,
 		proposalStalePrompt = null,
 		decidingProposalId = null,
+		decidingCalendarProposalId = null,
 		agentEligible = false,
 		refining = false,
 		refineError = null,
@@ -40,6 +43,8 @@
 		ondismisschange,
 		onconfirmproposal,
 		onrejectproposal,
+		onconfirmcalendarproposal,
+		onrejectcalendarproposal,
 		onrefine,
 		ongenerate
 	}: {
@@ -54,12 +59,15 @@
 		textConflict?: TextConflictPrompt | null;
 		/** PANEL-S6 — agent proposals (send or reaction) awaiting this owner's decision. */
 		proposals?: SendProposal[];
+		/** CAL-2 — calendar event proposals awaiting confirmation. */
+		calendarProposals?: CalendarProposal[];
 		/** Display name for the open chat — reaction cards show which chat. */
 		proposalChatName?: string | null;
 		/** Resolve a message id to preview text for reaction cards. */
 		proposalTargetText?: ((messageId: string) => string | null) | null;
 		proposalStalePrompt?: ProposalStalePrompt | null;
 		decidingProposalId?: number | null;
+		decidingCalendarProposalId?: number | null;
 		agentEligible?: boolean;
 		refining?: boolean;
 		refineError?: string | null;
@@ -73,6 +81,8 @@
 		ondismisschange?: () => void;
 		onconfirmproposal?: (id: number) => void | Promise<unknown>;
 		onrejectproposal?: (id: number) => void | Promise<unknown>;
+		onconfirmcalendarproposal?: (id: number) => void | Promise<unknown>;
+		onrejectcalendarproposal?: (id: number) => void | Promise<unknown>;
 		onrefine?: (intent: RefinementIntent, text?: string) => Promise<Draft | null>;
 		ongenerate?: () => void | Promise<unknown>;
 	} = $props();
@@ -139,6 +149,14 @@
 	  PL-U3: proposals sit above the draft card because they are the newer claim
 	  on the owner's attention, and because confirming one is a send.
 	-->
+	{#each calendarProposals as proposal (proposal.id)}
+		<CalendarProposalCard
+			{proposal}
+			deciding={decidingCalendarProposalId === proposal.id}
+			onconfirm={() => onconfirmcalendarproposal?.(proposal.id)}
+			onreject={() => onrejectcalendarproposal?.(proposal.id)}
+		/>
+	{/each}
 	{#each proposals as proposal (proposal.id)}
 		<ProposalCard
 			{proposal}

@@ -139,6 +139,21 @@ export function proposalApprovalText(proposal: {
 }
 
 /**
+ * CAL-2 — canonical string for a calendar proposal approval.
+ *
+ * Binds summary + start + end + location so a row cannot retarget between the
+ * owner reading the card and clicking confirm. Null location hashes as empty.
+ */
+export function calendarProposalApprovalText(proposal: {
+	summary: string;
+	start: string;
+	end: string;
+	location?: string | null;
+}): string {
+	return `calendar\0${proposal.summary}\0${proposal.start}\0${proposal.end}\0${proposal.location ?? ''}`;
+}
+
+/**
  * True only when the caller supplied a hash and it matches the stored text.
  *
  * A caller that supplies nothing gets `false` here; whether that is a refusal

@@ -8,6 +8,7 @@ import { getDraft } from '../store/drafts.js';
 import { getMessage, listMessagesPage, type Message } from '../store/messages.js';
 import { listOutbox } from '../store/outbox.js';
 import { listOpenCancellationNotices } from '../store/cancellation-notices.js';
+import { listPendingCalendarProposalsAll } from '../store/calendar-proposals.js';
 import { listPendingProposalsAll } from '../store/proposals.js';
 import {
 	getSetting,
@@ -719,6 +720,25 @@ async function handleApi(
 	if (path === '/api/calendar/events' && method === 'POST') {
 		const body = await readJsonBody(req);
 		await dispatchAction(deps, res, 'list-calendar-events', body ?? {});
+		return;
+	}
+
+	// CAL-2 — pending calendar proposals (owner hydrate). Create is tool-only.
+	if (path === '/api/calendar/proposals' && method === 'GET') {
+		json(res, 200, { items: listPendingCalendarProposalsAll(db) });
+		return;
+	}
+
+	const calendarProposalMatch =
+		/^\/api\/calendar\/proposals\/(\d+)\/(confirm|reject)$/.exec(path);
+	if (calendarProposalMatch && method === 'POST') {
+		const id = Number(calendarProposalMatch[1]);
+		const body = (await readJsonBody(req)) as Record<string, unknown> | undefined;
+		const action =
+			calendarProposalMatch[2] === 'confirm'
+				? 'confirm-calendar-event'
+				: 'reject-calendar-event';
+		await dispatchAction(deps, res, action, { ...(body ?? {}), id });
 		return;
 	}
 

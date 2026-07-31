@@ -3,6 +3,7 @@ import {
 	type AgentCancelResult,
 	type AgentClearResult,
 	type AgentStatus,
+	type CalendarProposal,
 	type CancellationNotice,
 	type Chat,
 	type Draft,
@@ -208,6 +209,28 @@ export const api = {
 
 	rejectProposal: (id: number) =>
 		request<{ proposal: SendProposal }>(`/proposals/${id}/reject`, { method: 'POST' }),
+
+	/** CAL-2 — pending calendar proposals for first paint after a reload. */
+	calendarProposals: () => request<{ items: CalendarProposal[] }>('/calendar/proposals'),
+
+	/**
+	 * CAL-2 — owner's confirmation. This is the call that PUTs the VEVENT to
+	 * Google; `base_hash` is mandatory so a proposal cannot be confirmed without
+	 * naming the payload that was on screen.
+	 */
+	confirmCalendarProposal: (id: number, baseHash: string) =>
+		request<{ proposal: CalendarProposal; google_event_id: string }>(
+			`/calendar/proposals/${id}/confirm`,
+			{
+				method: 'POST',
+				body: JSON.stringify({ base_hash: baseHash })
+			}
+		),
+
+	rejectCalendarProposal: (id: number) =>
+		request<{ proposal: CalendarProposal }>(`/calendar/proposals/${id}/reject`, {
+			method: 'POST'
+		}),
 
 	/** PL-U5 — open cancellation notices (agent undid an owner-approved send). */
 	cancellationNotices: () =>

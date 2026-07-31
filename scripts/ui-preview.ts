@@ -39,6 +39,10 @@
  *     confirmation card (emoji + target message + chat) can be photographed.
  *     Mutually exclusive with PREVIEW_PROPOSAL in practice — both can be set,
  *     but captures should pick one focus.
+ *   PREVIEW_CALENDAR_PROPOSAL=1
+ *     Seeds a pending calendar event proposal (CAL-2) so the confirm-gated
+ *     calendar card can be photographed. No Google write exists — that is the
+ *     point of it.
  *   PREVIEW_AGENT_EDIT=1
  *     Two seconds after boot, rewrites the seeded draft as the *agent* and
  *     emits `draft-updated`, reproducing the exact sequence PL-U3 Half B
@@ -98,6 +102,7 @@ import { upsertContact } from '../server/store/contacts.js';
 import { setMediaRef, upsertMessage, upsertMessageReaction } from '../server/store/messages.js';
 import { getDraft, upsertDraft } from '../server/store/drafts.js';
 import { insertProposal } from '../server/store/proposals.js';
+import { insertCalendarProposal } from '../server/store/calendar-proposals.js';
 import { insertCancellationNotice } from '../server/store/cancellation-notices.js';
 import { VoiceFiles } from '../server/agent/memory/voice-files.js';
 import { linkContactIdentity } from '../server/store/contacts.js';
@@ -826,6 +831,18 @@ if (process.env.PREVIEW_REACTION_PROPOSAL === '1' && !sessionMode) {
 		chatJid: DIRECT,
 		emoji: '👍',
 		targetMsgId: 'u-2',
+		now: Date.now()
+	});
+}
+
+// CAL-2 — a pending calendar proposal to photograph (confirm-gated write).
+if (process.env.PREVIEW_CALENDAR_PROPOSAL === '1' && !sessionMode) {
+	insertCalendarProposal(db, {
+		summary: 'Lunch with Maya',
+		start: new Date(Date.UTC(2026, 7, 1, 11, 0, 0)).toISOString(),
+		end: new Date(Date.UTC(2026, 7, 1, 12, 30, 0)).toISOString(),
+		location: 'Cafe Nero',
+		chatJid: DIRECT,
 		now: Date.now()
 	});
 }

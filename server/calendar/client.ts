@@ -2,14 +2,17 @@
  * Transport-agnostic calendar client. CAL-2/3/4 depend on this interface so a
  * future swap off Google's deprecated legacy CalDAV endpoint (EventKit, OAuth)
  * does not touch those units.
+ *
+ * CAL-2 widens this interface with {@link CalendarClient.createEvent}. Parallel
+ * workers mocking the old shape must update their mocks at merge time.
  */
-import {
-	propfind,
-	reportCalendarQuery,
-	type CalDavFetch
-} from './caldav.js';
+import { propfind, putVevent, reportCalendarQuery, type CalDavFetch } from './caldav.js';
 import type { CalendarCredentials } from './credentials.js';
-import { expandIcalInRange, type CalendarEventOccurrence } from './ical.js';
+import {
+	buildVeventIcal,
+	expandIcalInRange,
+	type CalendarEventOccurrence
+} from './ical.js';
 
 export type { CalendarEventOccurrence };
 
@@ -23,9 +26,29 @@ export type CalendarTestResult = {
 	ok: boolean;
 };
 
+export type CalendarCreateEventInput = {
+	uid: string;
+	summary: string;
+	start: string; // ISO-8601
+	end: string; // ISO-8601
+	location?: string | null;
+};
+
+export type CalendarCreateEventResult = {
+	status: number;
+	ok: boolean;
+	href: string;
+	uid: string;
+};
+
 export type CalendarClient = {
 	testConnection(): Promise<CalendarTestResult>;
 	listEvents(range: { start: Date; end: Date }): Promise<CalendarListResult>;
+	/**
+	 * PUT a new VEVENT. The ONLY write on this client. Callers must surface a
+	 * non-2xx result as failure — never keep a local copy and report success.
+	 */
+	createEvent(input: CalendarCreateEventInput): Promise<CalendarCreateEventResult>;
 };
 
 export type CreateCalendarClientOptions = {
@@ -62,6 +85,28 @@ export function createCalendarClient(
 			const payloads = report.entries.map((e) => e.calendarData);
 			const events = expandIcalInRange(payloads, range.start, range.end);
 			return { events, status: report.status };
+		},
+
+		async createEvent(input) {
+			const icalBody = buildVeventIcal({
+				uid: input.uid,
+				summary: input.summary,
+				start: input.start,
+				end: input.end,
+				location: input.location ?? null
+			});
+			const result = await putVevent(
+				creds,
+				input.uid,
+				icalBody,
+				fetchImpl ? { fetch: fetchImpl } : {}
+			);
+			return {
+				status: result.status,
+				ok: result.ok,
+				href: result.href,
+				uid: input.uid
+			};
 		}
 	};
 }

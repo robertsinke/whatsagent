@@ -2,6 +2,7 @@ import { api } from './api.js';
 import { createRealtime, type Realtime } from './ws.svelte.js';
 import {
 	ApiError,
+	type CalendarProposal,
 	type CancellationNotice,
 	type Chat,
 	type Draft,
@@ -19,6 +20,7 @@ import {
 	type AgentPart
 } from '../../../shared/agent-events.js';
 import {
+	calendarProposalApprovalText,
 	CONFLICT_TEXT_CHANGED,
 	hashApprovalText,
 	proposalApprovalText,
@@ -129,9 +131,12 @@ export class AppState {
 	textConflict = $state<TextConflictPrompt | null>(null);
 	/** PL-U3 — pending agent proposals awaiting an owner decision. */
 	proposals = $state<SendProposal[]>([]);
+	/** CAL-2 — pending calendar event proposals (chat_jid may be null). */
+	calendarProposals = $state<CalendarProposal[]>([]);
 	proposalStalePrompt = $state<ProposalStalePrompt | null>(null);
 	/** Proposal id currently being confirmed/rejected, so the card can disable. */
 	decidingProposalId = $state<number | null>(null);
+	decidingCalendarProposalId = $state<number | null>(null);
 	/**
 	 * PL-U5 — durable notices that the agent cancelled an owner-approved send.
 	 * Open until the owner dismisses; refetched on hydrate so a faded toast is
@@ -329,7 +334,8 @@ export class AppState {
 
 	async refresh(options: { preserveDeepenStatus?: boolean } = {}): Promise<void> {
 		try {
-			const [session, chats, outbox, sendMode, proposals, notices, agent] = await Promise.all([
+			const [session, chats, outbox, sendMode, proposals, calendarProposals, notices, agent] =
+				await Promise.all([
 				api.session().catch(() => EMPTY_SESSION),
 				api.chats(),
 				api.outbox(),
@@ -337,6 +343,7 @@ export class AppState {
 				// A proposal outlives the socket that announced it, so the pending
 				// set is refetched rather than reconstructed from events.
 				api.proposals().catch(() => ({ items: [] as SendProposal[] })),
+				api.calendarProposals().catch(() => ({ items: [] as CalendarProposal[] })),
 				api.cancellationNotices().catch(() => ({ items: [] as CancellationNotice[] })),
 				// PL-U7 — whether the panel has a runtime at all. Falls back to
 				// unavailable so an older server (or a failed call) leaves the composer
@@ -348,6 +355,7 @@ export class AppState {
 			this.outbox = outbox;
 			this.sendsLive = sendMode.live;
 			this.proposals = proposals.items;
+			this.calendarProposals = calendarProposals.items;
 			this.cancellationNotices = notices.items.filter((n) => n.dismissed_at === null);
 			this.agent = agent;
 			// Session and chats have now both been seen — first-run can be decided.
@@ -670,6 +678,18 @@ export class AppState {
 	}
 
 	/**
+	 * Pending calendar proposals visible for the open chat: matching chat_jid,
+	 * or null chat_jid (global / panel-originated). All pending when no chat is
+	 * selected — the empty pane still needs to show them.
+	 */
+	get visibleCalendarProposals(): CalendarProposal[] {
+		if (!this.selectedJid) return this.calendarProposals;
+		return this.calendarProposals.filter(
+			(p) => p.chat_jid === null || p.chat_jid === this.selectedJid
+		);
+	}
+
+	/**
 	 * PANEL-S6 — confirm an agent proposal. This is the click that creates the
 	 * outbox row; `propose-send` / `propose-reaction` created nothing. The hash
 	 * is taken from {@link proposalApprovalText} of the row this client is
@@ -756,6 +776,56 @@ export class AppState {
 		} catch {
 			// Non-fatal: the WS event refills this, and a missing proposal card
 			// never causes a send.
+		}
+	}
+
+	/**
+	 * CAL-2 — confirm a calendar proposal. This is the click that PUTs to
+	 * Google; `propose-calendar-event` created nothing. Hash binds the card on
+	 * screen. A non-2xx PUT surfaces as an error — never silent success.
+	 */
+	async confirmCalendarProposal(id: number): Promise<boolean> {
+		const proposal = this.calendarProposals.find((p) => p.id === id);
+		if (!proposal || this.decidingCalendarProposalId !== null) return false;
+		this.decidingCalendarProposalId = id;
+		try {
+			const { proposal: decided } = await api.confirmCalendarProposal(
+				id,
+				hashApprovalText(calendarProposalApprovalText(proposal))
+			);
+			this.calendarProposals = this.calendarProposals.filter((p) => p.id !== decided.id);
+			return true;
+		} catch (err) {
+			this.error = describeError(err);
+			if (err instanceof ApiError && err.status === 409) {
+				await this.refreshCalendarProposals();
+			}
+			return false;
+		} finally {
+			this.decidingCalendarProposalId = null;
+		}
+	}
+
+	async rejectCalendarProposal(id: number): Promise<boolean> {
+		if (this.decidingCalendarProposalId !== null) return false;
+		this.decidingCalendarProposalId = id;
+		try {
+			await api.rejectCalendarProposal(id);
+			this.calendarProposals = this.calendarProposals.filter((p) => p.id !== id);
+			return true;
+		} catch (err) {
+			this.error = describeError(err);
+			return false;
+		} finally {
+			this.decidingCalendarProposalId = null;
+		}
+	}
+
+	async refreshCalendarProposals(): Promise<void> {
+		try {
+			this.calendarProposals = (await api.calendarProposals()).items;
+		} catch {
+			// Non-fatal: WS event refills; a missing card never creates an event.
 		}
 	}
 
@@ -1173,6 +1243,15 @@ export class AppState {
 				) {
 					this.proposalStalePrompt = null;
 				}
+				return;
+			case 'calendar-proposal-updated':
+				this.calendarProposals =
+					event.proposal.status === 'pending'
+						? [
+								...this.calendarProposals.filter((p) => p.id !== event.proposal.id),
+								event.proposal
+							].sort((a, b) => a.id - b.id)
+						: this.calendarProposals.filter((p) => p.id !== event.proposal.id);
 				return;
 			case 'cancellation-notice':
 				this.cancellationNotices =
