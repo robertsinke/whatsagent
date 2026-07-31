@@ -1,5 +1,9 @@
 import type { AppDatabase } from './db.js';
 import { DRAFT_PROVIDER_NAMES } from '../../shared/providers.js';
+import {
+	calendarConnectionPublicView,
+	redactCalendarSecrets
+} from '../calendar/credentials.js';
 
 export const PACING_MIN_SECONDS_SETTING = 'pacing_min_seconds';
 export const PACING_MAX_SECONDS_SETTING = 'pacing_max_seconds';
@@ -222,8 +226,9 @@ export function getPanelSettings(db: AppDatabase): {
 export function listEffectiveSettings(db: AppDatabase): Record<string, string> {
 	const settings = listSettings(db);
 	const pacing = getOutboxPacingSettings(db);
+	const calendar = calendarConnectionPublicView(db);
 	return {
-		...settings,
+		...redactCalendarSecrets(settings),
 		[PACING_MIN_SECONDS_SETTING]: String(pacing.minSpacingMs / 1_000),
 		[PACING_MAX_SECONDS_SETTING]: String(pacing.maxSpacingMs / 1_000),
 		// Normalized polarity: only the explicit string 'false' means live sends.
@@ -233,6 +238,9 @@ export function listEffectiveSettings(db: AppDatabase): Record<string, string> {
 		// PANEL-S1: same fail-safe polarity — only the exact string 'true' turns
 		// the panel on, so the Settings toggle renders off for a missing or
 		// corrupt row rather than claiming a capability that is not running.
-		[PANEL_ENABLED_SETTING]: settings[PANEL_ENABLED_SETTING] === 'true' ? 'true' : 'false'
+		[PANEL_ENABLED_SETTING]: settings[PANEL_ENABLED_SETTING] === 'true' ? 'true' : 'false',
+		// Calendar: public fields only. The encrypted app password never leaves
+		// the process — see redactCalendarSecrets / getCalendarCredentials.
+		...calendar
 	};
 }

@@ -10,6 +10,7 @@
 	import {
 		ArrowLeft,
 		Bot,
+		Calendar,
 		Check,
 		Radio,
 		RefreshCw,
@@ -192,6 +193,66 @@
 	 * loading line would stick forever (onready only fires once per mount).
 	 */
 	let voiceEditorReady = $state(false);
+
+	/**
+	 * CAL-1 — Google Calendar via CalDAV App Password. Three fields; the password
+	 * is never returned by GET /settings (ciphertext is redacted). Prefill the
+	 * events URL from the email. Test = PROPFIND only; Save & connect encrypts
+	 * then PROPFINDs through the decrypting accessor.
+	 */
+	let calendarEmail = $state('');
+	let calendarServerUrl = $state('');
+	let calendarPassword = $state('');
+	let calendarConfigured = $state(false);
+	let calendarBusy = $state<'test' | 'save' | null>(null);
+	let calendarStatus = $state<string | null>(null);
+	let calendarError = $state<string | null>(null);
+	const calendarUrlPrefill = $derived(
+		calendarEmail.trim()
+			? `https://www.google.com/calendar/dav/${calendarEmail.trim()}/events`
+			: 'https://www.google.com/calendar/dav/EMAIL/events'
+	);
+
+	function applyCalendarFromSettings(settings: Record<string, string>) {
+		calendarEmail = settings.calendar_email ?? '';
+		calendarServerUrl = settings.calendar_server_url ?? '';
+		calendarConfigured = settings.calendar_configured === 'true';
+		// Never hydrate the password from settings — it is not there.
+		if (!calendarPassword) calendarPassword = '';
+	}
+
+	async function runCalendarConnect(mode: 'test' | 'save') {
+		calendarBusy = mode;
+		calendarError = null;
+		calendarStatus = null;
+		const email = calendarEmail.trim();
+		const password = calendarPassword.trim();
+		const serverUrl = (calendarServerUrl.trim() || calendarUrlPrefill).trim();
+		if (!email || !password) {
+			calendarError = 'Email and App Password are required.';
+			calendarBusy = null;
+			return;
+		}
+		try {
+			const result = await api.connectCalendar({ serverUrl, email, password, mode });
+			calendarServerUrl = result.serverUrl;
+			calendarEmail = result.email;
+			calendarConfigured = mode === 'save' ? result.saved : calendarConfigured;
+			if (mode === 'save' && result.saved) {
+				calendarPassword = '';
+			}
+			calendarStatus = result.ok
+				? `PROPFIND ${result.status} — connected.`
+				: `PROPFIND ${result.status} — Google rejected the credentials.`;
+			if (!result.ok) {
+				calendarError = `HTTP ${result.status}`;
+			}
+		} catch (err) {
+			calendarError = err instanceof Error ? err.message : String(err);
+		} finally {
+			calendarBusy = null;
+		}
+	}
 
 	async function loadProviders(refresh = false) {
 		providersLoading = true;
@@ -503,6 +564,7 @@
 			.settings()
 			.then((settings) => {
 				values = settings;
+				applyCalendarFromSettings(settings);
 			})
 			.catch((err) => (error = err instanceof Error ? err.message : String(err)));
 		// Independent of settings — enrichment only. Rejection must not brick the page.
@@ -830,6 +892,134 @@
 							Changes here take effect immediately — turning the panel on starts it,
 							turning it off stops it and ends any turn it was running.
 						</p>
+					{/if}
+				</div>
+
+				<!--
+				  CAL-1 — Google Calendar via CalDAV App Password. No OAuth, no Cloud
+				  project. The panel agent reads through list-calendar-events; writes
+				  (CAL-2) stay confirm-gated and are not configured here.
+				-->
+				<div
+					class="panel-card"
+					data-configured={calendarConfigured}
+					data-testid="google-calendar-setting"
+				>
+					<div class="panel-head">
+						<span class="panel-icon" data-enabled={calendarConfigured}
+							><Calendar class="size-4" /></span
+						>
+						<div class="panel-titles">
+							<span class="field-label">Google Calendar</span>
+							<span class="panel-state" data-testid="calendar-connection-state">
+								{#if calendarConfigured}
+									Connected — the agent panel can read your primary calendar.
+								{:else}
+									Not connected.
+								{/if}
+							</span>
+						</div>
+					</div>
+
+					<p class="panel-help">
+						Connect with a Google <strong>App Password</strong> (not your normal password).
+						Create one at
+						<a
+							href="https://myaccount.google.com/apppasswords"
+							target="_blank"
+							rel="noreferrer">myaccount.google.com/apppasswords</a
+						>
+						— 2-Step Verification must be on. No Google Cloud project. Nothing to publish.
+					</p>
+
+					<label class="field">
+						<span class="field-label">Google account email</span>
+						<span class="field-row">
+							<Input
+								bind:value={calendarEmail}
+								type="email"
+								autocomplete="username"
+								placeholder="you@gmail.com"
+								class="field-input"
+								data-testid="calendar-email"
+								oninput={() => {
+									if (
+										!calendarServerUrl.trim() ||
+										calendarServerUrl.includes('/calendar/dav/')
+									) {
+										calendarServerUrl = calendarUrlPrefill;
+									}
+								}}
+							/>
+						</span>
+					</label>
+
+					<label class="field">
+						<span class="field-label">CalDAV server URL</span>
+						<span class="field-row">
+							<Input
+								bind:value={calendarServerUrl}
+								placeholder={calendarUrlPrefill}
+								class="field-input"
+								data-testid="calendar-server-url"
+							/>
+						</span>
+						<span class="field-help">
+							Prefills from the email. Use the legacy
+							<code>www.google.com/calendar/dav/…</code> host — not
+							<code>apidata.googleusercontent.com</code>.
+						</span>
+					</label>
+
+					<label class="field">
+						<span class="field-label">App Password</span>
+						<span class="field-row">
+							<Input
+								bind:value={calendarPassword}
+								type="password"
+								autocomplete="current-password"
+								placeholder={calendarConfigured ? '••••••••••••••••' : 'xxxx xxxx xxxx xxxx'}
+								class="field-input"
+								data-testid="calendar-password"
+							/>
+						</span>
+						<span class="field-help">
+							Stored encrypted in SQLite; the key lives in the macOS login keychain under
+							<code>whatsagent.google-calendar</code>. Never sent back to this page after save.
+						</span>
+					</label>
+
+					<div class="panel-controls">
+						<Button
+							size="sm"
+							variant="outline"
+							data-testid="calendar-test"
+							disabled={calendarBusy !== null}
+							onclick={() => void runCalendarConnect('test')}
+						>
+							{calendarBusy === 'test' ? 'Testing…' : 'Test connection'}
+						</Button>
+						<Button
+							size="sm"
+							data-testid="calendar-save"
+							disabled={calendarBusy !== null}
+							onclick={() => void runCalendarConnect('save')}
+						>
+							{#if calendarBusy === 'save'}
+								Saving…
+							{:else if calendarConfigured}
+								<Check class="size-3.5" /> Update connection
+							{:else}
+								Save &amp; connect
+							{/if}
+						</Button>
+					</div>
+
+					{#if calendarStatus}
+						<p class="panel-help" data-testid="calendar-status" role="status">{calendarStatus}</p>
+					{/if}
+					{#if calendarError}
+						<p class="error" data-testid="calendar-error" role="alert">{calendarError}</p>
 					{/if}
 				</div>
 			</Tabs.Content>

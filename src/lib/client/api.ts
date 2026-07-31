@@ -312,6 +312,56 @@ export const api = {
 		}),
 
 	/**
+	 * CAL-1 — save or test Google Calendar CalDAV credentials (App Password).
+	 * Frontend-only on the server. `mode: 'save'` encrypts then PROPFINDs via
+	 * the decrypting accessor; `mode: 'test'` PROPFINDs without persisting.
+	 */
+	connectCalendar: (input: {
+		serverUrl: string;
+		email: string;
+		password: string;
+		mode: 'test' | 'save';
+	}) =>
+		request<{
+			mode: 'test' | 'save';
+			saved: boolean;
+			ok: boolean;
+			status: number;
+			serverUrl: string;
+			email: string;
+		}>('/calendar/connect', {
+			method: 'POST',
+			body: JSON.stringify(input)
+		}),
+
+	/** CAL-1 — list calendar events in a range (same action the panel tool uses). */
+	listCalendarEvents: (input: {
+		start?: string;
+		end?: string;
+		limit?: number;
+		offset?: number;
+	} = {}) =>
+		request<{
+			items: Array<{
+				uid: string;
+				summary: string;
+				start: string;
+				end: string;
+				location: string | null;
+				allDay: boolean;
+				recurrenceId: string | null;
+			}>;
+			total: number;
+			offset: number;
+			limit: number;
+			has_more: boolean;
+			range: { start: string; end: string };
+		}>('/calendar/events', {
+			method: 'POST',
+			body: JSON.stringify(input)
+		}),
+
+	/**
 	 * SEC-1 — re-measure a harness tool surface (Tier 1 by default).
 	 * `deep: true` runs the decoy + positive-control path and spends a model call.
 	 */
