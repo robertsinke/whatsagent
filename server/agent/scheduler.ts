@@ -5,7 +5,7 @@ import { getDraft, upsertDraft } from '../store/drafts.js';
 import type { Message } from '../store/messages.js';
 import type { DraftProvider } from '../providers/provider.js';
 import { listNeedsReplyCandidates } from './classifier.js';
-import { draftChat, type AgentDraftHooks } from './drafter.js';
+import { draftChat, type AgentDraftHooks, type CalendarDigestSource } from './drafter.js';
 import type { Memory } from './memory/memory.js';
 
 export type DraftSchedulerOptions = {
@@ -18,6 +18,13 @@ export type DraftSchedulerOptions = {
 	conversationLimit?: number;
 	now?: () => number;
 	hooks?: AgentDraftHooks;
+	/**
+	 * CAL-3 — optional schedule digest for the drafting prompt. Absent means
+	 * drafting runs without a calendar block, exactly as it runs without a
+	 * voice block when `Memory` returns nothing. The scheduler does not own
+	 * the calendar client; `createApp` wires a closure that captures it.
+	 */
+	calendarDigest?: CalendarDigestSource;
 };
 
 function timestampMillis(timestamp: number): number {
@@ -205,6 +212,9 @@ export class DraftScheduler {
 				provider: this.#options.provider,
 				providerName: this.#options.providerName,
 				memory: this.#options.memory,
+				...(this.#options.calendarDigest
+					? { calendarDigest: this.#options.calendarDigest }
+					: {}),
 				chatJid,
 				conversationLimit: this.#options.conversationLimit,
 				now: this.#now,

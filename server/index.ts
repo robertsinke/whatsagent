@@ -41,12 +41,16 @@ import {
 } from './agent/panel/index.js';
 import { actionRegistry } from './actions/index.js';
 import { DraftScheduler } from './agent/scheduler.js';
+import type { CalendarDigestSource } from './agent/drafter.js';
 import type { Memory } from './agent/memory/memory.js';
 import { NullMemory } from './agent/memory/null-memory.js';
 import { createRuntimeMemory } from './agent/memory/hindsight.js';
 import { bootstrapOwnerVoice } from './agent/voice.js';
 import { refineDraft } from './agent/refiner.js';
 import { OutboxPacer, type OutboxPacerOptions } from './outbox/pacer.js';
+import { createCalendarClient } from './calendar/client.js';
+import { fetchCalendarDigest } from './calendar/digest.js';
+import { getCalendarCredentials, loadCalendarEncryptionKey } from './calendar/credentials.js';
 import {
 	createDefaultProviderDiscovery,
 	providerFactoryOptionsFromDiscovery,
@@ -114,6 +118,27 @@ export type CreateAppOptions = {
 	/** Short-interval retry of the memory's retain queue, independent of `memoryReflectMs`. Default 60 s. */
 	memoryQueueDrainMs?: number;
 	draftDebounceMs?: number;
+	/**
+	 * CAL-3 — optional schedule digest injected into the drafting prompt. When
+	 * absent (the default), production wires a closure that reads credentials
+	 * fresh on each call (so a freshly-saved App Password is picked up without
+	 * a restart) and degrades to `null` when the calendar is not connected or
+	 * Google is unreachable. Injected in tests to avoid hitting Google or the
+	 * login keychain.
+	 */
+	calendarDigest?: CalendarDigestSource;
+	/**
+	 * CAL-3 — CalDAV fetch override for the production-wired digest source.
+	 * Mirrors `RoutesDeps.calendarFetch` for the action path; tests inject
+	 * fakes so the suite never hits Google.
+	 */
+	calendarFetch?: typeof fetch;
+	/**
+	 * CAL-3 — encryption key override for the production-wired digest source.
+	 * Mirrors `RoutesDeps.calendarEncryptionKey`; tests inject a fixed key so
+	 * the suite never touches the login keychain.
+	 */
+	calendarEncryptionKey?: Buffer;
 	/** Exact from-me message ID permitted for one non-production drafting test. */
 	/** Supplying a transport mounts and starts the sole WhatsApp send path. */
 	outboxTransport?: WhatsAppSendTransport;
@@ -310,6 +335,26 @@ export function createApp(options: CreateAppOptions = {}): App {
 	});
 	const ingestHooks = createIngestEventHooks(events, db);
 	const memory: Memory = options.memory ?? new NullMemory();
+	// CAL-3 — the schedule digest source for the drafting prompt. Production
+	// reads credentials fresh on each call (so a freshly-saved App Password is
+	// picked up without a restart) and degrades to `null` when the calendar is
+	// not connected or Google is unreachable. `fetchCalendarDigest` swallows
+	// every failure, and `buildDraftInput` wraps the call in its own try/catch
+	// too — two layers, because a bug in either must not reach the core loop.
+	const calendarDigest: CalendarDigestSource = options.calendarDigest ?? (() => {
+		const creds = getCalendarCredentials(
+			db,
+			options.calendarEncryptionKey ?? loadCalendarEncryptionKey()
+		);
+		if (!creds) return Promise.resolve(null);
+		const client = createCalendarClient(
+			creds,
+			options.calendarFetch ? { fetch: options.calendarFetch } : {}
+		);
+		const nowMs = Date.now();
+		const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local';
+		return fetchCalendarDigest(client, nowMs, timeZone);
+	});
 	const scheduler = options.draftProvider
 		? new DraftScheduler({
 				db,
@@ -317,6 +362,7 @@ export function createApp(options: CreateAppOptions = {}): App {
 				providerName: options.providerName ?? 'claude',
 				memory,
 				debounceMs: options.draftDebounceMs,
+				calendarDigest,
 				hooks: {
 					onDraftUpdated: (draft) => events.emit({ type: 'draft-updated', draft }),
 					onDraftRemoved: (chatJid) => events.emit({ type: 'draft-removed', chat_jid: chatJid }),

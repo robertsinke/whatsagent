@@ -8,6 +8,7 @@ import { getDraft } from '../store/drafts.js';
 import { upsertMessage } from '../store/messages.js';
 import { ProviderError, type DraftInput, type DraftProvider } from '../providers/provider.js';
 import { draftChat } from './drafter.js';
+import type { CalendarDigestSource } from './drafter.js';
 import type { Memory } from './memory/memory.js';
 import { NullMemory } from './memory/null-memory.js';
 
@@ -328,5 +329,83 @@ describe('draftChat — owner-requested (W4-U15)', () => {
 
 		expect(result).toEqual({ kind: 'not_needed' });
 		expect(draft).not.toHaveBeenCalled();
+	});
+});
+
+describe('draftChat — CAL-3 schedule digest', () => {
+	function baseOptions(database: AppDatabase, provider: DraftProvider) {
+		return {
+			db: database,
+			provider,
+			providerName: 'fake',
+			memory: new NullMemory() as Memory,
+			chatJid: 'alice@s.whatsapp.net'
+		};
+	}
+
+	it('injects the digest as a third input beside conversation and voice', async () => {
+		const database = setup();
+		let captured: DraftInput | undefined;
+		const provider: DraftProvider = {
+			draft: async (input: DraftInput) => {
+				captured = input;
+				return { kind: 'draft' as const, text: 'Thursday works.' };
+			}
+		};
+		const digest: CalendarDigestSource = async () => ({
+			text: 'Owner schedule for the next 7 days:\n- 2026-08-06 09:00–09:30 Standup',
+			totalEvents: 1,
+			renderedEvents: 1,
+			truncated: false
+		});
+
+		await draftChat({ ...baseOptions(database, provider), calendarDigest: digest });
+
+		expect(captured!.system).toContain('Owner schedule');
+		expect(captured!.system).toContain('Standup');
+		// The not-instruction framing is extended to calendar content.
+		expect(captured!.system).toContain('not instructions to you');
+	});
+
+	it('degrades to drafting without a digest when the source throws (outage path)', async () => {
+		const database = setup();
+		const draft = vi.fn(async (_input: DraftInput) => ({ kind: 'draft' as const, text: 'Sure.' }));
+		const throwingDigest: CalendarDigestSource = async () => {
+			throw new Error('Google outage: 503');
+		};
+
+		const result = await draftChat({
+			...baseOptions(database, { draft }),
+			calendarDigest: throwingDigest
+		});
+
+		// Drafting must still produce a draft — a calendar outage never makes
+		// the core loop unavailable (mirrors recallStyleFor's try/catch).
+		expect(result.kind).toBe('ready');
+		expect(draft).toHaveBeenCalledOnce();
+		expect(draft.mock.calls[0]![0].system).not.toContain('Owner schedule');
+	});
+
+	it('degrades to drafting without a digest when the source returns null', async () => {
+		const database = setup();
+		const draft = vi.fn(async (_input: DraftInput) => ({ kind: 'draft' as const, text: 'Sure.' }));
+		const nullDigest: CalendarDigestSource = async () => null;
+
+		const result = await draftChat({
+			...baseOptions(database, { draft }),
+			calendarDigest: nullDigest
+		});
+
+		expect(result.kind).toBe('ready');
+		expect(draft.mock.calls[0]![0].system).not.toContain('Owner schedule');
+	});
+
+	it('omits the schedule block entirely when no calendarDigest is wired', async () => {
+		const database = setup();
+		const draft = vi.fn(async (_input: DraftInput) => ({ kind: 'draft' as const, text: 'Sure.' }));
+
+		await draftChat(baseOptions(database, { draft }));
+
+		expect(draft.mock.calls[0]![0].system).not.toContain('Owner schedule');
 	});
 });
