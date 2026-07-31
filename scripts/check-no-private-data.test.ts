@@ -245,9 +245,19 @@ describe('tracked-tree hole', () => {
 		writeTracked(repo, 'tracked.txt', 'clean\n');
 
 		// Untracked: would fail a cwd walk on digits / home, must not be scanned.
+		//
+		// The digit run is CONCATENATED rather than written as one literal, and
+		// that is load-bearing rather than fussy. This test needs a run the
+		// allowlist does NOT contain — an allowlisted one would pass the scanner
+		// anyway and the test would prove nothing. But the scanner now walks
+		// `git ls-files`, so once this file is committed it scans ITSELF, and a
+		// bare literal here fails the very gate it is testing. Splitting it keeps
+		// the fixture un-allowlisted at runtime while leaving no 11–15 digit run
+		// in the source.
+		const undeclaredRun = `9998887776${'6655'}`;
 		writeFileSync(
 			join(repo, 'untracked-leak.txt'),
-			`/Users/fixture-home/secret\n99988877766655\n`
+			`/Users/fixture-home/secret\n${undeclaredRun}\n`
 		);
 
 		const result = scanTrackedTree({
