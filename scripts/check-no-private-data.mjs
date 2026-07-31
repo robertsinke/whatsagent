@@ -1,108 +1,302 @@
 #!/usr/bin/env node
 /**
- * Durable leak gate: every 11–15 digit run in the tree must be declared in
- * `shared/test-fixtures.ts`. That file is the single allowlist home — add a
- * named export there when a new synthetic identifier is needed; do not weaken
- * this script to silence a finding.
+ * Durable leak gate over the *tracked* tree (what a publish can ship):
  *
- * Optional local substring blocklist: if `scripts/private-patterns.local`
- * exists (gitignored — see `.gitignore`), each non-empty, non-`#` line is a
- * literal substring that must not appear anywhere in the scanned tree. Use it
- * for machine-specific names that must never ship (MCP server names from a
- * personal opencode config, client project codenames, etc.). Do NOT put those
- * values in this tracked script — that re-ships the disclosure. Copy
- * `scripts/private-patterns.local.example` to start. Patterns that are also
- * ordinary English words (UI copy like "pencil") will false-positive; scope
- * them carefully (e.g. `"pencil":` for a JSON key) or omit them.
+ * 1. Every 11–15 digit run must be declared in `shared/test-fixtures.ts`.
+ * 2. The runtime home-directory prefix must not appear in file contents or
+ *    symlink target strings, except on paths listed in
+ *    `PRIVATE_DATA_HOME_PATH_ALLOWLIST` in that same fixtures file.
+ * 3. Optional local substring blocklist via `scripts/private-patterns.local`
+ *    (gitignored) — machine-specific names that must never ship.
  *
- * Excludes: node_modules, .git, build, and the fixtures file itself (its digit
- * runs *are* the allowlist).
+ * Symlinks are inspected via lstat + readlink: git publishes the link target
+ * *string* (mode 120000), not the file it points at. Following the link would
+ * scan bytes that never leave the machine and miss the path that does.
  *
- * THE PASS LINE NAMES EVERY CHECK AND WHETHER IT RAN. The substring half is
- * optional by construction — the values cannot live in a tracked file — so
- * without the local file this script used to print a confident `ok` having
- * checked nothing for names, which is evidence about only the half nobody was
- * worried about. A skipped check now says so on its own line, and the scanned
- * file count is reported so a walk that silently stops finding files (a bad
- * `SKIP_DIRS` entry, a cwd change) cannot pass as a clean tree.
+ * THE PASS LINE NAMES EVERY CHECK AND WHETHER IT RAN, including how many
+ * symlink entries were inspected. A skipped optional half says so on stderr.
  */
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { dirname, join, relative } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
+import {
+	existsSync,
+	lstatSync,
+	readFileSync,
+	readlinkSync,
+	realpathSync
+} from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join, resolve, sep } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
-const fixturesPath = join(repoRoot, 'shared', 'test-fixtures.ts');
-const localPatternsPath = join(repoRoot, 'scripts', 'private-patterns.local');
 const DIGITS = /[0-9]{11,15}/g;
-// `release` and `dist` are packaging output. Scanning them made `npm run check`
-// fail after any `dist:mac`, on a build number inside the app bundle's own
-// Info.plist — a gate that cannot be run once a build exists is worse than no
-// gate, because the reflex is to stop running it. They are gitignored and never
-// published, so nothing in them can leak through the export.
-//
-// `.remember` is the same shape: gitignored local agent-session logs, which
-// accumulate timestamps and ids and will eventually trip the digit rule by
-// chance. It failed exactly that way on 2026-07-30. The gate's question is what
-// *ships*, and the export takes tracked files only, so a gitignored working
-// directory can never answer it — it can only produce a failure nobody can fix.
-const SKIP_DIRS = new Set([
-	'node_modules',
-	'.git',
-	'build',
-	'.svelte-kit',
-	'coverage',
-	'release',
-	'dist',
-	'.remember'
-]);
 
-const fixturesSource = readFileSync(fixturesPath, 'utf8');
-const allow = new Set(fixturesSource.match(DIGITS) ?? []);
+const BINARY_NAME =
+	/\.(png|jpe?g|gif|webp|ico|woff2?|ttf|eot|map|lock|db|sqlite3?)$/i;
 
-if (allow.size === 0) {
-	console.error('private-data check failed: shared/test-fixtures.ts exports no 11–15 digit runs');
-	process.exit(1);
+/**
+ * @param {string} repoRoot
+ * @returns {string[]}
+ */
+export function listTrackedFiles(repoRoot) {
+	const out = execFileSync('git', ['ls-files', '-z'], {
+		cwd: repoRoot,
+		encoding: 'buffer',
+		maxBuffer: 64 * 1024 * 1024
+	});
+	const paths = [];
+	let start = 0;
+	for (let i = 0; i < out.length; i++) {
+		if (out[i] === 0) {
+			if (i > start) paths.push(out.subarray(start, i).toString('utf8'));
+			start = i + 1;
+		}
+	}
+	if (start < out.length) paths.push(out.subarray(start).toString('utf8'));
+	return paths;
 }
 
-/** @type {string[]} */
-const localPatterns = [];
-if (existsSync(localPatternsPath)) {
-	for (const raw of readFileSync(localPatternsPath, 'utf8').split(/\r?\n/)) {
-		const line = raw.trim();
-		if (!line || line.startsWith('#')) continue;
-		localPatterns.push(line);
+/**
+ * Home prefix used for the leak check. Derived at runtime — never hardcode a
+ * username into this script (that would make the guard an instance of the
+ * thing it blocks).
+ * @param {() => string} [homeFn]
+ */
+export function homePathPrefix(homeFn = homedir) {
+	const raw = homeFn();
+	if (!raw || typeof raw !== 'string') {
+		throw new Error('homePathPrefix: homedir() returned empty');
+	}
+	// Strip trailing separators so "/Users/x" and "/Users/x/" are one pattern.
+	return raw.replace(/[/\\]+$/, '');
+}
+
+/**
+ * Parse `PRIVATE_DATA_HOME_PATH_ALLOWLIST = [ ... ]` string literals from the
+ * fixtures source. Paths only — never values that equal the home prefix.
+ * @param {string} fixturesSource
+ * @returns {Set<string>}
+ */
+export function parseHomePathAllowlist(fixturesSource) {
+	const match =
+		fixturesSource.match(
+			/PRIVATE_DATA_HOME_PATH_ALLOWLIST\s*=\s*\[([\s\S]*?)\]\s*as\s+const/
+		) ??
+		fixturesSource.match(/PRIVATE_DATA_HOME_PATH_ALLOWLIST\s*=\s*\[([\s\S]*?)\]/);
+	if (!match) return new Set();
+	/** @type {Set<string>} */
+	const paths = new Set();
+	// Line-oriented: only quoted path entries. A whole-block quote scan breaks
+	// on apostrophes in comments (e.g. "unit's scope").
+	for (const line of match[1].split(/\r?\n/)) {
+		const entry = line.trim().match(/^['"]([^'"]+)['"]\s*,?\s*(?:\/\/.*)?$/);
+		if (entry) paths.add(entry[1]);
+	}
+	return paths;
+}
+
+/**
+ * @param {string} name
+ */
+export function isSkippedBinaryName(name) {
+	if (BINARY_NAME.test(name)) return true;
+	if (name === 'package-lock.json') return true;
+	return false;
+}
+
+/**
+ * @typedef {{ file: string, line: number, value: string }} DigitFinding
+ * @typedef {{ file: string, line: number, pattern: string }} PatternFinding
+ * @typedef {{ file: string, line: number, value: string }} HomeFinding
+ * @typedef {{ file: string, reason: string }} SymlinkFinding
+ *
+ * @typedef {{
+ *   digitFindings: DigitFinding[],
+ *   homeFindings: HomeFinding[],
+ *   patternFindings: PatternFinding[],
+ *   symlinkFindings: SymlinkFinding[],
+ *   scanned: number,
+ *   symlinksInspected: number,
+ * }} ScanResult
+ */
+
+/**
+ * Scan one path's text (file body or symlink target string) for leaks.
+ * @param {object} opts
+ * @param {string} opts.relPath
+ * @param {string} opts.text
+ * @param {Set<string>} opts.allowDigits
+ * @param {Set<string>} opts.allowHomePaths
+ * @param {string} opts.homePrefix
+ * @param {string[]} opts.localPatterns
+ * @param {boolean} opts.skipDigitCheck
+ * @param {ScanResult} opts.into
+ */
+export function scanText({
+	relPath,
+	text,
+	allowDigits,
+	allowHomePaths,
+	homePrefix,
+	localPatterns,
+	skipDigitCheck,
+	into
+}) {
+	if (text.includes('\u0000')) return;
+
+	into.scanned += 1;
+	const homeAllowed = allowHomePaths.has(relPath);
+	const lines = text.split(/\r?\n/);
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+		if (!skipDigitCheck) {
+			DIGITS.lastIndex = 0;
+			let m;
+			while ((m = DIGITS.exec(line)) !== null) {
+				if (allowDigits.has(m[0])) continue;
+				into.digitFindings.push({
+					file: relPath,
+					line: i + 1,
+					value: m[0]
+				});
+			}
+		}
+		if (!homeAllowed && homePrefix && line.includes(homePrefix)) {
+			into.homeFindings.push({
+				file: relPath,
+				line: i + 1,
+				value: homePrefix
+			});
+		}
+		for (const pattern of localPatterns) {
+			if (line.includes(pattern)) {
+				into.patternFindings.push({
+					file: relPath,
+					line: i + 1,
+					pattern
+				});
+			}
+		}
 	}
 }
 
-/** @type {{ file: string, line: number, value: string }[]} */
-const findings = [];
-/** @type {{ file: string, line: number, pattern: string }[]} */
-const patternFindings = [];
-let scanned = 0;
-
 /**
- * @param {string} dir
+ * @param {object} opts
+ * @param {string} opts.repoRoot
+ * @param {string[]} [opts.trackedFiles]
+ * @param {Set<string>} opts.allowDigits
+ * @param {Set<string>} opts.allowHomePaths
+ * @param {string} opts.homePrefix
+ * @param {string[]} opts.localPatterns
+ * @param {string} opts.fixturesRelPath
+ * @param {string} [opts.localPatternsRelPath]
+ * @returns {ScanResult}
  */
-function walk(dir) {
-	for (const name of readdirSync(dir)) {
-		if (SKIP_DIRS.has(name)) continue;
-		const full = join(dir, name);
+export function scanTrackedTree({
+	repoRoot,
+	trackedFiles,
+	allowDigits,
+	allowHomePaths,
+	homePrefix,
+	localPatterns,
+	fixturesRelPath,
+	localPatternsRelPath = join('scripts', 'private-patterns.local')
+}) {
+	/** @type {ScanResult} */
+	const into = {
+		digitFindings: [],
+		homeFindings: [],
+		patternFindings: [],
+		symlinkFindings: [],
+		scanned: 0,
+		symlinksInspected: 0
+	};
+
+	const files = trackedFiles ?? listTrackedFiles(repoRoot);
+	const fixturesPosix = fixturesRelPath.split(sep).join('/');
+	const localPosix = localPatternsRelPath.split(sep).join('/');
+
+	for (const relRaw of files) {
+		const relPath = relRaw.split(sep).join('/');
+		if (relPath === fixturesPosix) {
+			// Digit runs here *are* the allowlist; still check home / substrings.
+			const full = join(repoRoot, relRaw);
+			let text;
+			try {
+				text = readFileSync(full, 'utf8');
+			} catch {
+				into.symlinkFindings.push({
+					file: relPath,
+					reason: 'tracked fixtures file unreadable'
+				});
+				continue;
+			}
+			scanText({
+				relPath,
+				text,
+				allowDigits,
+				allowHomePaths,
+				homePrefix,
+				localPatterns,
+				skipDigitCheck: true,
+				into
+			});
+			continue;
+		}
+		if (relPath === localPosix) continue;
+
+		const base = relPath.includes('/')
+			? relPath.slice(relPath.lastIndexOf('/') + 1)
+			: relPath;
+		if (isSkippedBinaryName(base)) continue;
+
+		const full = join(repoRoot, relRaw);
 		let st;
 		try {
-			st = statSync(full);
+			st = lstatSync(full);
 		} catch {
+			into.symlinkFindings.push({
+				file: relPath,
+				reason: 'tracked path missing from working tree'
+			});
 			continue;
 		}
-		if (st.isDirectory()) {
-			walk(full);
+
+		if (st.isSymbolicLink()) {
+			into.symlinksInspected += 1;
+			let target;
+			try {
+				target = readlinkSync(full);
+			} catch (err) {
+				into.symlinkFindings.push({
+					file: relPath,
+					reason: `readlink failed: ${err instanceof Error ? err.message : String(err)}`
+				});
+				continue;
+			}
+			// Scan the link target string — that is the git blob content.
+			scanText({
+				relPath,
+				text: target,
+				allowDigits,
+				allowHomePaths,
+				homePrefix,
+				localPatterns,
+				skipDigitCheck: false,
+				into
+			});
+			// Dangling absolute/relative targets: report, do not follow.
+			try {
+				realpathSync(full);
+			} catch {
+				into.symlinkFindings.push({
+					file: relPath,
+					reason: `dangling symlink -> ${JSON.stringify(target)}`
+				});
+			}
 			continue;
 		}
+
 		if (!st.isFile()) continue;
-		if (full === fixturesPath) continue;
-		if (full === localPatternsPath) continue;
-		// Skip binaries / lockfiles / maps — digit runs there are not identifiers.
-		if (/\.(png|jpe?g|gif|webp|ico|woff2?|ttf|eot|map|lock|db|sqlite3?)$/i.test(name)) continue;
-		if (name === 'package-lock.json') continue;
 
 		let text;
 		try {
@@ -110,86 +304,156 @@ function walk(dir) {
 		} catch {
 			continue;
 		}
-		// Skip obviously-binary buffers misread as utf8.
-		if (text.includes('\u0000')) continue;
+		scanText({
+			relPath,
+			text,
+			allowDigits,
+			allowHomePaths,
+			homePrefix,
+			localPatterns,
+			skipDigitCheck: false,
+			into
+		});
+	}
 
-		scanned += 1;
-		const lines = text.split(/\r?\n/);
-		for (let i = 0; i < lines.length; i++) {
-			const line = lines[i];
-			DIGITS.lastIndex = 0;
-			let m;
-			while ((m = DIGITS.exec(line)) !== null) {
-				if (allow.has(m[0])) continue;
-				findings.push({
-					file: relative(repoRoot, full) || full,
-					line: i + 1,
-					value: m[0]
-				});
-			}
-			for (const pattern of localPatterns) {
-				if (line.includes(pattern)) {
-					patternFindings.push({
-						file: relative(repoRoot, full) || full,
-						line: i + 1,
-						pattern
-					});
-				}
-			}
+	return into;
+}
+
+/**
+ * @param {object} [opts]
+ * @param {string} [opts.repoRoot]
+ * @param {() => string} [opts.homeFn]
+ * @param {{ log?: (...a: unknown[]) => void, error?: (...a: unknown[]) => void }} [opts.console]
+ * @returns {number} exit code
+ */
+export function runCheck(opts = {}) {
+	const repoRoot =
+		opts.repoRoot ?? join(dirname(fileURLToPath(import.meta.url)), '..');
+	const out = opts.console ?? console;
+	const fixturesPath = join(repoRoot, 'shared', 'test-fixtures.ts');
+	const localPatternsPath = join(repoRoot, 'scripts', 'private-patterns.local');
+
+	const fixturesSource = readFileSync(fixturesPath, 'utf8');
+	const allowDigits = new Set(fixturesSource.match(DIGITS) ?? []);
+	if (allowDigits.size === 0) {
+		out.error(
+			'private-data check failed: shared/test-fixtures.ts exports no 11–15 digit runs'
+		);
+		return 1;
+	}
+
+	const allowHomePaths = parseHomePathAllowlist(fixturesSource);
+	const homePrefix = homePathPrefix(opts.homeFn);
+
+	/** @type {string[]} */
+	const localPatterns = [];
+	if (existsSync(localPatternsPath)) {
+		for (const raw of readFileSync(localPatternsPath, 'utf8').split(/\r?\n/)) {
+			const line = raw.trim();
+			if (!line || line.startsWith('#')) continue;
+			localPatterns.push(line);
 		}
 	}
-}
 
-walk(repoRoot);
+	const result = scanTrackedTree({
+		repoRoot,
+		allowDigits,
+		allowHomePaths,
+		homePrefix,
+		localPatterns,
+		fixturesRelPath: join('shared', 'test-fixtures.ts')
+	});
 
-let failed = false;
+	let failed = false;
 
-if (findings.length > 0) {
-	failed = true;
-	console.error('private-data check failed: 11–15 digit runs not in shared/test-fixtures.ts:');
-	for (const f of findings) {
-		console.error(`  ${f.file}:${f.line}: ${f.value}`);
+	if (result.digitFindings.length > 0) {
+		failed = true;
+		out.error(
+			'private-data check failed: 11–15 digit runs not in shared/test-fixtures.ts:'
+		);
+		for (const f of result.digitFindings) {
+			out.error(`  ${f.file}:${f.line}: ${f.value}`);
+		}
+		out.error(
+			'  Fix: replace with a synthetic from shared/test-fixtures.ts (or export a new one there).'
+		);
 	}
-	console.error(
-		'  Fix: replace with a synthetic from shared/test-fixtures.ts (or export a new one there).'
-	);
-}
 
-if (patternFindings.length > 0) {
-	failed = true;
-	console.error(
-		'private-data check failed: substring from scripts/private-patterns.local found in tree:'
-	);
-	for (const f of patternFindings) {
-		console.error(`  ${f.file}:${f.line}: matched ${JSON.stringify(f.pattern)}`);
+	if (result.homeFindings.length > 0) {
+		failed = true;
+		out.error(
+			'private-data check failed: runtime home-directory path found in tracked tree:'
+		);
+		for (const f of result.homeFindings) {
+			out.error(`  ${f.file}:${f.line}: matched home prefix`);
+		}
+		out.error(
+			'  Fix: scrub the path, or add the relative path to PRIVATE_DATA_HOME_PATH_ALLOWLIST in shared/test-fixtures.ts with a recorded reason.'
+		);
 	}
-	console.error(
-		'  Fix: scrub the match, or remove/narrow the pattern in the local (untracked) file.'
+
+	if (result.patternFindings.length > 0) {
+		failed = true;
+		out.error(
+			'private-data check failed: substring from scripts/private-patterns.local found in tree:'
+		);
+		for (const f of result.patternFindings) {
+			out.error(`  ${f.file}:${f.line}: matched ${JSON.stringify(f.pattern)}`);
+		}
+		out.error(
+			'  Fix: scrub the match, or remove/narrow the pattern in the local (untracked) file.'
+		);
+	}
+
+	if (result.symlinkFindings.length > 0) {
+		failed = true;
+		out.error('private-data check failed: symlink / tracked-path problems:');
+		for (const f of result.symlinkFindings) {
+			out.error(`  ${f.file}: ${f.reason}`);
+		}
+	}
+
+	if (failed) return 1;
+
+	if (result.scanned === 0) {
+		out.error(
+			'private-data check failed: scanned 0 files — the walk found nothing to check'
+		);
+		return 1;
+	}
+
+	const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+	out.log(
+		`private-data ok: scanned ${plural(result.scanned, 'file')} (${result.symlinksInspected} symlink${result.symlinksInspected === 1 ? '' : 's'} inspected)`
 	);
+	out.log(
+		`  digit-run check      RAN — ${plural(allowDigits.size, 'allowlisted run')}, no undeclared 11–15 digit identifiers`
+	);
+	out.log(
+		`  home-path check      RAN — prefix from runtime homedir(), ${plural(allowHomePaths.size, 'allowlisted path')}, no undeclared matches`
+	);
+	if (localPatterns.length > 0) {
+		out.log(
+			`  private-substring    RAN — ${plural(localPatterns.length, 'pattern')}, no matches`
+		);
+	} else {
+		out.error(
+			`  private-substring    SKIPPED — scripts/private-patterns.local absent, so MCP server names and codenames were NOT checked (copy scripts/private-patterns.local.example to enable)`
+		);
+	}
+	return 0;
 }
 
-if (failed) process.exit(1);
-
-// A walk that finds nothing prints the same `ok` as a clean tree, so the count
-// is part of the verdict, not decoration.
-if (scanned === 0) {
-	console.error('private-data check failed: scanned 0 files — the walk found nothing to check');
-	process.exit(1);
+function isExecutedDirectly() {
+	const entry = process.argv[1];
+	if (!entry) return false;
+	try {
+		return import.meta.url === pathToFileURL(resolve(entry)).href;
+	} catch {
+		return false;
+	}
 }
 
-const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
-console.log(`private-data ok: scanned ${plural(scanned, 'file')}`);
-console.log(
-	`  digit-run check      RAN — ${plural(allow.size, 'allowlisted run')}, no undeclared 11–15 digit identifiers`
-);
-if (localPatterns.length > 0) {
-	console.log(`  private-substring    RAN — ${plural(localPatterns.length, 'pattern')}, no matches`);
-} else {
-	// Deliberately loud and on stderr. This half cannot be made mandatory — the
-	// values are machine-specific and must not be committed — so the only defence
-	// against reading a green line as full coverage is saying which half is
-	// missing, every run.
-	console.error(
-		`  private-substring    SKIPPED — scripts/private-patterns.local absent, so MCP server names and codenames were NOT checked (copy scripts/private-patterns.local.example to enable)`
-	);
+if (isExecutedDirectly()) {
+	process.exit(runCheck());
 }

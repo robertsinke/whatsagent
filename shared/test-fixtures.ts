@@ -11,6 +11,48 @@
  * Production code must not import this module.
  */
 
+/**
+ * Relative paths allowed to contain the *runtime* home-directory prefix.
+ * Parsed by `scripts/check-no-private-data.mjs`. Paths only — never put the
+ * home path string itself here (that would make this file an instance of what
+ * the gate blocks). Reasons recorded per group; OSS export strips or truncates
+ * the private-tree holders, and `publish-oss.sh` still greps the staged tree.
+ */
+export const PRIVATE_DATA_HOME_PATH_ALLOWLIST = [
+	// Private orchestration symlinks whose git blob is an absolute path into
+	// ~/.agents/scripts/slayzone/. publish-oss deletes .githooks/ before publish.
+	// Deliberate allowlist (not a silent skip): local hook wiring, not shippable
+	// content — see OSS-P1.8 execution report.
+	'.githooks/pre-commit',
+	'.githooks/reference-transaction',
+	// Same shape under .slayzone/ — also stripped from the public export.
+	'.slayzone/attach-worker-briefing.sh',
+	'.slayzone/check-hooks.sh',
+	'.slayzone/config.example.sh',
+	'.slayzone/emit-role-brief.sh',
+	'.slayzone/finish-task.sh',
+	'.slayzone/intercept-task-done.sh',
+	'.slayzone/lib.sh',
+	'.slayzone/require-visual-evidence.sh',
+	'.slayzone/wave-done-ping.sh',
+	// Absolute hook command paths; .claude/ is stripped from the export.
+	'.claude/settings.json',
+	// Names worktree roots / role-file paths; .slayzone/ stripped from export.
+	'.slayzone/orchestrator.md',
+	// Absolute path below the PRIVATE-ONLY marker; publish-oss truncates there.
+	'CLAUDE.md',
+	// Export tool + its own residual-path gate; script itself is excluded from export.
+	'scripts/publish-oss.sh',
+	// Meta plan that documents private paths; excluded from the export by path.
+	'docs/plans/2026-07-27-001-oss-readiness-plan.md',
+	// Evidence / reports that name worktree paths. They *do* ship today — the
+	// publish-oss `/Users/…` grep is the export-side catch. Listed so private
+	// `npm run check` is reachable; scrubbing them is out of this unit's scope.
+	'docs/evidence/2026-07-29-pl-s3-opencode-recheck.md',
+	'docs/evidence/2026-07-29-pl-s4-opencode-subscription.md',
+	'docs/execution-reports/2026-07-29-pl-a3-agent-panel-layout.md'
+] as const;
+
 /** Classic privacy-mask / placeholder phone used across the suite. */
 export const FIXTURE_PHONE = '31612345678';
 
