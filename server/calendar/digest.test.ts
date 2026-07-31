@@ -154,8 +154,15 @@ describe('fetchCalendarDigest — outage path', () => {
 			},
 			async listEvents() {
 				throw new Error('Google outage: 503');
+			},
+			async createEvent() {
+				// CAL-2 widened CalendarClient. The digest path must never write, so
+				// this throws rather than returning a plausible success: a future
+				// change that makes the read path create an event fails loudly here.
+				throw new Error('digest path must not create events');
 			}
 		};
+
 		const digest = await fetchCalendarDigest(throwingClient, NOW_MS, TZ, 7);
 		expect(digest).toBeNull();
 	});
@@ -167,8 +174,15 @@ describe('fetchCalendarDigest — outage path', () => {
 			},
 			async listEvents() {
 				return { events: [], status: 401 };
+			},
+			async createEvent() {
+				// CAL-2 widened CalendarClient. The digest path must never write, so
+				// this throws rather than returning a plausible success: a future
+				// change that makes the read path create an event fails loudly here.
+				throw new Error('digest path must not create events');
 			}
 		};
+
 		const digest = await fetchCalendarDigest(unauthorizedClient, NOW_MS, TZ, 7);
 		expect(digest).toBeNull();
 	});
@@ -183,8 +197,15 @@ describe('fetchCalendarDigest — outage path', () => {
 					events: [occ('2026-07-31T09:00:00Z', 'Standup')],
 					status: 207
 				};
+			},
+			async createEvent() {
+				// CAL-2 widened CalendarClient. The digest path must never write, so
+				// this throws rather than returning a plausible success: a future
+				// change that makes the read path create an event fails loudly here.
+				throw new Error('digest path must not create events');
 			}
 		};
+
 		const digest = await fetchCalendarDigest(okClient, NOW_MS, TZ, 7);
 		expect(digest).not.toBeNull();
 		expect(digest!.text).toContain('Standup');
