@@ -57,16 +57,19 @@ export type ClaudePanelHarnessOptions = {
  *   `{ type: 'rate_limit_event', rate_limit_info }`
  *
  * `--tools ''` genuinely removes the built-ins: with it, the tool list was the
- * eleven `mcp__whatsagent__*` actions and nothing else — no Read, Bash, Edit,
+ * `mcp__whatsagent__*` actions and nothing else — no Read, Bash, Edit,
  * Glob, Grep or WebFetch — and a decoy file in the run directory was not
- * readable. The positive control (`--tools 'Read'`, same prompt, same directory,
+ * readable. (Measured when the registry exposed eleven tool-permitted actions;
+ * it exposes more now. The list is derived from `listActionsForCaller`, so it
+ * tracks the registry — what was measured is the *absence of built-ins*, and
+ * that claim is independent of how many of our own actions there are.) The positive control (`--tools 'Read'`, same prompt, same directory,
  * same marker) DID read it back, so the absence is the flag working rather than
  * the model declining.
  *
  * TWO HONEST CAVEATS, both machine-config dependent and neither fixable here:
  *
- * - `--allowedTools` did not narrow the advertised list. All eleven tools were
- *   listed whichever subset was named. Execution containment therefore rests on
+ * - `--allowedTools` did not narrow the advertised list. Every tool was listed
+ *   whichever subset was named. Execution containment therefore rests on
  *   the dispatcher's caller policy, as designed — the flag is defence in depth,
  *   not the mechanism.
  * - An `advisor` tool appeared in the list, from the owner's own

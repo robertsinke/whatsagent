@@ -38,8 +38,11 @@ import { streamJsonLines } from './stream-process.js';
  *
  * Verified against the real surface (OpenCode `OPENCODE_VERIFIED_VERSION` in
  * `opencode-config.ts`):
- * - The 11 tool-permitted registry actions appeared as `whatsagent_<name>` and
+ * - The tool-permitted registry actions appeared as `whatsagent_<name>` and
  *   the kebab case survived, so the prefix strip lands on the registry name.
+ *   (Eleven of them at measurement time; more now. The list is derived from
+ *   `listActionsForCaller`, so the count tracks the registry — the measured
+ *   claim is about the NAME SHAPE, which does not depend on the count.)
  * - A decoy file in the run directory was NOT readable, and the positive
  *   control (default tools, `permission: { '*': 'allow' }`) DID return its
  *   marker — so the negative is a real absence of the tool, not a shy model.

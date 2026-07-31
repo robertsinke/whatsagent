@@ -50,7 +50,9 @@ export const OPENCODE_BUILTIN_TOOLS_OFF = {
 
 /**
  * Every path `opencode run` merges a user-level config from, in the order it
- * logs them (observed on 1.18.9 with `--print-logs --log-level DEBUG`):
+ * logs them (observed on 1.18.9 with `--print-logs --log-level DEBUG`; the pin
+ * has since moved to 1.18.10, where the tool surface was re-proven but this
+ * path list was not re-observed — re-run the DEBUG log if it matters):
  *
  *   ~/.config/opencode/config.json
  *   ~/.config/opencode/opencode.json
