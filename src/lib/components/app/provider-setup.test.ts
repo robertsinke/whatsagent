@@ -152,7 +152,10 @@ describe('providerSetupRows', () => {
 				info({
 					name: 'codex',
 					installed: true,
-					version: '1.18.10',
+					// DERIVED from the pin, never a literal. This asserted a hardcoded
+					// `1.18.10` and broke the day the pin was bumped to exactly that —
+					// the test is about "differs → notice", not about any one version.
+					version: `${VERIFIED_HARNESS_VERSIONS.codex}-different`,
 					unavailableReason: null
 				}),
 				info({ name: 'ollama', installed: true, version: '0.32.4', unavailableReason: null })
@@ -160,7 +163,7 @@ describe('providerSetupRows', () => {
 		);
 		expect(mismatched.find((r) => r.name === 'claude')?.versionMismatch).toBeNull();
 		expect(mismatched.find((r) => r.name === 'codex')?.versionMismatch).toBe(
-			`Verified against ${VERIFIED_HARNESS_VERSIONS.codex}, you have 1.18.10.`
+			`Verified against ${VERIFIED_HARNESS_VERSIONS.codex}, you have ${VERIFIED_HARNESS_VERSIONS.codex}-different.`
 		);
 		expect(mismatched.find((r) => r.name === 'ollama')?.versionMismatch).toBeNull();
 	});
