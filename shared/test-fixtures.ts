@@ -38,7 +38,16 @@ export const PRIVATE_DATA_HOME_PATH_ALLOWLIST = [
 	// Absolute hook command paths; .claude/ is stripped from the export.
 	'.claude/settings.json',
 	// Names worktree roots / role-file paths; .slayzone/ stripped from export.
+	// Both role briefs became symlinks into the shared agent templates on
+	// 2026-07-31 (the slayzone-meta migration), so their git blob is now an
+	// absolute home path. `.slayzone` is stripped by publish-oss, so these never
+	// ship — allowlisting is honest here, per the note further down.
 	'.slayzone/orchestrator.md',
+	'.slayzone/worker.md',
+	// The local addenda name this project's worktree root, which is a home path
+	// by nature. Same reasoning: stripped before export.
+	'.slayzone/orchestrator-local.md',
+	'.slayzone/worker-local.md',
 	// Absolute path below the PRIVATE-ONLY marker; publish-oss truncates there.
 	'CLAUDE.md',
 	// Export tool + its own residual-path gate; script itself is excluded from export.
