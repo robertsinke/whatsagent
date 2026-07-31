@@ -256,6 +256,46 @@ describe('confirm-calendar-event', () => {
 		expect(getCalendarCredentials(db!, KEY)?.password).toBe('abcd efgh ijkl mnop');
 	});
 
+	it('records a panel calendar outcome on successful confirm (CAL-5)', async () => {
+		openTempDb();
+		seedCreds(db!);
+		const id = seedProposal(db!);
+		const proposal = getCalendarProposal(db!, id)!;
+		const outcomes: { status: string; summary: string }[] = [];
+		const action = createConfirmCalendarEventAction({
+			encryptionKey: KEY,
+			newUid: () => 'outcome-uid',
+			fetch: async () => new Response('', { status: 201 })
+		});
+		const registry = confirmRegistry(action);
+		await dispatch(
+			registry,
+			'confirm-calendar-event',
+			{ id, base_hash: hashApprovalText(calendarProposalApprovalText(proposal)) },
+			{
+				caller: 'frontend',
+				deps: makeDeps({
+					calendarEncryptionKey: KEY,
+					panelSession: {
+						start: () => ({ sessionId: 's', messageId: 'm', harness: 'opencode' }),
+						cancel: () => false,
+						status: () => ({
+							running: false,
+							sessionId: null,
+							messageId: null,
+							harness: null
+						}),
+						clearHistory: () => ({ cancelled: false, sessionId: 's' }),
+						recordCalendarOutcome: (o) => outcomes.push(o)
+					}
+				})
+			}
+		);
+		expect(outcomes).toEqual([
+			{ status: 'confirmed', summary: proposal.summary, start: proposal.start }
+		]);
+	});
+
 	it('non-2xx PUT surfaces failure and leaves no confirmed local success', async () => {
 		openTempDb();
 		seedCreds(db!);
@@ -348,6 +388,38 @@ describe('reject-calendar-event', () => {
 		expect(result).toMatchObject({ kind: 'json', status: 200 });
 		expect(getCalendarProposal(db!, id)?.status).toBe('rejected');
 		expect(puts).toBe(0);
+	});
+
+	it('records a panel calendar outcome on reject (CAL-5)', async () => {
+		openTempDb();
+		const id = seedProposal(db!);
+		const proposal = getCalendarProposal(db!, id)!;
+		const outcomes: { status: string; summary: string; start: string }[] = [];
+		await dispatch(
+			actionRegistry,
+			'reject-calendar-event',
+			{ id },
+			{
+				caller: 'frontend',
+				deps: makeDeps({
+					panelSession: {
+						start: () => ({ sessionId: 's', messageId: 'm', harness: 'opencode' }),
+						cancel: () => false,
+						status: () => ({
+							running: false,
+							sessionId: null,
+							messageId: null,
+							harness: null
+						}),
+						clearHistory: () => ({ cancelled: false, sessionId: 's' }),
+						recordCalendarOutcome: (o) => outcomes.push(o)
+					}
+				})
+			}
+		);
+		expect(outcomes).toEqual([
+			{ status: 'rejected', summary: proposal.summary, start: proposal.start }
+		]);
 	});
 });
 

@@ -233,6 +233,41 @@ describe('panelTimeline (PANEL-S3)', () => {
 		const timeline = panelTimeline([], [{ messageId: 'm1', text: 'go' }]);
 		expect(timeline).toEqual([{ kind: 'owner', messageId: 'm1', text: 'go' }]);
 	});
+
+	it('appends confirmed and rejected calendar outcomes (CAL-5)', () => {
+		const timeline = panelTimeline(
+			[],
+			[{ messageId: 'm1', text: 'schedule lunch' }],
+			[
+				{
+					id: 'cal-1-confirmed',
+					status: 'confirmed',
+					summary: 'Lunch with Maya',
+					start: '2026-08-01T11:00:00.000Z'
+				},
+				{
+					id: 'cal-2-rejected',
+					status: 'rejected',
+					summary: 'Standup',
+					start: '2026-08-02T09:00:00.000Z'
+				}
+			]
+		);
+		expect(timeline.map((e) => e.kind)).toEqual(['owner', 'outcome', 'outcome']);
+		const confirmed = timeline[1]!;
+		expect(confirmed.kind).toBe('outcome');
+		if (confirmed.kind === 'outcome') {
+			expect(confirmed.status).toBe('confirmed');
+			expect(confirmed.text).toMatch(/^Added to your calendar: Lunch with Maya/);
+			expect(confirmed.text).toContain('·');
+		}
+		const rejected = timeline[2]!;
+		expect(rejected.kind).toBe('outcome');
+		if (rejected.kind === 'outcome') {
+			expect(rejected.status).toBe('rejected');
+			expect(rejected.text).toBe('Discarded: Standup');
+		}
+	});
 });
 
 /**

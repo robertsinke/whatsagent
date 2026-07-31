@@ -6,9 +6,12 @@ import { OpenCodePanelHarness } from './opencode-harness.js';
 export {
 	buildPanelPrompt,
 	MCP_SERVER_NAME,
+	MAX_HISTORY_OUTCOMES,
+	MAX_HISTORY_TURNS,
 	normalizeToolName,
 	PANEL_SYSTEM_PROMPT,
 	renderHistory,
+	type PanelCalendarOutcome,
 	type PanelHarness,
 	type PanelHarnessId,
 	type PanelTurn,

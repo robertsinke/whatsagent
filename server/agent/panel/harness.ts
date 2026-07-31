@@ -23,12 +23,26 @@ export type PanelTurnSummary = {
 	reply: string;
 };
 
+/**
+ * CAL-5 — a calendar decision the owner made while this panel session was live.
+ * Written by the confirm/reject actions into {@link PanelSessionManager}, then
+ * folded into the next turn's prompt by {@link renderHistory}. Not a model turn.
+ */
+export type PanelCalendarOutcome = {
+	status: 'confirmed' | 'rejected';
+	summary: string;
+	/** ISO start — kept short in the prompt; the model only needs identity. */
+	start: string;
+};
+
 export type PanelTurn = {
 	sessionId: string;
 	messageId: string;
 	/** What the owner typed. */
 	text: string;
 	history: readonly PanelTurnSummary[];
+	/** CAL-5 — owner calendar decisions since the last clear. */
+	outcomes?: readonly PanelCalendarOutcome[];
 };
 
 export interface PanelHarness {
@@ -42,7 +56,7 @@ export interface PanelHarness {
  *
  * SPAWN PER TURN IS NOT A SIMPLIFICATION — it is forced. `opencode serve` +
  * `opencode run --attach` is not equivalent to `opencode run`: PL-S3 reproduced
- * twice that attach emits only `step_start`, with no text and no `step_finish`,
+ * twice that attach emits only `step_start`, with no text and with no `step_finish`,
  * and that with MCP tools the follow-up answer turn often never reaches the
  * attach client. So no harness session feature is used and continuity is
  * *entirely* what this function puts in the prompt.
@@ -55,6 +69,11 @@ export interface PanelHarness {
  * - `MAX_CHARS_PER_FIELD = 800` — one long agent answer must not crowd out the
  *   other five turns. Truncation is marked, so the model can see that it is
  *   looking at a summary rather than silently trusting a cut-off sentence.
+ * - `MAX_HISTORY_OUTCOMES = 6` — calendar confirm/discard lines are short, but
+ *   they share the same rebuild-every-turn cost. Outcomes NEVER steal slots from
+ *   conversation turns: each has its own window. When there are more than the
+ *   cap, older outcomes are dropped (most recent kept); the turn window is
+ *   unchanged.
  *
  * Tool traces are excluded on purpose: they are the panel's product for the
  * *owner*, not context the model needs, and a replayed tool result is the one
@@ -62,6 +81,7 @@ export interface PanelHarness {
  */
 export const MAX_HISTORY_TURNS = 6;
 export const MAX_CHARS_PER_FIELD = 800;
+export const MAX_HISTORY_OUTCOMES = 6;
 
 function clip(text: string): string {
 	const trimmed = text.trim();
@@ -69,13 +89,38 @@ function clip(text: string): string {
 	return `${trimmed.slice(0, MAX_CHARS_PER_FIELD)}… [truncated]`;
 }
 
-export function renderHistory(history: readonly PanelTurnSummary[]): string {
+function renderOutcomeLine(outcome: PanelCalendarOutcome): string {
+	const summary = clip(outcome.summary);
+	if (outcome.status === 'confirmed') {
+		return `Owner added "${summary}" to the calendar (start ${clip(outcome.start)}).`;
+	}
+	return `Owner discarded the proposed calendar event "${summary}".`;
+}
+
+/**
+ * Render prior turns (and optional calendar outcomes) into the prompt prefix.
+ * Outcomes are a separate capped list — see {@link MAX_HISTORY_OUTCOMES}.
+ */
+export function renderHistory(
+	history: readonly PanelTurnSummary[],
+	outcomes: readonly PanelCalendarOutcome[] = []
+): string {
 	const recent = history.slice(-MAX_HISTORY_TURNS);
-	if (recent.length === 0) return '';
-	const rendered = recent
-		.map((turn) => `Owner: ${clip(turn.prompt)}\nYou: ${clip(turn.reply)}`)
-		.join('\n\n');
-	return `Earlier in this conversation (most recent last):\n\n${rendered}\n\n`;
+	const recentOutcomes = outcomes.slice(-MAX_HISTORY_OUTCOMES);
+	if (recent.length === 0 && recentOutcomes.length === 0) return '';
+
+	const parts: string[] = [];
+	if (recent.length > 0) {
+		const rendered = recent
+			.map((turn) => `Owner: ${clip(turn.prompt)}\nYou: ${clip(turn.reply)}`)
+			.join('\n\n');
+		parts.push(`Earlier in this conversation (most recent last):\n\n${rendered}`);
+	}
+	if (recentOutcomes.length > 0) {
+		const rendered = recentOutcomes.map(renderOutcomeLine).join('\n');
+		parts.push(`Calendar decisions (most recent last):\n${rendered}`);
+	}
+	return `${parts.join('\n\n')}\n\n`;
 }
 
 /**
@@ -108,7 +153,7 @@ export const PANEL_SYSTEM_PROMPT = [
 ].join('\n');
 
 export function buildPanelPrompt(turn: PanelTurn): string {
-	return `${renderHistory(turn.history)}Owner: ${turn.text}`;
+	return `${renderHistory(turn.history, turn.outcomes ?? [])}Owner: ${turn.text}`;
 }
 
 /**

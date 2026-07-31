@@ -196,6 +196,15 @@ export type PanelSessionRuntime = {
 	};
 	/** PANEL-S3 — wipe history (and cancel any in-flight turn). */
 	clearHistory: () => { cancelled: boolean; sessionId: string };
+	/**
+	 * CAL-5 — fold an owner calendar decision into the next panel turn's prompt.
+	 * Optional so hand-built test doubles that never touch calendar stay valid.
+	 */
+	recordCalendarOutcome?: (outcome: {
+		status: 'confirmed' | 'rejected';
+		summary: string;
+		start: string;
+	}) => void;
 };
 
 const MIME: Record<string, string> = {

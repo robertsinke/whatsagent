@@ -6,7 +6,6 @@
 	import * as Empty from '$lib/components/ui/empty/index.js';
 	import { MessagesSquare } from '@lucide/svelte';
 	import AgentPanel from '$lib/components/app/AgentPanel.svelte';
-	import CalendarProposalCard from '$lib/components/app/CalendarProposalCard.svelte';
 	import ChatList from '$lib/components/app/ChatList.svelte';
 	import Composer from '$lib/components/app/Composer.svelte';
 	import ConversationPane from '$lib/components/app/ConversationPane.svelte';
@@ -223,18 +222,6 @@
 							/>
 						</div>
 					{:else}
-						{#if app.visibleCalendarProposals.length}
-							<div class="conv-foot calendar-only">
-								{#each app.visibleCalendarProposals as proposal (proposal.id)}
-									<CalendarProposalCard
-										{proposal}
-										deciding={app.decidingCalendarProposalId === proposal.id}
-										onconfirm={() => app.confirmCalendarProposal(proposal.id)}
-										onreject={() => app.rejectCalendarProposal(proposal.id)}
-									/>
-								{/each}
-							</div>
-						{/if}
 						<Empty.Root class="conv-empty">
 							<Empty.Header>
 								<Empty.Media variant="icon"><MessagesSquare class="size-5" /></Empty.Media>

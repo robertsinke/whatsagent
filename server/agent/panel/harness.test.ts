@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	buildPanelPrompt,
 	MAX_CHARS_PER_FIELD,
+	MAX_HISTORY_OUTCOMES,
 	MAX_HISTORY_TURNS,
 	normalizeToolName,
 	parseToolPayload,
@@ -63,6 +64,34 @@ describe('renderHistory', () => {
 		// The whole point: the model can see it is reading a summary.
 		expect(rendered).not.toContain('a'.repeat(MAX_CHARS_PER_FIELD + 1));
 	});
+
+	it('includes calendar outcomes without crowding turns out of the window (CAL-5)', () => {
+		const turns = Array.from({ length: MAX_HISTORY_TURNS }, (_, i) => turn(i));
+		const outcomes = Array.from({ length: MAX_HISTORY_OUTCOMES + 3 }, (_, i) => ({
+			status: (i % 2 === 0 ? 'confirmed' : 'rejected') as 'confirmed' | 'rejected',
+			summary: `Event ${i}`,
+			start: `2026-08-0${(i % 9) + 1}T10:00:00.000Z`
+		}));
+		const rendered = renderHistory(turns, outcomes);
+		// All turn slots still present — outcomes have their own cap.
+		expect(rendered.match(/Owner:/g)).toHaveLength(MAX_HISTORY_TURNS);
+		expect(rendered).toContain('ask 0');
+		expect(rendered).toContain(`ask ${MAX_HISTORY_TURNS - 1}`);
+		// Older outcomes dropped; newest kept.
+		expect(rendered).not.toContain('Event 0');
+		expect(rendered).toContain(`Event ${MAX_HISTORY_OUTCOMES + 2}`);
+		expect(rendered).toContain('Calendar decisions');
+		expect(rendered).toMatch(/Owner added "Event \d+" to the calendar/);
+		expect(rendered).toMatch(/Owner discarded the proposed calendar event/);
+	});
+
+	it('renders outcomes alone when there is no turn history yet', () => {
+		const rendered = renderHistory([], [
+			{ status: 'confirmed', summary: 'Lunch with Maya', start: '2026-08-01T11:00:00.000Z' }
+		]);
+		expect(rendered).toContain('Owner added "Lunch with Maya" to the calendar');
+		expect(rendered).not.toContain('Earlier in this conversation');
+	});
 });
 
 describe('buildPanelPrompt', () => {
@@ -75,6 +104,20 @@ describe('buildPanelPrompt', () => {
 		});
 		expect(prompt.indexOf('earlier')).toBeLessThan(prompt.indexOf('do the thing'));
 		expect(prompt.endsWith('Owner: do the thing')).toBe(true);
+	});
+
+	it('folds calendar outcomes into the prompt before the current owner text', () => {
+		const prompt = buildPanelPrompt({
+			sessionId: 's',
+			messageId: 'm',
+			text: 'what about lunch?',
+			history: [],
+			outcomes: [
+				{ status: 'confirmed', summary: 'Lunch with Maya', start: '2026-08-01T11:00:00.000Z' }
+			]
+		});
+		expect(prompt).toContain('Owner added "Lunch with Maya" to the calendar');
+		expect(prompt.indexOf('Lunch with Maya')).toBeLessThan(prompt.indexOf('what about lunch?'));
 	});
 });
 

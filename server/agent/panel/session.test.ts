@@ -187,6 +187,34 @@ describe('PanelSessionManager', () => {
 		expect(seenTurns[1]!.history).toEqual([]);
 	});
 
+	it('recordCalendarOutcome reaches the next turn and clearHistory drops it (CAL-5)', async () => {
+		const seenTurns: PanelTurn[] = [];
+		const { manager } = makeManager(
+			fakeHarness(async function* (turn) {
+				seenTurns.push(turn);
+				yield { kind: 'text', sessionId: turn.sessionId, messageId: turn.messageId, partId: 'p', text: 'ok' };
+			})
+		);
+		manager.recordCalendarOutcome({
+			status: 'confirmed',
+			summary: 'Lunch with Maya',
+			start: '2026-08-01T11:00:00.000Z'
+		});
+		manager.start('follow up');
+		await vi.waitFor(() => expect(seenTurns).toHaveLength(1));
+		expect(seenTurns[0]!.outcomes).toEqual([
+			{
+				status: 'confirmed',
+				summary: 'Lunch with Maya',
+				start: '2026-08-01T11:00:00.000Z'
+			}
+		]);
+		manager.clearHistory();
+		manager.start('after clear');
+		await vi.waitFor(() => expect(seenTurns).toHaveLength(2));
+		expect(seenTurns[1]!.outcomes).toEqual([]);
+	});
+
 	it('cancels a running turn through the AbortSignal and releases the slot', async () => {
 		let sawAbort = false;
 		const { manager, seen } = makeManager(

@@ -230,6 +230,14 @@ export class AppState {
 	 */
 	agentOwnerEchoes = $state<{ messageId: string; text: string }[]>([]);
 	/**
+	 * CAL-5 — app-written calendar acknowledgements for the panel transcript.
+	 * Driven by `calendar-proposal-updated` when status flips to confirmed or
+	 * rejected. Cleared with the panel; never a model turn.
+	 */
+	agentCalendarOutcomes = $state<
+		{ id: string; status: 'confirmed' | 'rejected'; summary: string; start: string }[]
+	>([]);
+	/**
 	 * PL-U7 — whether the panel has a runtime, and whether a turn is in flight.
 	 * `available: false` is the shipped default (the MCP surface is off), and the
 	 * composer must stay disabled in that case rather than look wired.
@@ -678,15 +686,22 @@ export class AppState {
 	}
 
 	/**
-	 * Pending calendar proposals visible for the open chat: matching chat_jid,
-	 * or null chat_jid (global / panel-originated). All pending when no chat is
-	 * selected — the empty pane still needs to show them.
+	 * Pending calendar proposals for the open chat's Composer. Chat-scoped only
+	 * (`chat_jid` matches). Panel-originated rows (`chat_jid` null) live in the
+	 * agent panel — see {@link panelCalendarProposals}. CAL-5 removed the
+	 * empty-pane stopgap that mixed both.
 	 */
 	get visibleCalendarProposals(): CalendarProposal[] {
-		if (!this.selectedJid) return this.calendarProposals;
-		return this.calendarProposals.filter(
-			(p) => p.chat_jid === null || p.chat_jid === this.selectedJid
-		);
+		if (!this.selectedJid) return [];
+		return this.calendarProposals.filter((p) => p.chat_jid === this.selectedJid);
+	}
+
+	/**
+	 * CAL-5 — panel-originated proposals (`chat_jid` null). Rendered above the
+	 * agent composer, never in the chat empty pane.
+	 */
+	get panelCalendarProposals(): CalendarProposal[] {
+		return this.calendarProposals.filter((p) => p.chat_jid === null);
 	}
 
 	/**
@@ -1245,6 +1260,24 @@ export class AppState {
 				}
 				return;
 			case 'calendar-proposal-updated':
+				if (
+					event.proposal.status === 'confirmed' ||
+					event.proposal.status === 'rejected'
+				) {
+					// CAL-5 — immediate panel transcript line; no model turn.
+					const id = `cal-${event.proposal.id}-${event.proposal.status}-${event.proposal.decided_at ?? Date.now()}`;
+					if (!this.agentCalendarOutcomes.some((o) => o.id === id)) {
+						this.agentCalendarOutcomes = [
+							...this.agentCalendarOutcomes,
+							{
+								id,
+								status: event.proposal.status,
+								summary: event.proposal.summary,
+								start: event.proposal.start
+							}
+						];
+					}
+				}
 				this.calendarProposals =
 					event.proposal.status === 'pending'
 						? [
@@ -1418,6 +1451,7 @@ export class AppState {
 			if (this.agent.sessionId) this.#discardedAgentSessions.add(this.agent.sessionId);
 			this.agentSessions = {};
 			this.agentOwnerEchoes = [];
+			this.agentCalendarOutcomes = [];
 			this.agentError = null;
 			this.agent = {
 				...this.agent,

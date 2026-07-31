@@ -139,6 +139,12 @@ export function createConfirmCalendarEventAction(
 				attachCalendarEventId(db, proposal.id, result.uid);
 				const confirmed = getCalendarProposal(db, proposal.id)!;
 				events.emit({ type: 'calendar-proposal-updated', proposal: confirmed });
+				// CAL-5 — so the panel agent's next turn does not still say "pending".
+				ctx.deps.panelSession?.recordCalendarOutcome?.({
+					status: 'confirmed',
+					summary: confirmed.summary,
+					start: confirmed.start
+				});
 				return actionJson(200, { proposal: confirmed, google_event_id: result.uid });
 			} catch (err) {
 				revertCalendarProposalClaim(db, proposal.id);
