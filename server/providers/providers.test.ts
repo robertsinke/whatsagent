@@ -7,7 +7,7 @@ import { fakeSpawn } from './fake-spawn.js';
 import { OllamaProvider } from './ollama.js';
 import { createDraftProvider } from './index.js';
 import { providerFactoryOptionsFromDiscovery } from './discovery.js';
-import { buildPrompt, buildRefinementInput, type DraftInput } from './provider.js';
+import { buildPrompt, buildRefinementInput, draftResultSchema, parseDraftResult, type DraftInput } from './provider.js';
 
 const input: DraftInput = {
 	system: 'Draft a concise reply in the owner voice.',
@@ -438,5 +438,188 @@ describe('discovery paths through the factory', () => {
 
 		await expect(provider.draft(input)).resolves.toMatchObject({ kind: 'draft' });
 		expect(process.calls[0]?.command).toBe('claude');
+	});
+});
+
+describe('CAL-4 commitment field on the shared draft contract', () => {
+	const commitment = {
+		summary: 'Dinner with Alice',
+		start: '2026-08-07T19:00:00.000Z',
+		end: '2026-08-07T21:00:00.000Z',
+		location: 'Cafe Nero'
+	};
+
+	it('draftResultSchema requires nullable commitment (Claude constrained decoding)', () => {
+		expect(draftResultSchema.required).toEqual(['kind', 'text', 'reason', 'commitment']);
+		expect(draftResultSchema.additionalProperties).toBe(false);
+		expect(draftResultSchema.properties.commitment.type).toEqual(['object', 'null']);
+		expect(draftResultSchema.properties.commitment.required).toEqual([
+			'summary',
+			'start',
+			'end',
+			'location'
+		]);
+	});
+
+	it('buildPrompt spells commitment out in the literal JSON shapes (Ollama contract)', () => {
+		const prompt = buildPrompt(input);
+		expect(prompt).toContain('"commitment":null');
+		expect(prompt).toContain('"commitment":{"summary":"...","start":"...","end":"...","location":null}');
+		expect(prompt).toContain('Never invent a commitment');
+	});
+
+	it('parseDraftResult tolerates absence (Ollama may never emit the key)', () => {
+		expect(parseDraftResult({ kind: 'draft', text: 'Sure.', reason: null })).toEqual({
+			kind: 'draft',
+			text: 'Sure.'
+		});
+		expect(
+			parseDraftResult({ kind: 'no_reply_needed', text: null, reason: 'ack only' })
+		).toEqual({ kind: 'no_reply_needed', reason: 'ack only' });
+	});
+
+	it('parseDraftResult reads a well-formed commitment and drops a malformed one', () => {
+		expect(
+			parseDraftResult({
+				kind: 'draft',
+				text: 'Thursday 7pm works.',
+				reason: null,
+				commitment
+			})
+		).toEqual({
+			kind: 'draft',
+			text: 'Thursday 7pm works.',
+			commitment
+		});
+		expect(
+			parseDraftResult({
+				kind: 'draft',
+				text: 'Thursday 7pm works.',
+				reason: null,
+				commitment: null
+			})
+		).toEqual({
+			kind: 'draft',
+			text: 'Thursday 7pm works.',
+			commitment: null
+		});
+		expect(
+			parseDraftResult({
+				kind: 'draft',
+				text: 'Thursday 7pm works.',
+				reason: null,
+				commitment: { summary: 'x', start: 'not-a-date', end: 'also-bad', location: null }
+			})
+		).toEqual({
+			kind: 'draft',
+			text: 'Thursday 7pm works.',
+			commitment: null
+		});
+	});
+
+	it('Claude structured_output shape: with and without commitment', async () => {
+		const withCommitment = `${JSON.stringify({
+			type: 'result',
+			subtype: 'success',
+			is_error: false,
+			structured_output: {
+				kind: 'draft',
+				text: 'Thursday 7pm works.',
+				reason: null,
+				commitment
+			}
+		})}\n`;
+		const without = fixture('claude-success.jsonl');
+
+		const withProcess = fakeSpawn([{ stdout: withCommitment }]);
+		await expect(new ClaudeProvider({ spawn: withProcess.spawn }).draft(input)).resolves.toEqual({
+			kind: 'draft',
+			text: 'Thursday 7pm works.',
+			commitment
+		});
+		expect(withProcess.calls[0]?.args).toContain('--json-schema');
+		const schemaArg = withProcess.calls[0]?.args[withProcess.calls[0]!.args.indexOf('--json-schema') + 1];
+		expect(JSON.parse(schemaArg!)).toMatchObject({
+			required: expect.arrayContaining(['commitment'])
+		});
+
+		const withoutProcess = fakeSpawn([{ stdout: without }]);
+		await expect(new ClaudeProvider({ spawn: withoutProcess.spawn }).draft(input)).resolves.toEqual({
+			kind: 'draft',
+			text: 'Sounds good, see you then.'
+		});
+	});
+
+	it('OpenCode text shape: with and without commitment', async () => {
+		const withText = JSON.stringify({
+			kind: 'draft',
+			text: 'Thursday 7pm works.',
+			reason: null,
+			commitment
+		});
+		const withStdout =
+			`${JSON.stringify({ type: 'text', part: { text: withText } })}\n` +
+			`${JSON.stringify({ type: 'step_finish', part: { type: 'step-finish' } })}\n`;
+		const withProcess = fakeSpawn([{ stdout: withStdout }]);
+		await expect(new OpenCodeProvider({ spawn: withProcess.spawn }).draft(input)).resolves.toEqual({
+			kind: 'draft',
+			text: 'Thursday 7pm works.',
+			commitment
+		});
+
+		const withoutProcess = fakeSpawn([{ stdout: fixture('opencode-success.jsonl') }]);
+		await expect(
+			new OpenCodeProvider({ spawn: withoutProcess.spawn }).draft(input)
+		).resolves.toEqual({
+			kind: 'draft',
+			text: "I'll check and let you know."
+		});
+	});
+
+	it('Ollama json mode: with and without commitment (absence must still parse)', async () => {
+		const withFetch = vi.fn(
+			async () =>
+				new Response(
+					JSON.stringify({
+						message: {
+							content: JSON.stringify({
+								kind: 'draft',
+								text: 'Thursday 7pm works.',
+								reason: null,
+								commitment
+							})
+						}
+					}),
+					{ status: 200, headers: { 'content-type': 'application/json' } }
+				)
+		);
+		await expect(new OllamaProvider({ model: 'qwen3', fetch: withFetch }).draft(input)).resolves.toEqual({
+			kind: 'draft',
+			text: 'Thursday 7pm works.',
+			commitment
+		});
+
+		const withoutFetch = vi.fn(
+			async () =>
+				new Response(
+					JSON.stringify({
+						message: {
+							// No commitment key — Ollama's only contract is the prompt string.
+							content: JSON.stringify({
+								kind: 'draft',
+								text: 'Ja, tot vrijdag!',
+								reason: null
+							})
+						}
+					}),
+					{ status: 200, headers: { 'content-type': 'application/json' } }
+				)
+		);
+		await expect(
+			new OllamaProvider({ model: 'qwen3', fetch: withoutFetch }).draft(input)
+		).resolves.toEqual({
+			kind: 'draft',
+			text: 'Ja, tot vrijdag!'
+		});
 	});
 });

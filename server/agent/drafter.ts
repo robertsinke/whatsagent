@@ -10,7 +10,15 @@ import {
 } from '../store/drafts.js';
 import { getLastMessage, listMessagesPage, type Message } from '../store/messages.js';
 import {
+	getCalendarProposal,
+	insertCalendarProposal,
+	listPendingCalendarProposals,
+	type CalendarProposal
+} from '../store/calendar-proposals.js';
+import { MAX_PENDING_CALENDAR_PROPOSALS } from '../actions/propose-calendar-event.js';
+import {
 	ProviderError,
+	type DraftCommitment,
 	type DraftInput,
 	type DraftProvider,
 	type ProviderErrorCode,
@@ -39,6 +47,8 @@ export type AgentDraftHooks = {
 	onDraftUpdated?(draft: Draft): void;
 	onDraftRemoved?(chatJid: string): void;
 	onChatUpdated?(chat: Chat): void;
+	/** CAL-4 — emitted when a draft commitment became a pending proposal row. */
+	onCalendarProposalUpdated?(proposal: CalendarProposal): void;
 };
 
 export type DraftAttempt =
@@ -186,6 +196,36 @@ function emitChat(options: DraftChatOptions): void {
 }
 
 /**
+ * CAL-4 — turn a draft commitment into a pending calendar_proposals row.
+ *
+ * Reuses CAL-2's accessors and global pending cap. Never touches CalDAV /
+ * Google — only `confirm-calendar-event` does. Cap refusal and insert failure
+ * are swallowed: a proposal is optional context next to the draft, and must
+ * never make drafting unavailable (this path runs automatically on inbound).
+ */
+function maybeProposeCommitment(
+	options: DraftChatOptions,
+	commitment: DraftCommitment
+): void {
+	try {
+		const pending = listPendingCalendarProposals(options.db);
+		if (pending.length >= MAX_PENDING_CALENDAR_PROPOSALS) return;
+		const id = insertCalendarProposal(options.db, {
+			summary: commitment.summary,
+			start: commitment.start,
+			end: commitment.end,
+			location: commitment.location,
+			chatJid: options.chatJid,
+			now: (options.now ?? Date.now)()
+		});
+		const proposal = getCalendarProposal(options.db, id);
+		if (proposal) options.hooks?.onCalendarProposalUpdated?.(proposal);
+	} catch {
+		// Optional proposal write must never make the core drafting loop unavailable.
+	}
+}
+
+/**
  * `error_code` is optional and defaults to null on every write, so any non-failed
  * transition (including a retry) clears a stale code rather than carrying it.
  *
@@ -294,6 +334,11 @@ export async function draftChat(options: DraftChatOptions): Promise<DraftAttempt
 			provider: options.providerName,
 			basis_msg_id: candidate.lastInbound.id
 		});
+		// CAL-4: commitment → inert proposal row. Cap + accessors from CAL-2.
+		// Confirm still goes through confirm-calendar-event; this never writes Google.
+		if (result.commitment) {
+			maybeProposeCommitment(options, result.commitment);
+		}
 		setChatAgentState(options.db, options.chatJid, 'needs_reply');
 		emitChat(options);
 		return { kind: 'ready', draft };

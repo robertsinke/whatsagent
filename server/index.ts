@@ -366,7 +366,9 @@ export function createApp(options: CreateAppOptions = {}): App {
 				hooks: {
 					onDraftUpdated: (draft) => events.emit({ type: 'draft-updated', draft }),
 					onDraftRemoved: (chatJid) => events.emit({ type: 'draft-removed', chat_jid: chatJid }),
-					onChatUpdated: (chat) => events.emit({ type: 'chat-updated', chat: chatViewFor(db, chat) })
+					onChatUpdated: (chat) => events.emit({ type: 'chat-updated', chat: chatViewFor(db, chat) }),
+					onCalendarProposalUpdated: (proposal) =>
+						events.emit({ type: 'calendar-proposal-updated', proposal })
 				}
 			})
 		: undefined;
