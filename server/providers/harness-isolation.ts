@@ -364,16 +364,29 @@ function plainSummary(
 	harness: IsolationHarness,
 	surface: IsolationSurface,
 	verdict: IsolationVerdict,
-	findings: IsolationFinding[]
+	findings: IsolationFinding[],
+	measuredPort?: number
 ): string {
 	const label = harness === 'codex' ? 'OpenCode' : 'Claude Code';
 	const where = surface === 'drafting' ? 'drafting' : 'the agent panel';
 	if (verdict === 'pass') {
-		return surface === 'drafting'
-			? `${label}: nothing extra is reachable while ${where}.`
-			: `${label}: only our tools are reachable in ${where}; everything else is denied.`;
+		if (surface === 'drafting') {
+			return `${label}: nothing extra is reachable while ${where}.`;
+		}
+		const measured =
+			measuredPort !== undefined
+				? ` Measured realized MCP surface at http://127.0.0.1:${measuredPort}/mcp.`
+				: '';
+		return `${label}: only our tools are reachable in ${where}; everything else is denied.${measured}`;
 	}
 	if (verdict === 'unavailable') {
+		const first = findings[0];
+		if (first?.code === 'panel_port_missing') {
+			return `${label}: cannot measure panel isolation — ${first.detail}`;
+		}
+		if (first?.detail) {
+			return `${label}: cannot measure — ${first.detail}`;
+		}
 		return `${label} did not answer — is it installed and on PATH?`;
 	}
 	if (verdict === 'inconclusive') {
@@ -393,6 +406,8 @@ function reportBase(options: {
 	verdict: IsolationVerdict;
 	findings: IsolationFinding[];
 	checkedAt?: number;
+	/** Claude panel Tier 1 only — which port's realized surface was read. */
+	measuredPort?: number;
 }): HarnessIsolationReport {
 	return {
 		harness: options.harness,
@@ -403,10 +418,30 @@ function reportBase(options: {
 		pinnedVersion: pinnedVersionFor(options.harness),
 		detectedVersion: options.detectedVersion,
 		verdict: options.verdict,
-		summary: plainSummary(options.harness, options.surface, options.verdict, options.findings),
+		summary: plainSummary(
+			options.harness,
+			options.surface,
+			options.verdict,
+			options.findings,
+			options.measuredPort
+		),
 		checkedAt: options.checkedAt ?? Date.now(),
 		findings: options.findings
 	};
+}
+
+/**
+ * Claude panel Tier 1 reads the *realized* MCP surface. Without a reachable
+ * app port the probe would point at the discard port (9), see no whatsagent
+ * tools, and report fail — an environmental cannot-measure dressed as a
+ * security failure. OpenCode Tier 1 is resolved-config-only and does not
+ * need a live listener; that asymmetry is intentional (file header).
+ */
+export function claudePanelNeedsLivePort(
+	surface: IsolationSurface,
+	panelPort: number | undefined
+): boolean {
+	return surface === 'panel' && panelPort === undefined;
 }
 
 export type CapturedSpawn = {
@@ -540,6 +575,35 @@ function firstJsonObject(text: string): Record<string, unknown> | null {
 	return null;
 }
 
+/**
+ * Claude panel sessions emit SessionStart `hook_started` system events before
+ * the `subtype: init` record that carries tools / mcp_servers. Picking the
+ * first JSONL object therefore evaluates an empty hook event as the surface
+ * and reports panel_mcp_missing even when the init line (later) is clean.
+ * Drafting under `--safe-mode` usually has init first; scan for init either way.
+ */
+export function findClaudeInitEvent(text: string): Record<string, unknown> | null {
+	for (const line of text.trim().split('\n')) {
+		const candidate = line.trim();
+		if (!candidate.startsWith('{')) continue;
+		try {
+			const parsed = JSON.parse(candidate) as unknown;
+			if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+			const obj = parsed as Record<string, unknown>;
+			if (obj.type === 'system' && obj.subtype === 'init') return obj;
+			if (
+				obj.type === 'system' &&
+				(obj.tools !== undefined || obj.mcp_servers !== undefined)
+			) {
+				return obj;
+			}
+		} catch {
+			// keep scanning
+		}
+	}
+	return null;
+}
+
 export type VerifyHarnessOptions = {
 	harness: IsolationHarness;
 	surface: IsolationSurface;
@@ -625,6 +689,24 @@ async function verifyClaudeTier1(
 	options: VerifyHarnessOptions,
 	detectedVersion: string | null
 ): Promise<HarnessIsolationReport> {
+	if (claudePanelNeedsLivePort(options.surface, options.panelPort)) {
+		return reportBase({
+			harness: 'claude',
+			surface: 'panel',
+			tier: 1,
+			detectedVersion,
+			verdict: 'unavailable',
+			findings: [
+				{
+					code: 'panel_port_missing',
+					detail:
+						'No panel port provided — cannot measure the realized MCP surface. Pass --panel-port (or run with the app listening on the default port). Refusing the discard-port default that would report panel_mcp_missing as a false fail.'
+				}
+			],
+			checkedAt: options.now?.()
+		});
+	}
+
 	const command = options.command ?? 'claude';
 	const env = sanitizedEnv(options.env ?? process.env, [
 		'ANTHROPIC_API_KEY',
@@ -637,6 +719,7 @@ async function verifyClaudeTier1(
 		let args: string[];
 		let stdin: string;
 		let cwd: string | undefined = root;
+		let measuredPort: number | undefined;
 
 		if (options.surface === 'drafting') {
 			args = claudeDraftIsolationArgv();
@@ -648,10 +731,12 @@ async function verifyClaudeTier1(
 				}
 			})}\n`;
 		} else {
+			// panelPort is defined — narrowed by claudePanelNeedsLivePort above.
+			measuredPort = options.panelPort!;
 			const mcpPath = join(root, 'mcp.json');
 			await writeFile(
 				mcpPath,
-				`${JSON.stringify(buildPanelClaudeMcpConfig(options.panelPort ?? 9), null, 2)}\n`,
+				`${JSON.stringify(buildPanelClaudeMcpConfig(measuredPort), null, 2)}\n`,
 				{ mode: 0o600 }
 			);
 			args = claudePanelIsolationArgv(mcpPath);
@@ -670,25 +755,22 @@ async function verifyClaudeTier1(
 			...(options.spawn ? { spawn: options.spawn } : {})
 		});
 
-		const event = firstJsonObject(captured.stdout);
-		if (!event || event.type !== 'system') {
-			// Still try to evaluate if tools keys are present on another shape.
-			if (!event || (event.tools === undefined && event.mcp_servers === undefined)) {
-				return reportBase({
-					harness: 'claude',
-					surface: options.surface,
-					tier: 1,
-					detectedVersion,
-					verdict: 'unavailable',
-					findings: [
-						{
-							code: 'no_init',
-							detail: `Claude produced no init event (exit ${captured.code})`
-						}
-					],
-					checkedAt: options.now?.()
-				});
-			}
+		const event = findClaudeInitEvent(captured.stdout);
+		if (!event) {
+			return reportBase({
+				harness: 'claude',
+				surface: options.surface,
+				tier: 1,
+				detectedVersion,
+				verdict: 'unavailable',
+				findings: [
+					{
+						code: 'no_init',
+						detail: `Claude produced no init event (exit ${captured.code})`
+					}
+				],
+				checkedAt: options.now?.()
+			});
 		}
 
 		const evaluated = evaluateClaudeInitEvent(event as ClaudeInitSurface, options.surface);
@@ -699,7 +781,8 @@ async function verifyClaudeTier1(
 			detectedVersion,
 			verdict: evaluated.ok ? 'pass' : 'fail',
 			findings: evaluated.findings,
-			checkedAt: options.now?.()
+			checkedAt: options.now?.(),
+			...(measuredPort !== undefined ? { measuredPort } : {})
 		});
 	} finally {
 		await rm(root, { recursive: true, force: true });
@@ -904,6 +987,31 @@ export async function verifyHarnessIsolation(
 	options: VerifyHarnessOptions
 ): Promise<HarnessIsolationReport> {
 	const deep = options.deep === true;
+
+	// Claude panel Tier 1 needs a live port before any spawn. Without one the
+	// old discard-port default produced a false panel_mcp_missing fail.
+	if (
+		options.harness === 'claude' &&
+		!deep &&
+		claudePanelNeedsLivePort(options.surface, options.panelPort)
+	) {
+		return reportBase({
+			harness: 'claude',
+			surface: 'panel',
+			tier: 1,
+			detectedVersion: null,
+			verdict: 'unavailable',
+			findings: [
+				{
+					code: 'panel_port_missing',
+					detail:
+						'No panel port provided — cannot measure the realized MCP surface. Pass --panel-port (or run with the app listening on the default port). Refusing the discard-port default that would report panel_mcp_missing as a false fail.'
+				}
+			],
+			checkedAt: options.now?.()
+		});
+	}
+
 	const command = options.command ?? harnessBinary(options.harness);
 	const env = sanitizedEnv(options.env ?? process.env, PROVIDER_SECRET_ENV_KEYS);
 	const detectedVersion = await probeDetectedVersion(command, env, options.spawn);

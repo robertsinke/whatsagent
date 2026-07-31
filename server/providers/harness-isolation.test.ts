@@ -7,16 +7,20 @@ import { buildPanelOpenCodeConfig } from '../agent/panel/opencode-harness.js';
 import {
 	claudeDraftIsolationArgv,
 	claudePanelIsolationArgv,
+	claudePanelNeedsLivePort,
 	draftingOpenCodeConfig,
 	evaluateClaudeInitEvent,
 	evaluateOpenCodeResolvedConfig,
+	findClaudeInitEvent,
 	mergeIsolationReport,
 	OPENCODE_RUN_ISOLATION_FLAGS,
 	OPENCODE_TIER1_ARGS,
 	panelOpenCodeConfig,
 	parseIsolationStore,
+	verifyHarnessIsolation,
 	type HarnessIsolationReport
 } from './harness-isolation.js';
+import type { SpawnProcess } from './provider.js';
 
 describe('argv / config parity with shipped spawn paths', () => {
 	it('drafting Claude argv includes every CLAUDE_DRAFT_ISOLATION_FLAGS entry', () => {
@@ -186,5 +190,55 @@ describe('isolation store helpers', () => {
 		};
 		const merged = mergeIsolationReport({}, report);
 		expect(merged.claude?.drafting?.verdict).toBe('pass');
+	});
+});
+
+describe('Claude panel without a live port', () => {
+	it('claudePanelNeedsLivePort is true only for panel + missing port', () => {
+		expect(claudePanelNeedsLivePort('panel', undefined)).toBe(true);
+		expect(claudePanelNeedsLivePort('panel', 8787)).toBe(false);
+		expect(claudePanelNeedsLivePort('drafting', undefined)).toBe(false);
+	});
+
+	it('returns unavailable with panel_port_missing — never fail/panel_mcp_missing', async () => {
+		let spawned = false;
+		const spawn: SpawnProcess = ((..._args: unknown[]) => {
+			spawned = true;
+			throw new Error('spawn must not run when panel port is missing');
+		}) as SpawnProcess;
+
+		const report = await verifyHarnessIsolation({
+			harness: 'claude',
+			surface: 'panel',
+			spawn,
+			command: 'claude',
+			now: () => 42
+		});
+
+		expect(spawned).toBe(false);
+		expect(report.verdict).toBe('unavailable');
+		expect(report.verdict).not.toBe('fail');
+		expect(report.findings.some((f) => f.code === 'panel_port_missing')).toBe(true);
+		expect(report.findings.some((f) => f.code === 'panel_mcp_missing')).toBe(false);
+		expect(report.summary).toMatch(/cannot measure panel isolation/i);
+		expect(report.checkedAt).toBe(42);
+	});
+});
+
+describe('findClaudeInitEvent', () => {
+	it('skips hook_started noise and returns subtype init', () => {
+		const stdout = [
+			JSON.stringify({ type: 'system', subtype: 'hook_started', hook_name: 'SessionStart' }),
+			JSON.stringify({
+				type: 'system',
+				subtype: 'init',
+				tools: [`mcp__${MCP_SERVER_NAME}__list-chats`],
+				mcp_servers: [{ name: MCP_SERVER_NAME, status: 'connected' }]
+			}),
+			JSON.stringify({ type: 'result', subtype: 'success' })
+		].join('\n');
+		const event = findClaudeInitEvent(stdout);
+		expect(event?.subtype).toBe('init');
+		expect(Array.isArray(event?.tools) && (event?.tools as unknown[]).length).toBe(1);
 	});
 });
