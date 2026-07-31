@@ -6,6 +6,7 @@ import type { AppDatabase } from '../store/db.js';
 import type { Message } from '../store/messages.js';
 import type { OutboxRow } from '../store/outbox.js';
 import type { CancellationNotice } from '../store/cancellation-notices.js';
+import type { CalendarProposal } from '../store/calendar-proposals.js';
 import type { SendProposal } from '../store/proposals.js';
 import { chatViewFor, type ChatView } from './chat-view.js';
 import { toMessageView, type MessageView } from './message-view.js';
@@ -41,6 +42,13 @@ export type ServerEvent =
 	 * a proposal cannot arrive by a route the rest of the UI does not watch.
 	 */
 	| { type: 'proposal-updated'; proposal: SendProposal }
+	/**
+	 * CAL-2 — a calendar event the agent proposed, or the owner's decision on
+	 * one. Same channel as every other store write so a card cannot arrive by a
+	 * route the rest of the UI does not watch. Confirming still goes through
+	 * the frontend-only action — this event never means Google accepted it.
+	 */
+	| { type: 'calendar-proposal-updated'; proposal: CalendarProposal }
 	/**
 	 * PL-U5 — the agent cancelled a message the owner had approved, or the
 	 * owner dismissed that notice. Carried on the same channel as every other

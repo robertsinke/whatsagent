@@ -59,6 +59,7 @@ describe('migrations', () => {
 
 		expect(tables.map((t) => t.name)).toEqual([
 			'agent_cancellation_notices',
+			'calendar_proposals',
 			'chats',
 			'contacts',
 			'draft_feedback',

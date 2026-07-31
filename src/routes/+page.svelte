@@ -6,6 +6,7 @@
 	import * as Empty from '$lib/components/ui/empty/index.js';
 	import { MessagesSquare } from '@lucide/svelte';
 	import AgentPanel from '$lib/components/app/AgentPanel.svelte';
+	import CalendarProposalCard from '$lib/components/app/CalendarProposalCard.svelte';
 	import ChatList from '$lib/components/app/ChatList.svelte';
 	import Composer from '$lib/components/app/Composer.svelte';
 	import ConversationPane from '$lib/components/app/ConversationPane.svelte';
@@ -188,6 +189,7 @@
 								stalePrompt={app.stalePrompt}
 								textConflict={app.textConflict}
 								proposals={app.selectedProposals}
+								calendarProposals={app.visibleCalendarProposals}
 								proposalChatName={chatTitle}
 								proposalTargetText={(id) => {
 									const m = app.messages.find((msg) => msg.id === id);
@@ -197,6 +199,7 @@
 								}}
 								proposalStalePrompt={app.proposalStalePrompt}
 								decidingProposalId={app.decidingProposalId}
+								decidingCalendarProposalId={app.decidingCalendarProposalId}
 								agentEligible={app.selectedChat.kind === '1:1'}
 								refining={app.refining}
 								refineError={app.refineError}
@@ -211,6 +214,8 @@
 										? app.confirmStaleProposal(id)
 										: app.confirmProposal(id)}
 								onrejectproposal={(id) => app.rejectProposal(id)}
+								onconfirmcalendarproposal={(id) => app.confirmCalendarProposal(id)}
+								onrejectcalendarproposal={(id) => app.rejectCalendarProposal(id)}
 								onrefine={(intent, text) => app.refineDraft(intent, text)}
 								generating={app.generating}
 								generateError={app.generateError}
@@ -218,6 +223,18 @@
 							/>
 						</div>
 					{:else}
+						{#if app.visibleCalendarProposals.length}
+							<div class="conv-foot calendar-only">
+								{#each app.visibleCalendarProposals as proposal (proposal.id)}
+									<CalendarProposalCard
+										{proposal}
+										deciding={app.decidingCalendarProposalId === proposal.id}
+										onconfirm={() => app.confirmCalendarProposal(proposal.id)}
+										onreject={() => app.rejectCalendarProposal(proposal.id)}
+									/>
+								{/each}
+							</div>
+						{/if}
 						<Empty.Root class="conv-empty">
 							<Empty.Header>
 								<Empty.Media variant="icon"><MessagesSquare class="size-5" /></Empty.Media>

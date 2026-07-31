@@ -217,6 +217,24 @@ export type SendProposal = {
 };
 
 /**
+ * CAL-2 — a calendar event the agent proposed. Inert until the owner confirms
+ * via `confirm-calendar-event` (frontend-only). `chat_jid` is optional
+ * provenance — unlike send proposals, an event need not belong to a chat.
+ */
+export type CalendarProposal = {
+	id: number;
+	summary: string;
+	start: string;
+	end: string;
+	location: string | null;
+	chat_jid: string | null;
+	status: ProposalStatus;
+	created_at: number;
+	decided_at: number | null;
+	google_event_id: string | null;
+};
+
+/**
  * PL-U5 — durable warning that the agent cancelled a message the owner had
  * already approved. `dismissed_at` is null while it still needs to be seen.
  */
@@ -295,6 +313,8 @@ export type ServerEvent =
 	| { type: 'draft-removed'; chat_jid: string }
 	/** PL-U3 — a proposed send appeared, or was confirmed/rejected by the owner. */
 	| { type: 'proposal-updated'; proposal: SendProposal }
+	/** CAL-2 — a proposed calendar event appeared, or was confirmed/rejected. */
+	| { type: 'calendar-proposal-updated'; proposal: CalendarProposal }
 	/**
 	 * PL-U5 — the agent cancelled an approved send, or the owner dismissed that
 	 * notice. Open notices are also refetched on hydrate.

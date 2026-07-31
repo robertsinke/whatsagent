@@ -6,6 +6,7 @@ import { approveDraftAction } from './approve-draft.js';
 import { cancelAgentTurnAction } from './cancel-agent-turn.js';
 import { cancelOutboxAction } from './cancel-outbox.js';
 import { clearAgentPanelAction } from './clear-agent-panel.js';
+import { confirmCalendarEventAction } from './confirm-calendar-event.js';
 import { confirmProposalAction } from './confirm-proposal.js';
 import { connectCalendarAction } from './connect-calendar.js';
 import { deepenHistoryAction } from './deepen-history.js';
@@ -23,10 +24,12 @@ import { loadMediaAction } from './load-media.js';
 import { markReadAction } from './mark-read.js';
 import { openChatAction } from './open-chat.js';
 import { promoteVoiceSuggestionAction } from './promote-voice-suggestion.js';
+import { proposeCalendarEventAction } from './propose-calendar-event.js';
 import { proposeReactionAction } from './propose-reaction.js';
 import { proposeSendAction } from './propose-send.js';
 import { reactAction } from './react.js';
 import { refineDraftAction } from './refine-draft.js';
+import { rejectCalendarEventAction } from './reject-calendar-event.js';
 import { rejectProposalAction } from './reject-proposal.js';
 import { refreshVoiceAction } from './refresh-voice.js';
 import { regeneratePairingAction } from './regenerate-pairing.js';
@@ -44,6 +47,7 @@ const actions: ActionDefinition<unknown>[] = [
 	cancelAgentTurnAction as ActionDefinition<unknown>,
 	cancelOutboxAction as ActionDefinition<unknown>,
 	clearAgentPanelAction as ActionDefinition<unknown>,
+	confirmCalendarEventAction as ActionDefinition<unknown>,
 	confirmProposalAction as ActionDefinition<unknown>,
 	connectCalendarAction as ActionDefinition<unknown>,
 	deepenHistoryAction as ActionDefinition<unknown>,
@@ -61,10 +65,12 @@ const actions: ActionDefinition<unknown>[] = [
 	markReadAction as ActionDefinition<unknown>,
 	openChatAction as ActionDefinition<unknown>,
 	promoteVoiceSuggestionAction as ActionDefinition<unknown>,
+	proposeCalendarEventAction as ActionDefinition<unknown>,
 	proposeReactionAction as ActionDefinition<unknown>,
 	proposeSendAction as ActionDefinition<unknown>,
 	reactAction as ActionDefinition<unknown>,
 	refineDraftAction as ActionDefinition<unknown>,
+	rejectCalendarEventAction as ActionDefinition<unknown>,
 	rejectProposalAction as ActionDefinition<unknown>,
 	refreshVoiceAction as ActionDefinition<unknown>,
 	regeneratePairingAction as ActionDefinition<unknown>,

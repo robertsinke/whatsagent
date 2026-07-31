@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
 	approvalHashMatches,
+	calendarProposalApprovalText,
 	describeTextSource,
 	hashApprovalText,
 	proposalApprovalText,
@@ -86,6 +87,38 @@ describe('proposalApprovalText', () => {
 		expect(a).not.toBe(retargeted);
 		expect(a).not.toBe(swapped);
 		expect(hashApprovalText(a)).not.toBe(hashApprovalText(retargeted));
+	});
+});
+
+describe('calendarProposalApprovalText', () => {
+	it('binds summary, start, end, and location', () => {
+		const a = calendarProposalApprovalText({
+			summary: 'Lunch',
+			start: '2026-08-01T12:00:00.000Z',
+			end: '2026-08-01T13:00:00.000Z',
+			location: 'Cafe'
+		});
+		expect(a).toBe(
+			['calendar', 'Lunch', '2026-08-01T12:00:00.000Z', '2026-08-01T13:00:00.000Z', 'Cafe'].join(
+				'\0'
+			)
+		);
+		expect(
+			calendarProposalApprovalText({
+				summary: 'Lunch',
+				start: '2026-08-01T12:00:00.000Z',
+				end: '2026-08-01T13:00:00.000Z',
+				location: null
+			})
+		).not.toBe(a);
+		expect(
+			calendarProposalApprovalText({
+				summary: 'Dinner',
+				start: '2026-08-01T12:00:00.000Z',
+				end: '2026-08-01T13:00:00.000Z',
+				location: 'Cafe'
+			})
+		).not.toBe(a);
 	});
 });
 

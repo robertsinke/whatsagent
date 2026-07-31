@@ -1,10 +1,14 @@
 /**
- * CalDAV over plain fetch — PROPFIND and calendar-query REPORT.
+ * CalDAV over plain fetch — PROPFIND, calendar-query REPORT, and PUT of a VEVENT.
  *
  * Google's legacy endpoint accepts Basic Auth with an App Password:
  *   https://www.google.com/calendar/dav/EMAIL/events
  * Do NOT use apidata.googleusercontent.com — that host is OAuth-only and 401s
  * on Basic Auth. Verified on the owner's account 2026-07-31.
+ *
+ * PUT URL shape: .../calendar/dav/EMAIL/events/UID.ics
+ * Called from confirm-calendar-event and nowhere else. A non-2xx PUT is an
+ * error the owner must see — never a silent local success (Odysseus trap).
  *
  * No googleapis, no caldav npm client. Same posture as server/providers/ollama.ts.
  */
@@ -144,6 +148,50 @@ export async function reportCalendarQuery(
 		return { status: response.status, entries: [], body };
 	}
 	return { status: response.status, entries: parseMultistatusCalendarData(body), body };
+}
+
+export type PutVeventResult = {
+	status: number;
+	ok: boolean;
+	href: string;
+	body: string;
+};
+
+/**
+ * PUT a VEVENT resource at `{eventsCollection}/{uid}.ics`.
+ *
+ * Non-2xx is not swallowed — callers must surface `ok: false` to the owner.
+ * Credentials must already be decrypted ({@link getCalendarCredentials}).
+ */
+export async function putVevent(
+	creds: CalendarCredentials,
+	uid: string,
+	icalBody: string,
+	options: { fetch?: CalDavFetch } = {}
+): Promise<PutVeventResult> {
+	assertLegacyHost(creds.serverUrl);
+	const href = eventResourceUrl(creds.serverUrl, uid);
+	const response = await (options.fetch ?? fetch)(href, {
+		method: 'PUT',
+		headers: {
+			Authorization: basicAuthHeader(creds.email, creds.password),
+			'Content-Type': 'text/calendar; charset=utf-8'
+		},
+		body: icalBody
+	});
+	const body = await response.text();
+	return {
+		status: response.status,
+		ok: response.status >= 200 && response.status < 300,
+		href,
+		body
+	};
+}
+
+/** `{collectionUrl}/{uid}.ics` — uid is path-encoded; `.ics` is required by Google. */
+export function eventResourceUrl(eventsCollectionUrl: string, uid: string): string {
+	const base = eventsCollectionUrl.replace(/\/?$/, '/');
+	return `${base}${encodeURIComponent(uid)}.ics`;
 }
 
 /**
