@@ -170,6 +170,13 @@ export type RoutesDeps = {
 	 * fake so the suite never touches a real harness binary. Frontend-only.
 	 */
 	verifyHarnessSpawn?: import('../providers/provider.js').SpawnProcess;
+	/**
+	 * CAL-1 — injectable CalDAV fetch + encryption key for calendar actions.
+	 * Tests inject fakes so the suite never hits Google or the login keychain.
+	 */
+	calendarFetch?: typeof fetch;
+	calendarEncryptionKey?: Buffer;
+	calendarNow?: () => Date;
 };
 
 /**
@@ -698,6 +705,20 @@ async function handleApi(
 	if (path === '/api/providers/install' && method === 'POST') {
 		const body = await readJsonBody(req);
 		await dispatchAction(deps, res, 'install-provider', body ?? {});
+		return;
+	}
+
+	// CAL-1 — Google Calendar connect (save + PROPFIND test). Frontend-only.
+	if (path === '/api/calendar/connect' && method === 'POST') {
+		const body = await readJsonBody(req);
+		await dispatchAction(deps, res, 'connect-calendar', body ?? {});
+		return;
+	}
+
+	// CAL-1 — list calendar events. Same action the panel tool uses.
+	if (path === '/api/calendar/events' && method === 'POST') {
+		const body = await readJsonBody(req);
+		await dispatchAction(deps, res, 'list-calendar-events', body ?? {});
 		return;
 	}
 

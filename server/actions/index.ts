@@ -7,6 +7,7 @@ import { cancelAgentTurnAction } from './cancel-agent-turn.js';
 import { cancelOutboxAction } from './cancel-outbox.js';
 import { clearAgentPanelAction } from './clear-agent-panel.js';
 import { confirmProposalAction } from './confirm-proposal.js';
+import { connectCalendarAction } from './connect-calendar.js';
 import { deepenHistoryAction } from './deepen-history.js';
 import { discardVoiceSuggestionAction } from './discard-voice-suggestion.js';
 import { dismissCancellationNoticeAction } from './dismiss-cancellation-notice.js';
@@ -15,6 +16,7 @@ import { generateDraftAction } from './generate-draft.js';
 import { getDraftAction } from './get-draft.js';
 import { getMessagesAction } from './get-messages.js';
 import { installProviderAction } from './install-provider.js';
+import { listCalendarEventsAction } from './list-calendar-events.js';
 import { listChatsAction } from './list-chats.js';
 import { verifyHarnessIsolationAction } from './verify-harness-isolation.js';
 import { loadMediaAction } from './load-media.js';
@@ -43,6 +45,7 @@ const actions: ActionDefinition<unknown>[] = [
 	cancelOutboxAction as ActionDefinition<unknown>,
 	clearAgentPanelAction as ActionDefinition<unknown>,
 	confirmProposalAction as ActionDefinition<unknown>,
+	connectCalendarAction as ActionDefinition<unknown>,
 	deepenHistoryAction as ActionDefinition<unknown>,
 	discardVoiceSuggestionAction as ActionDefinition<unknown>,
 	dismissCancellationNoticeAction as ActionDefinition<unknown>,
@@ -52,6 +55,7 @@ const actions: ActionDefinition<unknown>[] = [
 	getMessagesAction as ActionDefinition<unknown>,
 	installProviderAction as ActionDefinition<unknown>,
 	verifyHarnessIsolationAction as ActionDefinition<unknown>,
+	listCalendarEventsAction as ActionDefinition<unknown>,
 	listChatsAction as ActionDefinition<unknown>,
 	loadMediaAction as ActionDefinition<unknown>,
 	markReadAction as ActionDefinition<unknown>,
