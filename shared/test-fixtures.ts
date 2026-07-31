@@ -44,13 +44,14 @@ export const PRIVATE_DATA_HOME_PATH_ALLOWLIST = [
 	// Export tool + its own residual-path gate; script itself is excluded from export.
 	'scripts/publish-oss.sh',
 	// Meta plan that documents private paths; excluded from the export by path.
-	'docs/plans/2026-07-27-001-oss-readiness-plan.md',
-	// Evidence / reports that name worktree paths. They *do* ship today — the
-	// publish-oss `/Users/…` grep is the export-side catch. Listed so private
-	// `npm run check` is reachable; scrubbing them is out of this unit's scope.
-	'docs/evidence/2026-07-29-pl-s3-opencode-recheck.md',
-	'docs/evidence/2026-07-29-pl-s4-opencode-subscription.md',
-	'docs/execution-reports/2026-07-29-pl-a3-agent-panel-layout.md'
+	'docs/plans/2026-07-27-001-oss-readiness-plan.md'
+	// Three 2026-07-29 evidence / execution-report files used to sit here. They
+	// were SCRUBBED instead (2026-07-31) and the entries removed, because unlike
+	// everything above them they are NOT in publish-oss.sh's EXCLUDE_PATHS — they
+	// ship. Allowlisting a path that ships makes the gate green on private main
+	// while leaving the leak in the published tree, which is the only tree where
+	// it matters. An allowlist entry is honest for a path the export strips, and
+	// dishonest for one it does not.
 ] as const;
 
 /** Classic privacy-mask / placeholder phone used across the suite. */
