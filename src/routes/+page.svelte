@@ -14,10 +14,12 @@
 	import PairingScreen from '$lib/components/app/PairingScreen.svelte';
 	import { AppState } from '$lib/client/state.svelte.js';
 	import { api } from '$lib/client/api.js';
+	import type { Chat } from '$lib/client/types.js';
 	import { displayName, initialsFor, isFirstRun, sessionBanner } from '$lib/client/view.js';
 
 	const app = new AppState();
 	let composerValue = $state('');
+	let composerFocusNonce = $state(0);
 
 	// PL-A2 — agent panel collapse state. Persisted in localStorage (not the
 	// settings DB) so the first paint is correct with no async fetch flash —
@@ -87,7 +89,7 @@
 		app.session.status === 'disconnected' || app.session.status === 'logged_out'
 	);
 
-	async function openChat(jid: string) {
+	async function openChat(jid: string, options: { focusComposer?: boolean } = {}) {
 		composerValue = '';
 		// PANEL-S7 — the click routes through the registry, not client state
 		// directly. `open-chat` emits a `focus-chat` event the reducer routes
@@ -97,6 +99,15 @@
 		// dispatches `open-chat` without `mark-read`, the owner dispatches both.
 		await api.openChat(jid);
 		await app.markRead(jid);
+		if (options.focusComposer) composerFocusNonce += 1;
+	}
+
+	async function startChatFromList(chat: Chat) {
+		app.ingestChat(chat);
+		await api.openChat(chat.jid);
+		await app.openChat(chat.jid);
+		await app.markRead(chat.jid);
+		composerFocusNonce += 1;
 	}
 </script>
 
@@ -134,6 +145,7 @@
 						oncancel={(id) => app.cancelOutbox(id)}
 						ondismissnotice={(id) => app.dismissCancellationNotice(id)}
 						onselect={openChat}
+						onstarted={startChatFromList}
 					/>
 				</section>
 			</Resizable.Pane>
@@ -200,6 +212,8 @@
 								decidingProposalId={app.decidingProposalId}
 								decidingCalendarProposalId={app.decidingCalendarProposalId}
 								agentEligible={app.selectedChat.kind === '1:1'}
+								hasMessages={app.messages.length > 0}
+								focusNonce={composerFocusNonce}
 								refining={app.refining}
 								refineError={app.refineError}
 								onapprove={(text) => app.approveDraft(text)}

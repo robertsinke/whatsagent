@@ -12,6 +12,7 @@
 	import FooterSettings from './FooterSettings.svelte';
 	import FooterThemeToggle from './FooterThemeToggle.svelte';
 	import NeedsReplyTabs from './NeedsReplyTabs.svelte';
+	import NewChatDialog from './NewChatDialog.svelte';
 	import OutboxTray from './OutboxTray.svelte';
 	import SendModeIndicator from './SendModeIndicator.svelte';
 	import SessionStatus from './SessionStatus.svelte';
@@ -30,7 +31,8 @@
 		ontoggleagent,
 		oncancel,
 		ondismissnotice,
-		onselect
+		onselect,
+		onstarted
 	}: {
 		chats: Chat[];
 		selectedJid?: string | null;
@@ -46,6 +48,7 @@
 		oncancel?: (id: number) => void;
 		ondismissnotice?: (id: number) => void;
 		onselect?: (jid: string) => void;
+		onstarted?: (chat: Chat) => void | Promise<unknown>;
 	} = $props();
 
 	let tab = $state<ChatTab>('all');
@@ -82,6 +85,7 @@
 </script>
 
 <div class="list">
+	<NewChatDialog onstarted={(chat) => onstarted?.(chat)} />
 	<NeedsReplyTabs {chats} bind:value={tab} />
 
 	<CancellationNoticeBanner

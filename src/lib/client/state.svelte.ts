@@ -379,6 +379,15 @@ export class AppState {
 	}
 
 	/**
+	 * NEWCHAT-2 — fold a `start-chat` response into the list before navigating.
+	 * The action also emits `chat-updated`; this covers the gap before that
+	 * event arrives so `selectedChat` is not null on the first paint.
+	 */
+	ingestChat(chat: Chat): void {
+		this.#mergeChat(chat);
+	}
+
+	/**
 	 * PANEL-S7 — load a conversation into the pane. This is focus-only: it
 	 * fetches the message window, snapshots the unread boundary, and loads the
 	 * draft. It NEVER marks the chat read. Marking read is a separate act

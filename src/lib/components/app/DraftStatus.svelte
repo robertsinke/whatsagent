@@ -27,6 +27,7 @@
 		generating = false,
 		/** Recoverable generation error, shown inside the no-draft card. */
 		generateError = null,
+		hasMessages = true,
 		onapprove,
 		onskip,
 		onconfirmstale,
@@ -44,6 +45,8 @@
 		refineError?: string | null;
 		generating?: boolean;
 		generateError?: string | null;
+		/** False for an empty chat — Generate draft would 409. */
+		hasMessages?: boolean;
 		onapprove?: (text?: string) => boolean | void | Promise<boolean | void>;
 		onskip?: () => void;
 		onconfirmstale?: (text?: string) => boolean | void | Promise<boolean | void>;
@@ -57,7 +60,9 @@
 
 	const badge = $derived(draft ? draftBadge(draft.status) : null);
 	const visibleDraft = $derived(draft && isVisibleDraftStatus(draft.status) ? draft : null);
-	const branch = $derived(draftPanelBranch({ draft, stalePrompt, textConflict, agentEligible }));
+	const branch = $derived(
+		draftPanelBranch({ draft, stalePrompt, textConflict, agentEligible, hasMessages })
+	);
 	let editing = $state(false);
 	let editedText = $state('');
 	let editingBasis = $state<string | null>(null);

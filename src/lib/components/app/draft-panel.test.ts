@@ -94,4 +94,26 @@ describe('draftPanelBranch', () => {
 			})
 		).toBe('hidden');
 	});
+
+	it('hides Generate draft when the 1:1 has no messages', () => {
+		expect(
+			draftPanelBranch({
+				draft: null,
+				stalePrompt: null,
+				agentEligible: true,
+				hasMessages: false
+			})
+		).toBe('hidden');
+	});
+
+	it('still offers Generate draft after a terminal draft when the chat has messages', () => {
+		expect(
+			draftPanelBranch({
+				draft: { status: 'sent' },
+				stalePrompt: null,
+				agentEligible: true,
+				hasMessages: true
+			})
+		).toBe('generate');
+	});
 });

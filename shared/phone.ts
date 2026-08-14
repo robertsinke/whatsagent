@@ -15,9 +15,16 @@
  * and the owner is asked to type the country code, rather than guessed at.
  */
 
+export type PhoneFailReason =
+	| 'empty'
+	| 'too_short'
+	| 'too_long'
+	| 'not_a_number'
+	| 'missing_country_code';
+
 export type PhoneParse =
 	| { ok: true; e164: string } // digits only, no leading '+'
-	| { ok: false; reason: 'empty' | 'too_short' | 'too_long' | 'not_a_number' };
+	| { ok: false; reason: PhoneFailReason };
 
 /** E.164 caps the whole number, country code included, at 15 digits. */
 const MAX_E164_DIGITS = 15;
@@ -55,7 +62,7 @@ export function normalizePhone(raw: string): PhoneParse {
 
 	// A leading 0 is a trunk prefix — a national number. There is no default
 	// country, so this cannot be completed into an international number here.
-	if (stripped.startsWith('0')) return { ok: false, reason: 'not_a_number' };
+	if (stripped.startsWith('0')) return { ok: false, reason: 'missing_country_code' };
 
 	return { ok: true, e164: stripped };
 }

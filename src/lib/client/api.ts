@@ -64,6 +64,18 @@ export const api = {
 	chat: (jid: string) => request<Chat>(`/chats/${encodeURIComponent(jid)}`),
 
 	/**
+	 * NEWCHAT-2 — `start-chat` via POST /api/chats. 201 `{ created: true }` for a
+	 * new row, 200 `{ created: false }` when that person already has a chat
+	 * (including under an @lid jid). Both are success: the owner asked to
+	 * message someone, not to insert a row.
+	 */
+	startChat: (phone: string) =>
+		request<{ created: boolean; chat: Chat }>('/chats', {
+			method: 'POST',
+			body: JSON.stringify({ phone })
+		}),
+
+	/**
 	 * Read a chat's messages. Without `focusMsgId`, the GET dispatches the
 	 * `get-messages` registry action (PANEL-S12) — same definition the agent
 	 * tool uses. With `focusMsgId`, the server keeps the direct store read:
