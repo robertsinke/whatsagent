@@ -27,6 +27,12 @@ export type OutboxRow = {
 	payload_kind: OutboxPayloadKind;
 	reaction_emoji: string | null;
 	reaction_target_msg_id: string | null;
+	/** OUTBOX-1: send attempts that reached the transport. Bounds the retries. */
+	attempts: number;
+	/** Owner-facing reason on a failed (or retrying) row. */
+	last_error: string | null;
+	/** When the row gave up. `sent_at` stays NULL on a failed row. */
+	failed_at: number | null;
 };
 
 export type OutboxInput = {
@@ -171,13 +177,17 @@ export function listPendingOutbox(db: AppDatabase): OutboxRow[] {
 		.all() as OutboxRow[];
 }
 
-/** Recent outbox rows (pending first by send_after, then others by id desc). */
+/**
+ * Recent outbox rows (pending first by send_after, then others by id desc).
+ * OUTBOX-1: `failed` sorts with `pending` — a row that needs the owner's
+ * attention must not sink into the historical bucket below the sent rows.
+ */
 export function listOutbox(db: AppDatabase, limit = 100): OutboxRow[] {
 	const capped = Math.min(Math.max(limit, 1), 500);
 	return db
 		.prepare(
 			`SELECT * FROM outbox
-			 ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END,
+			 ORDER BY CASE status WHEN 'failed' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END,
 			          send_after ASC,
 			          id DESC
 			 LIMIT ?`
@@ -202,8 +212,60 @@ export function markOutboxSending(db: AppDatabase, id: number): boolean {
 		.run(id).changes > 0;
 }
 
-export function markOutboxPending(db: AppDatabase, id: number, sendAfter: number): void {
-	db.prepare(`UPDATE outbox SET status = 'pending', send_after = ? WHERE id = ?`).run(sendAfter, id);
+/**
+ * OUTBOX-1: re-arm a row after a retryable failure, recording the attempt and
+ * the reason. `attempts` is passed in rather than incremented here because the
+ * pacer decides whether an attempt counts at all — a send that never left the
+ * process (no socket) must not consume the row's budget.
+ */
+export function markOutboxRetry(
+	db: AppDatabase,
+	id: number,
+	input: { sendAfter: number; attempts: number; error: string }
+): void {
+	db.prepare(
+		`UPDATE outbox
+		 SET status = 'pending', send_after = ?, attempts = ?, last_error = ?
+		 WHERE id = ?`
+	).run(input.sendAfter, input.attempts, input.error, id);
+}
+
+/**
+ * OUTBOX-1: terminal state. The row stops consuming retries, stops touching
+ * WhatsApp, and becomes owner-visible as failed. Only the pacer writes this.
+ */
+export function markOutboxFailed(
+	db: AppDatabase,
+	id: number,
+	input: { attempts: number; error: string; failedAt: number }
+): void {
+	db.prepare(
+		`UPDATE outbox
+		 SET status = 'failed', attempts = ?, last_error = ?, failed_at = ?
+		 WHERE id = ?`
+	).run(input.attempts, input.error, input.failedAt, id);
+}
+
+/**
+ * OUTBOX-1: the owner re-arms a failed row. Attempts reset to zero — the owner
+ * has looked at the failure and decided the cause is gone, so the row gets a
+ * fresh budget rather than one last attempt. `send_after = now` matches
+ * `enqueueManualOutbox`: one deliberate click is not a burst under R10, and the
+ * row still queues behind the pacer's global spacing like any other.
+ *
+ * Returns false when the row is missing or is not failed.
+ */
+export function retryFailedOutbox(db: AppDatabase, id: number, now: number): boolean {
+	return (
+		db
+			.prepare(
+				`UPDATE outbox
+				 SET status = 'pending', send_after = ?, attempts = 0,
+				     last_error = NULL, failed_at = NULL
+				 WHERE id = ? AND status = 'failed'`
+			)
+			.run(now, id).changes > 0
+	);
 }
 
 export function cancelClaimedOutbox(db: AppDatabase, id: number): boolean {
@@ -301,10 +363,17 @@ export function deferPendingDrafts(db: AppDatabase, earliestSendAt: number): voi
 	).run(earliestSendAt - first.send_after);
 }
 
-/** Cancel a still-queued row. Returns false if missing or not pending. */
+/**
+ * Cancel a still-queued row. Returns false if missing, or already sent,
+ * cancelled, or mid-send. OUTBOX-1: a `failed` row is cancellable too — that is
+ * how the owner dismisses a send they have decided not to chase. Cancelling
+ * only ever reduces sending, so this stays reachable by both callers.
+ */
 export function cancelOutbox(db: AppDatabase, id: number): boolean {
 	const result = db
-		.prepare(`UPDATE outbox SET status = 'cancelled' WHERE id = ? AND status = 'pending'`)
+		.prepare(
+			`UPDATE outbox SET status = 'cancelled' WHERE id = ? AND status IN ('pending', 'failed')`
+		)
 		.run(id);
 	return result.changes > 0;
 }

@@ -277,6 +277,12 @@ export type OutboxRow = {
 	reaction_emoji: string | null;
 	/** Target message id for reaction rows. Null on text rows. */
 	reaction_target_msg_id: string | null;
+	/** OUTBOX-1: send attempts made. The pacer fails the row once it caps out. */
+	attempts: number;
+	/** Why the last attempt failed. Owner-facing on a `failed` row. */
+	last_error: string | null;
+	/** When the outbox gave up. `sent_at` stays null on a failed row. */
+	failed_at: number | null;
 };
 
 /** D5 — derived session view. */

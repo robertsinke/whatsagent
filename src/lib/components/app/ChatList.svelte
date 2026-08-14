@@ -30,6 +30,7 @@
 		agentCollapsed = false,
 		ontoggleagent,
 		oncancel,
+		onretry,
 		ondismissnotice,
 		onselect,
 		onstarted
@@ -46,6 +47,8 @@
 		agentCollapsed?: boolean;
 		ontoggleagent?: () => void;
 		oncancel?: (id: number) => void;
+		/** OUTBOX-1: owner re-arms a failed row. Frontend-only path, like cancel. */
+		onretry?: (id: number) => void;
 		ondismissnotice?: (id: number) => void;
 		onselect?: (jid: string) => void;
 		onstarted?: (chat: Chat) => void | Promise<unknown>;
@@ -121,7 +124,7 @@
 		<span class="footer-sep" aria-hidden="true"></span>
 		<SessionStatus {session} {socketConnected} />
 		<span class="footer-sep footer-sep-strong" aria-hidden="true"></span>
-		<OutboxTray {outbox} {chats} {oncancel} />
+		<OutboxTray {outbox} {chats} {oncancel} {onretry} />
 		<span class="footer-sep" aria-hidden="true"></span>
 		<FooterSettings />
 		<span class="footer-sep" aria-hidden="true"></span>

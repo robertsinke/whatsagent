@@ -143,6 +143,7 @@
 						agentCollapsed={agentCollapsed}
 						ontoggleagent={toggleAgent}
 						oncancel={(id) => app.cancelOutbox(id)}
+						onretry={(id) => app.retryOutbox(id)}
 						ondismissnotice={(id) => app.dismissCancellationNotice(id)}
 						onselect={openChat}
 						onstarted={startChatFromList}

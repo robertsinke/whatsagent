@@ -290,6 +290,12 @@ export const api = {
 
 	cancelOutbox: (id: number) => request<OutboxRow>(`/outbox/${id}`, { method: 'DELETE' }),
 
+	/**
+	 * OUTBOX-1: re-queue a row the outbox gave up on. Owner-only — the action is
+	 * frontend-only in the registry. Enqueues nothing new; the pacer still sends.
+	 */
+	retryOutbox: (id: number) => request<OutboxRow>(`/outbox/${id}/retry`, { method: 'POST' }),
+
 	/** D2: on-demand only — nothing prefetches media. */
 	loadMedia: (messageId: string) =>
 		request<Message>(`/messages/${encodeURIComponent(messageId)}/media`, { method: 'POST' }),

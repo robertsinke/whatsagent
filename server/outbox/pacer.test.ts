@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BufferJSON, type WAMessage } from 'baileys';
-import type { WhatsAppSendTransport } from '../channels/whatsapp/send.js';
+import { WhatsAppDisconnectedError, type WhatsAppSendTransport } from '../channels/whatsapp/send.js';
+import { Boom } from '@hapi/boom';
 import { upsertChat } from '../store/chats.js';
 import { openDatabase, type AppDatabase } from '../store/db.js';
 import { upsertDraft } from '../store/drafts.js';
@@ -14,7 +15,8 @@ import {
 	enqueueManualOutbox,
 	enqueueReactionOutbox,
 	getOutbox,
-	markOutboxSending
+	markOutboxSending,
+	retryFailedOutbox
 } from '../store/outbox.js';
 import { setSetting } from '../store/settings.js';
 import { OutboxPacer } from './pacer.js';
@@ -723,6 +725,226 @@ describe('OutboxPacer', () => {
 				undefined
 			);
 			expect(getOutbox(database, id)?.status).toBe('sent');
+		});
+	});
+	/**
+	 * OUTBOX-1 — the outbox used to re-arm every failed send 5s later, forever:
+	 * no attempt counter, no cap, no `failed` status. That is an invisible
+	 * failure for the owner and the traffic shape that flags an account.
+	 */
+	describe('bounded retry and terminal failure', () => {
+		it('backs off, gives up after the cap, and records why', async () => {
+			vi.useFakeTimers({ now: NOW });
+			const database = setup();
+			const id = enqueueManualOutbox(database, {
+				chatJid: 'alice@s.whatsapp.net',
+				text: 'never gets through',
+				now: NOW
+			});
+			const sendText = vi.fn(async () => {
+				throw new Error('socket hung up');
+			});
+			const onError = vi.fn();
+			const sendTransport = transport({ sendText });
+			pacer(database, sendTransport, { onError, maxAttempts: 3 }).start();
+
+			await vi.advanceTimersByTimeAsync(0);
+			expect(getOutbox(database, id)).toMatchObject({ status: 'pending', attempts: 1 });
+
+			// First retry waits the base delay, the second twice that — not a
+			// fixed 5s drumbeat.
+			await vi.advanceTimersByTimeAsync(499);
+			expect(sendText).toHaveBeenCalledTimes(1);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(getOutbox(database, id)).toMatchObject({ status: 'pending', attempts: 2 });
+			await vi.advanceTimersByTimeAsync(999);
+			expect(sendText).toHaveBeenCalledTimes(2);
+			await vi.advanceTimersByTimeAsync(1);
+
+			expect(getOutbox(database, id)).toMatchObject({
+				status: 'failed',
+				attempts: 3,
+				last_error: 'socket hung up',
+				sent_at: null
+			});
+			expect(getOutbox(database, id)?.failed_at).toBe(Date.now());
+
+			// The row is terminal: no further traffic, however long we wait.
+			await vi.advanceTimersByTimeAsync(600_000);
+			expect(sendText).toHaveBeenCalledTimes(3);
+			expect(onError).toHaveBeenCalledTimes(3);
+		});
+
+		it('fails a rejected payload on the first attempt instead of retrying it', async () => {
+			vi.useFakeTimers({ now: NOW });
+			const database = setup();
+			const id = enqueueManualOutbox(database, {
+				chatJid: 'alice@s.whatsapp.net',
+				text: 'whatsapp will never accept this',
+				now: NOW
+			});
+			const sendText = vi.fn(async () => {
+				throw new Boom('no content in message', { statusCode: 400 });
+			});
+			const sendTransport = transport({ sendText });
+			pacer(database, sendTransport, { maxAttempts: 5 }).start();
+			await vi.advanceTimersByTimeAsync(600_000);
+
+			expect(sendText).toHaveBeenCalledOnce();
+			expect(getOutbox(database, id)).toMatchObject({
+				status: 'failed',
+				attempts: 1,
+				last_error: 'no content in message'
+			});
+		});
+
+		it('does not spend the attempt budget while there is no socket', async () => {
+			// Nothing reaches WhatsApp when the transport has no socket, so the
+			// ban-risk rationale does not apply — and failing the owner's queue
+			// because their laptop slept would be wrong. This is the one case the
+			// cap deliberately does not bound.
+			vi.useFakeTimers({ now: NOW });
+			const database = setup();
+			const id = enqueueManualOutbox(database, {
+				chatJid: 'alice@s.whatsapp.net',
+				text: 'queued while offline',
+				now: NOW
+			});
+			let connected = false;
+			const sendText = vi.fn(async () => {
+				if (!connected) throw new WhatsAppDisconnectedError();
+			});
+			const sendTransport = transport({ sendText });
+			pacer(database, sendTransport, { maxAttempts: 2 }).start();
+			await vi.advanceTimersByTimeAsync(5_000);
+
+			expect(sendText.mock.calls.length).toBeGreaterThan(2);
+			expect(getOutbox(database, id)).toMatchObject({ status: 'pending', attempts: 0 });
+
+			connected = true;
+			await vi.advanceTimersByTimeAsync(500);
+			expect(getOutbox(database, id)).toMatchObject({ status: 'sent', attempts: 0 });
+		});
+
+		it('releases the rows behind a failed one', async () => {
+			vi.useFakeTimers({ now: NOW });
+			const database = setup();
+			const doomed = enqueueManualOutbox(database, {
+				chatJid: 'alice@s.whatsapp.net',
+				text: 'doomed',
+				now: NOW
+			});
+			const next = enqueueManualOutbox(database, {
+				chatJid: 'bob@s.whatsapp.net',
+				text: 'independent send',
+				now: NOW
+			});
+			const sendText = vi.fn(async (jid: string) => {
+				if (jid === 'alice@s.whatsapp.net') {
+					throw new Boom('rejected', { statusCode: 400 });
+				}
+			});
+			const sendTransport = transport({ sendText });
+			pacer(database, sendTransport).start();
+			await vi.runAllTimersAsync();
+
+			expect(getOutbox(database, doomed)?.status).toBe('failed');
+			expect(getOutbox(database, next)?.status).toBe('sent');
+		});
+
+		it('applies the same policy to a reaction row', async () => {
+			vi.useFakeTimers({ now: NOW });
+			const database = setup();
+			upsertMessage(database, {
+				id: 'react-target',
+				chat_jid: 'alice@s.whatsapp.net',
+				from_me: false,
+				ts: NOW,
+				text: 'react to me',
+				raw: JSON.stringify(
+					{
+						key: { id: 'react-target', remoteJid: 'alice@s.whatsapp.net', fromMe: false },
+						message: { conversation: 'react to me' }
+					} satisfies WAMessage,
+					BufferJSON.replacer
+				)
+			});
+			const id = enqueueReactionOutbox(database, {
+				chatJid: 'alice@s.whatsapp.net',
+				targetMsgId: 'react-target',
+				emoji: '\u{1F44D}',
+				now: NOW
+			});
+			const sendReaction = vi.fn(async () => {
+				throw new Boom('rejected', { statusCode: 400 });
+			});
+			const sendTransport = transport({ sendReaction });
+			pacer(database, sendTransport).start();
+			await vi.advanceTimersByTimeAsync(600_000);
+
+			expect(sendReaction).toHaveBeenCalledOnce();
+			expect(getOutbox(database, id)).toMatchObject({ status: 'failed', attempts: 1 });
+		});
+
+		it('lets the owner re-arm a failed row with a fresh budget', async () => {
+			vi.useFakeTimers({ now: NOW });
+			const database = setup();
+			const id = enqueueManualOutbox(database, {
+				chatJid: 'alice@s.whatsapp.net',
+				text: 'retry me',
+				now: NOW
+			});
+			let broken = true;
+			const sendText = vi.fn(async () => {
+				if (broken) throw new Boom('rejected', { statusCode: 400 });
+			});
+			const sendTransport = transport({ sendText });
+			const instance = pacer(database, sendTransport);
+			instance.start();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(getOutbox(database, id)?.status).toBe('failed');
+
+			broken = false;
+			expect(retryFailedOutbox(database, id, Date.now())).toBe(true);
+			expect(getOutbox(database, id)).toMatchObject({
+				status: 'pending',
+				attempts: 0,
+				last_error: null,
+				failed_at: null
+			});
+			instance.wake();
+			await vi.runAllTimersAsync();
+			expect(getOutbox(database, id)?.status).toBe('sent');
+		});
+
+		it('refuses to re-arm a row that is not failed', () => {
+			const database = setup();
+			const id = enqueueManualOutbox(database, {
+				chatJid: 'alice@s.whatsapp.net',
+				text: 'still queued',
+				now: NOW
+			});
+			expect(retryFailedOutbox(database, id, NOW)).toBe(false);
+			expect(getOutbox(database, id)?.status).toBe('pending');
+		});
+
+		it('lets the owner discard a failed row', async () => {
+			vi.useFakeTimers({ now: NOW });
+			const database = setup();
+			const id = enqueueManualOutbox(database, {
+				chatJid: 'alice@s.whatsapp.net',
+				text: 'discard me',
+				now: NOW
+			});
+			const sendText = vi.fn(async () => {
+				throw new Boom('rejected', { statusCode: 400 });
+			});
+			pacer(database, transport({ sendText })).start();
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(getOutbox(database, id)?.status).toBe('failed');
+			expect(cancelOutbox(database, id)).toBe(true);
+			expect(getOutbox(database, id)?.status).toBe('cancelled');
 		});
 	});
 });

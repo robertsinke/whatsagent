@@ -29,6 +29,7 @@ import { proposeReactionAction } from './propose-reaction.js';
 import { proposeSendAction } from './propose-send.js';
 import { reactAction } from './react.js';
 import { refineDraftAction } from './refine-draft.js';
+import { retryOutboxAction } from './retry-outbox.js';
 import { rejectCalendarEventAction } from './reject-calendar-event.js';
 import { rejectProposalAction } from './reject-proposal.js';
 import { refreshVoiceAction } from './refresh-voice.js';
@@ -70,6 +71,7 @@ const actions: ActionDefinition<unknown>[] = [
 	proposeReactionAction as ActionDefinition<unknown>,
 	proposeSendAction as ActionDefinition<unknown>,
 	reactAction as ActionDefinition<unknown>,
+	retryOutboxAction as ActionDefinition<unknown>,
 	refineDraftAction as ActionDefinition<unknown>,
 	rejectCalendarEventAction as ActionDefinition<unknown>,
 	rejectProposalAction as ActionDefinition<unknown>,

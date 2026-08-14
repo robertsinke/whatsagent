@@ -54,6 +54,11 @@
  *   PREVIEW_VOICE_SUGGESTION=1
  *     Seeds a pending agent voice suggestion (PL-U5) beside the global voice
  *     document so Settings → Voice has promote/discard controls to photograph.
+ *   PREVIEW_OUTBOX_FAILED=1
+ *     OUTBOX-1 — seeds one queued row and one the outbox gave up on, so the
+ *     failed tray row (reason, attempt count, Retry/Discard) and the failed
+ *     tint on the collapsed chip can be photographed. Nothing sends: the
+ *     preview attaches no channel, and the row is written straight to `failed`.
  *   PREVIEW_CANCELLATION_NOTICE=1
  *     Seeds a durable notice that the agent cancelled an owner-approved send
  *     (PL-U5), shown above the chat list until dismissed.
@@ -104,6 +109,7 @@ import { getDraft, upsertDraft } from '../server/store/drafts.js';
 import { insertProposal } from '../server/store/proposals.js';
 import { insertCalendarProposal } from '../server/store/calendar-proposals.js';
 import { insertCancellationNotice } from '../server/store/cancellation-notices.js';
+import { enqueueManualOutbox, markOutboxFailed } from '../server/store/outbox.js';
 import { VoiceFiles } from '../server/agent/memory/voice-files.js';
 import { linkContactIdentity } from '../server/store/contacts.js';
 import { linkIdentityAndMergeChats } from '../server/store/identity.js';
@@ -880,6 +886,28 @@ if (process.env.PREVIEW_VOICE_SUGGESTION === '1') {
 }
 
 // PL-U5 — durable cancellation notice above the chat list.
+// OUTBOX-1 — a failed row (and a pending one beside it) to photograph. Written
+// directly to `failed` rather than driven through the pacer: the preview has no
+// channel, so there is nothing to fail against, and the row is byte-identical
+// to one the pacer gave up on.
+if (process.env.PREVIEW_OUTBOX_FAILED === '1') {
+	enqueueManualOutbox(db, {
+		chatJid: DIRECT,
+		text: 'Running ten minutes late — see you shortly.',
+		now: Date.now() + 45_000
+	});
+	const failedId = enqueueManualOutbox(db, {
+		chatJid: DIRECT,
+		text: 'Here are the printouts you asked for.',
+		now: Date.now() - 300_000
+	});
+	markOutboxFailed(db, failedId, {
+		attempts: 5,
+		error: 'Connection Closed',
+		failedAt: Date.now() - 120_000
+	});
+}
+
 if (process.env.PREVIEW_CANCELLATION_NOTICE === '1') {
 	insertCancellationNotice(db, {
 		chatJid: DIRECT,

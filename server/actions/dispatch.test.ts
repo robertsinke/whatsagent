@@ -98,7 +98,11 @@ describe('action registry dispatch', () => {
 		// draft — so a tool caller closes the loop
 		// suggest → promote → durable, guard-protected influence, with no owner
 		// click, from text a contact sent. See the header of its own file.
-		'promote-voice-suggestion'
+		'promote-voice-suggestion',
+		// OUTBOX-1: re-arming a row the outbox gave up on puts an already-composed
+		// message back on the path to the wire. Outbound, so owner-click only —
+		// and deliberately without a `propose-retry` counterpart.
+		'retry-outbox'
 	] as const)(
 		'refuses tool caller for outbound action %s (dispatcher policy)',
 		async (name) => {
@@ -267,7 +271,12 @@ describe('action registry dispatch', () => {
 			// SEC-1: spawns harnesses to measure tool surface / can spend a
 			// subscription turn on Tier 2. Frontend-only — see
 			// verify-harness-isolation.ts.
-			'verify-harness-isolation'
+			'verify-harness-isolation',
+			// OUTBOX-1: retrying a failed row is an outbound effect (it hands the
+			// row back to the pacer). `cancel-outbox` stays open to both callers —
+			// widened in OUTBOX-1 to cancel a failed row too, which only ever
+			// reduces sending.
+			'retry-outbox'
 		]) {
 			expect(toolNames).not.toContain(banned);
 		}

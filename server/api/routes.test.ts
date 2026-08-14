@@ -10,7 +10,7 @@ import { linkContactIdentity, upsertContact } from '../store/contacts.js';
 import { upsertDraft } from '../store/drafts.js';
 import { listDraftFeedback } from '../store/draft-feedback.js';
 import { getMessage, upsertMessage, upsertMessageReaction } from '../store/messages.js';
-import { getOutbox } from '../store/outbox.js';
+import { enqueueManualOutbox, getOutbox, markOutboxFailed } from '../store/outbox.js';
 import {
 	PROVIDER_MODEL_SETTING,
 	PROVIDER_SETTING,
@@ -2431,5 +2431,43 @@ describe('draft approval binds to the reviewed text (PL-U3)', () => {
 		expect(body.conflict).toBe('text-changed');
 		expect(body.current_text).toBe('the text the owner read');
 		expect(db!.prepare('SELECT COUNT(*) AS n FROM outbox').get()).toEqual({ n: 0 });
+	});
+});
+
+/**
+ * OUTBOX-1 — the owner's surface for a row the outbox gave up on. The registry
+ * keeps `retry-outbox` frontend-only (see dispatch.test.ts); this covers the
+ * route wiring and that a healthy row cannot be "retried" into a second send.
+ */
+describe('POST /api/outbox/:id/retry', () => {
+	const JID = 'alice@s.whatsapp.net';
+
+	it('re-queues a failed row with a fresh attempt budget', async () => {
+		await startTestApp();
+		upsertChat(db!, { jid: JID, kind: '1:1', last_msg_at: 10 });
+		const id = enqueueManualOutbox(db!, { chatJid: JID, text: 'retry me', now: 10 });
+		markOutboxFailed(db!, id, { attempts: 5, error: 'Connection Closed', failedAt: 20 });
+
+		const res = await api(`/api/outbox/${id}/retry`, { method: 'POST' });
+
+		expect(res.status).toBe(200);
+		expect(await res.json()).toMatchObject({
+			id,
+			status: 'pending',
+			attempts: 0,
+			last_error: null,
+			failed_at: null
+		});
+		expect(getOutbox(db!, id)?.status).toBe('pending');
+	});
+
+	it('409s a row that has not failed, and 404s one that does not exist', async () => {
+		await startTestApp();
+		upsertChat(db!, { jid: JID, kind: '1:1', last_msg_at: 10 });
+		const id = enqueueManualOutbox(db!, { chatJid: JID, text: 'still queued', now: 10 });
+
+		expect((await api(`/api/outbox/${id}/retry`, { method: 'POST' })).status).toBe(409);
+		expect((await api('/api/outbox/9999/retry', { method: 'POST' })).status).toBe(404);
+		expect(getOutbox(db!, id)?.status).toBe('pending');
 	});
 });

@@ -6,12 +6,14 @@ import {
 	deferPendingDrafts,
 	getNextPendingOutbox,
 	getOutbox,
-	markOutboxPending,
+	markOutboxFailed,
+	markOutboxRetry,
 	markOutboxSending,
 	markOutboxSent,
 	recoverSendingOutbox,
 	type OutboxRow
 } from '../store/outbox.js';
+import { classifySendFailure, failureMessage, retryDelayMs } from './failure.js';
 import { BufferJSON, type WAMessage, type WAMessageKey } from 'baileys';
 import { getLastInboundMessage, getMessage } from '../store/messages.js';
 import { getOutboxPacingSettings } from '../store/settings.js';
@@ -24,7 +26,12 @@ export type OutboxPacerOptions = {
 	minDraftDelayMs?: number;
 	maxDraftDelayMs?: number;
 	manualPresenceMs?: number;
+	/** Base retry delay; the first retry waits exactly this, then it doubles. */
 	retryDelayMs?: number;
+	/** Ceiling on the exponential retry backoff. */
+	maxRetryDelayMs?: number;
+	/** OUTBOX-1: attempts before a row goes terminal (`failed`). */
+	maxAttempts?: number;
 	now?: () => number;
 	random?: () => number;
 	sleep?: (ms: number) => Promise<void>;
@@ -96,6 +103,8 @@ export class OutboxPacer {
 	readonly #maxDraftDelayMs: number;
 	readonly #manualPresenceMs: number;
 	readonly #retryDelayMs: number;
+	readonly #maxRetryDelayMs: number;
+	readonly #maxAttempts: number;
 	#timer: ReturnType<typeof setTimeout> | undefined;
 	#running = false;
 	#stopped = true;
@@ -119,6 +128,8 @@ export class OutboxPacer {
 		this.#maxDraftDelayMs = options.maxDraftDelayMs ?? pacing.maxSpacingMs;
 		this.#manualPresenceMs = options.manualPresenceMs ?? 2_500;
 		this.#retryDelayMs = options.retryDelayMs ?? 5_000;
+		this.#maxRetryDelayMs = options.maxRetryDelayMs ?? 5 * 60_000;
+		this.#maxAttempts = Math.max(1, options.maxAttempts ?? 5);
 		this.#draftsPaused = options.draftsPaused ?? false;
 		// Fail safe: an unset `dryRun` means DRY RUN, never live sends.
 		//
@@ -251,9 +262,7 @@ export class OutboxPacer {
 			}
 		} catch (error) {
 			const normalized = error instanceof Error ? error : new Error(String(error));
-			markOutboxPending(this.#options.db, row.id, this.#now() + this.#retryDelayMs);
-			this.#emit(row.id);
-			this.#options.onError?.(normalized, getOutbox(this.#options.db, row.id)!);
+			this.#handleSendFailure(row, normalized);
 			return;
 		}
 
@@ -372,10 +381,62 @@ export class OutboxPacer {
 			}
 		} catch (error) {
 			const normalized = error instanceof Error ? error : new Error(String(error));
-			markOutboxPending(this.#options.db, row.id, this.#now() + this.#retryDelayMs);
-			this.#emit(row.id);
-			this.#options.onError?.(normalized, getOutbox(this.#options.db, row.id)!);
+			this.#handleSendFailure(row, normalized);
 		}
+	}
+
+	/**
+	 * OUTBOX-1 — the single place a failed send attempt is resolved.
+	 *
+	 * Retrying at all is safe because the row carries a stable `message_id`, so a
+	 * repeat is idempotent at WhatsApp (the same property `recoverSendingOutbox`
+	 * relies on after a crash). Retrying *forever* was the defect: no attempt
+	 * counter, a fixed 5s delay, and no terminal state, which is both an
+	 * invisible failure for the owner and the traffic pattern that flags an
+	 * account.
+	 *
+	 * Three outcomes:
+	 * - `offline`: no socket, so nothing was transmitted. The attempt budget is
+	 *   deliberately NOT consumed — failing the owner's queue because their
+	 *   laptop slept would be wrong, and no packet reached WhatsApp to be paced.
+	 *   It re-arms at the flat base delay, exactly as before this change.
+	 * - `terminal`: WhatsApp rejected the payload; a repeat cannot change that.
+	 *   Fail on the first attempt.
+	 * - `transient`: retry with exponential backoff until `maxAttempts`, then
+	 *   fail. This is what bounds an undeliverable address — Baileys' send never
+	 *   rejects an unregistered JID, so the cap, not the classifier, is what
+	 *   stops that loop.
+	 */
+	#handleSendFailure(row: OutboxRow, error: Error): void {
+		const kind = classifySendFailure(error);
+		const message = failureMessage(error);
+		const now = this.#now();
+
+		if (kind === 'offline') {
+			markOutboxRetry(this.#options.db, row.id, {
+				sendAfter: now + this.#retryDelayMs,
+				attempts: row.attempts,
+				error: message
+			});
+		} else {
+			const attempts = row.attempts + 1;
+			if (kind === 'terminal' || attempts >= this.#maxAttempts) {
+				markOutboxFailed(this.#options.db, row.id, {
+					attempts,
+					error: message,
+					failedAt: now
+				});
+			} else {
+				markOutboxRetry(this.#options.db, row.id, {
+					sendAfter: now + retryDelayMs(attempts, this.#retryDelayMs, this.#maxRetryDelayMs),
+					attempts,
+					error: message
+				});
+			}
+		}
+
+		this.#emit(row.id);
+		this.#options.onError?.(error, getOutbox(this.#options.db, row.id)!);
 	}
 
 	#markDraftSent(row: OutboxRow): void {

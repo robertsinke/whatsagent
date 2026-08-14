@@ -807,6 +807,17 @@ async function handleApi(
 	}
 
 	/**
+	 * OUTBOX-1 — the owner re-arms a row the outbox gave up on. Frontend-only at
+	 * the registry (see `retry-outbox.ts`); this route is the owner's surface for
+	 * it, and it enqueues nothing — the pacer is still the only sender.
+	 */
+	const outboxRetryMatch = /^\/api\/outbox\/(\d+)\/retry$/.exec(path);
+	if (outboxRetryMatch && method === 'POST') {
+		await dispatchAction(deps, res, 'retry-outbox', { id: Number(outboxRetryMatch[1]) });
+		return;
+	}
+
+	/**
 	 * PL-U3 — the owner's side of the permission channel. There is no POST that
 	 * *creates* a proposal here: `propose-send` is tool-only and reaches the
 	 * registry through the MCP surface, so the frontend can only ever decide one.

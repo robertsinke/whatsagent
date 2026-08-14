@@ -1079,6 +1079,19 @@ export class AppState {
 	}
 
 	/**
+	 * OUTBOX-1: re-queue a failed row after the owner has read why it failed.
+	 * The owner is the only caller of this — the action is frontend-only, so no
+	 * agent path reaches it, and it enqueues nothing the owner did not compose.
+	 */
+	async retryOutbox(id: number): Promise<void> {
+		try {
+			this.#mergeOutbox(await api.retryOutbox(id));
+		} catch (err) {
+			this.error = describeError(err);
+		}
+	}
+
+	/**
 	 * D2 (Wave 3 U2): add or remove a reaction on a message. Routes through the
 	 * outbox pacer — a reaction is a send under R9, so it rides the same single
 	 * send path. An empty emoji string removes a prior reaction. The outbox row
