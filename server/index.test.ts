@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WAMessage, WAMessageKey } from 'baileys';
 import type { Channel, ChannelEvent, ChannelEventListener } from './channels/channel.js';
 import type { DraftProvider } from './providers/provider.js';
-import { upsertChat } from './store/chats.js';
+import { getChat, upsertChat } from './store/chats.js';
 import { openDatabase, type AppDatabase } from './store/db.js';
 import { getDraft } from './store/drafts.js';
 import { getMessage, upsertMessage } from './store/messages.js';
@@ -30,12 +30,17 @@ import { createWhatsAppSendTransport } from './channels/whatsapp/send.js';
 import type { ServerEvent } from './api/events.js';
 import type { Memory } from './agent/memory/memory.js';
 import { getSetting, setSetting } from './store/settings.js';
-import { FIXTURE_CHAT_LID_JID, FIXTURE_GROUP_JID } from '../shared/test-fixtures.js';
+import {
+	FIXTURE_CHAT_LID_JID,
+	FIXTURE_GROUP_JID,
+	FIXTURE_US_PHONE
+} from '../shared/test-fixtures.js';
 
 class FakeChannel implements Channel {
 	readonly listeners = new Set<ChannelEventListener>();
 	start = vi.fn(async () => undefined);
 	stop = vi.fn(async () => undefined);
+	checkRegistered = vi.fn(async (jid: string) => ({ registered: true, jid }));
 
 	onEvent(listener: ChannelEventListener): () => void {
 		this.listeners.add(listener);
@@ -380,6 +385,53 @@ describe('restart recovery', () => {
 		channel.emit({ type: 'connection', state: 'connected' });
 
 		expect(sessionStatuses.at(-1)).toBe('ready');
+	});
+});
+
+describe('start-chat is wired to the live channel (NEWCHAT-1)', () => {
+	/**
+	 * `start-chat` refuses when `deps.checkRegistered` is absent, so the action
+	 * can be fully implemented and fully tested against an injected dep while
+	 * being permanently dead in production. Only `createApp` can populate it —
+	 * this asserts it does, through the real HTTP route rather than by reading
+	 * the deps object, so a future refactor that drops the line fails here.
+	 */
+	it('populates checkRegistered from the channel, so POST /api/chats creates a chat', async () => {
+		dataDir = mkdtempSync(join(tmpdir(), 'whatsagent-runtime-'));
+		db = openDatabase({ dataDir });
+		const channel = new FakeChannel();
+		app = createApp({ db, channel, port: 0, staticDir: null });
+		await app.start();
+
+		const res = await fetch(`${app.url}/api/chats`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', Origin: app.url },
+			body: JSON.stringify({ phone: `+${FIXTURE_US_PHONE}` })
+		});
+
+		expect(res.status).toBe(201);
+		expect(channel.checkRegistered).toHaveBeenCalledWith(
+			`${FIXTURE_US_PHONE}@s.whatsapp.net`
+		);
+		expect(getChat(db, `${FIXTURE_US_PHONE}@s.whatsapp.net`)).toMatchObject({
+			kind: '1:1'
+		});
+	});
+
+	it('refuses when no channel is attached, and creates nothing', async () => {
+		dataDir = mkdtempSync(join(tmpdir(), 'whatsagent-runtime-'));
+		db = openDatabase({ dataDir });
+		app = createApp({ db, port: 0, staticDir: null });
+		await app.start();
+
+		const res = await fetch(`${app.url}/api/chats`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', Origin: app.url },
+			body: JSON.stringify({ phone: `+${FIXTURE_US_PHONE}` })
+		});
+
+		expect(res.status).toBe(503);
+		expect(getChat(db, `${FIXTURE_US_PHONE}@s.whatsapp.net`)).toBeUndefined();
 	});
 });
 

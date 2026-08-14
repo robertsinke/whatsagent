@@ -457,6 +457,14 @@ export function createApp(options: CreateAppOptions = {}): App {
 		deepenHistory: options.channel?.deepenHistory
 			? (chatJid, count) => options.channel!.deepenHistory!(chatJid, count)
 			: undefined,
+		// NEWCHAT-1 — `start-chat` refuses to create a chat for a number it cannot
+		// confirm is on WhatsApp, so without this line the action is permanently
+		// dep-absent in production and the feature does not exist outside its
+		// tests. Absent when no channel is attached, which is the honest state:
+		// the check needs a live socket.
+		checkRegistered: options.channel?.checkRegistered
+			? (jid) => options.channel!.checkRegistered!(jid)
+			: undefined,
 		activeProvider: options.activeProvider,
 		providerDiscovery: options.providerDiscovery
 	};
