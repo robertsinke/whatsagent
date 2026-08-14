@@ -11,7 +11,8 @@ import {
 	actionRegistry,
 	dispatch,
 	listActionsForCaller,
-	type ActionRegistry
+	type ActionRegistry,
+	type ActionResult
 } from '../actions/index.js';
 import { MCP_SERVER_INSTRUCTIONS } from '../agent/panel/harness.js';
 import type { RoutesDeps } from '../api/routes.js';
@@ -87,55 +88,103 @@ export function createMcpSurface(options: {
 	return { token, tokenPath, handle };
 }
 
-function createRegistryServer(registry: ActionRegistry, deps: RoutesDeps): Server {
+export type RegistryServerOptions = {
+	/**
+	 * Override the advertised `instructions`. MCPX-4's stdio entry point folds
+	 * the attached/headless mode into them so an external agent knows which
+	 * world it is in without probing. Defaults to `MCP_SERVER_INSTRUCTIONS`.
+	 */
+	instructions?: string;
+	/**
+	 * MCPX-4 — last-mile adjustment of a dispatch result before it is shaped
+	 * into a `CallToolResult`. Headless mode uses it to name the missing
+	 * dependency on a dep-absent error and to state `focused: false` on
+	 * `open-chat`, without editing the shared action definitions.
+	 *
+	 * Never invoked for a 403: that is the dispatcher's caller-policy refusal,
+	 * and R9 rests on it. No annotator may soften, reshape or reinterpret it.
+	 */
+	annotate?: (name: string, result: ActionResult) => ActionResult;
+};
+
+export function createRegistryServer(
+	registry: ActionRegistry,
+	deps: RoutesDeps,
+	options: RegistryServerOptions = {}
+): Server {
 	const server = new Server(
 		{ name: 'whatsagent', version: '0.0.1' },
-		{ capabilities: { tools: {} }, instructions: MCP_SERVER_INSTRUCTIONS }
+		{
+			capabilities: { tools: {} },
+			instructions: options.instructions ?? MCP_SERVER_INSTRUCTIONS
+		}
 	);
 
-	server.setRequestHandler(ListToolsRequestSchema, async () => {
-		const tools: Tool[] = listActionsForCaller(registry, 'tool').map((action) => ({
-			name: action.name,
-			description: action.description,
-			inputSchema: toToolInputSchema(action.jsonSchema)
-		}));
-		return { tools };
-	});
+	server.setRequestHandler(ListToolsRequestSchema, async () => ({
+		tools: listRegistryTools(registry)
+	}));
 
-	server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
-		const name = request.params.name;
-		const raw = request.params.arguments ?? {};
-		const result = await dispatch(registry, name, raw, { caller: 'tool', deps });
+	server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> =>
+		callRegistryTool(registry, deps, request.params.name, request.params.arguments, options)
+	);
 
-		if (result.kind === 'error') {
-			audit(name, 'error', result.status);
-			return {
-				content: [
-					{
-						type: 'text',
-						text: JSON.stringify({
-							error: result.error,
-							status: result.status,
-							...(result.extra ?? {})
-						})
-					}
-				],
-				isError: true
-			};
-		}
+	return server;
+}
 
-		audit(name, 'ok', result.status);
+/**
+ * The advertised tool list. Split out of {@link createRegistryServer} so the
+ * stdio entry point serves the identical list without standing a second MCP
+ * `Server` up in-process.
+ */
+export function listRegistryTools(registry: ActionRegistry): Tool[] {
+	return listActionsForCaller(registry, 'tool').map((action) => ({
+		name: action.name,
+		description: action.description,
+		inputSchema: toToolInputSchema(action.jsonSchema)
+	}));
+}
+
+/**
+ * Dispatch one tool call and shape it into a `CallToolResult`. One
+ * implementation, shared by the in-app HTTP surface and the headless stdio
+ * mode, so the two can never answer differently for the same registry.
+ */
+export async function callRegistryTool(
+	registry: ActionRegistry,
+	deps: RoutesDeps,
+	name: string,
+	args: Record<string, unknown> | undefined,
+	options: RegistryServerOptions = {}
+): Promise<CallToolResult> {
+	const dispatched = await dispatch(registry, name, args ?? {}, { caller: 'tool', deps });
+	// The 403 guard lives here, not in the annotator, so it holds for every
+	// annotator anyone writes later.
+	const result =
+		options.annotate && !(dispatched.kind === 'error' && dispatched.status === 403)
+			? options.annotate(name, dispatched)
+			: dispatched;
+
+	if (result.kind === 'error') {
+		audit(name, 'error', result.status);
 		return {
 			content: [
 				{
 					type: 'text',
-					text: JSON.stringify(result.body)
+					text: JSON.stringify({
+						error: result.error,
+						status: result.status,
+						...(result.extra ?? {})
+					})
 				}
-			]
+			],
+			isError: true
 		};
-	});
+	}
 
-	return server;
+	audit(name, 'ok', result.status);
+	return {
+		content: [{ type: 'text', text: JSON.stringify(result.body) }]
+	};
 }
 
 function toToolInputSchema(schema: Record<string, unknown>): Tool['inputSchema'] {
