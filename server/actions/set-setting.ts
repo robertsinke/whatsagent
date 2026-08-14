@@ -1,5 +1,6 @@
 import {
 	getSetting,
+	MCP_ENABLED_SETTING,
 	OUTBOX_DRY_RUN_SETTING,
 	PANEL_ENABLED_SETTING,
 	PANEL_HARNESS_SETTING,
@@ -15,11 +16,20 @@ import { actionError, actionJson, parseError } from './types.js';
 
 export type SetSettingInput = { key: string; value: string };
 
-/** PANEL-S2 — the rows whose write reconfigures the panel runtime in place. */
-const PANEL_SETTINGS: ReadonlySet<string> = new Set([
+/**
+ * PANEL-S2 / MCPX-2 — the rows whose write reconfigures the live runtime in
+ * place, rather than only on the next launch.
+ *
+ * Named for the effect, not for the panel: `mcp_enabled` is not a panel row and
+ * a key missing from this set is the failure mode nobody traces — the value
+ * persists, the API answers 200, and absolutely nothing happens until restart.
+ * Any future row that the reconcile reads belongs here on the same commit.
+ */
+const RUNTIME_SETTINGS: ReadonlySet<string> = new Set([
 	PANEL_ENABLED_SETTING,
 	PANEL_HARNESS_SETTING,
-	PANEL_MODEL_SETTING
+	PANEL_MODEL_SETTING,
+	MCP_ENABLED_SETTING
 ]);
 
 /**
@@ -38,6 +48,12 @@ const PANEL_SETTINGS: ReadonlySet<string> = new Set([
  * panel runtime immediately. A `tool` caller here would therefore be an agent
  * able to arm its own tool surface — or to re-arm one the owner just switched
  * off. Same conclusion, one more reason.
+ *
+ * MCPX-2 MAKES THAT LITERAL: `mcp_enabled` is a row whose only job is to arm or
+ * disarm a network surface that external processes authenticate against. A tool
+ * caller able to write it would be an agent re-opening the door the owner just
+ * closed — and, since MCPX-4 gates headless mode on the same row, re-opening it
+ * for a process that outlives the window the owner would have noticed it in.
  *
  * The fix is a caller-policy change rather than a key check inside `run`,
  * because this registry's contract is that `callers` is enforced by the
@@ -86,7 +102,7 @@ export const setSettingAction: ActionDefinition<SetSettingInput> = {
 		// PANEL-S2: the row IS the runtime. Reconciled after the write, so the
 		// reconcile reads the value that is now on disk and a crash in between
 		// lands on the persisted state rather than on a panel nothing saved.
-		if (PANEL_SETTINGS.has(input.key)) ctx.deps.applyPanelSettings?.();
+		if (RUNTIME_SETTINGS.has(input.key)) ctx.deps.applyPanelSettings?.();
 		return actionJson(200, { key: input.key, value: getSetting(db, input.key) });
 	}
 };

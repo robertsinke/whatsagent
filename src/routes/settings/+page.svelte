@@ -12,6 +12,7 @@
 		Bot,
 		Calendar,
 		Check,
+		Plug,
 		Radio,
 		RefreshCw,
 		ShieldAlert,
@@ -146,6 +147,13 @@
 	const panelHarnessChosen = $derived(
 		PANEL_HARNESSES.some((h) => h.value === values.panel_harness)
 	);
+	/**
+	 * MCPX-2 — the `/mcp` surface's own row. Separate from `panel_enabled`
+	 * because turning the panel off used to delete the token an external agent
+	 * was configured with. Panel-on still implies the surface is up, so the card
+	 * reports that state honestly rather than showing "off" next to a live port.
+	 */
+	const mcpEnabled = $derived(values.mcp_enabled === 'true');
 	const runningHarnessLabel = $derived(
 		agentStatus?.available && panelEnabled
 			? (PANEL_HARNESSES.find((h) => h.value === values.panel_harness)?.label ?? null)
@@ -290,6 +298,12 @@
 		}
 		values.panel_enabled = next ? 'true' : 'false';
 		await save('panel_enabled');
+	}
+
+	/** MCPX-2 — one row, one gesture; the server reconciles inside the request. */
+	async function toggleMcp(next: boolean) {
+		values.mcp_enabled = next ? 'true' : 'false';
+		await save('mcp_enabled');
 	}
 
 	function applyVoiceDocument(doc: VoiceView) {
@@ -893,6 +907,81 @@
 							turning it off stops it and ends any turn it was running.
 						</p>
 					{/if}
+				</div>
+
+				<!--
+				  MCPX-2 — the external MCP surface, on its own row.
+
+				  Its own card rather than a line inside the panel card, because the
+				  hazard it fixes was exactly the assumption that the two are one
+				  switch: turning the panel off used to delete the token an external
+				  Claude Code session was configured with. The copy says that outright,
+				  since an owner who learned the old behaviour has no other way to
+				  discover it changed.
+				-->
+				<div
+					class="panel-card"
+					data-enabled={mcpEnabled || panelEnabled}
+					data-testid="mcp-external-setting"
+				>
+					<div class="panel-head">
+						<span class="panel-icon" data-enabled={mcpEnabled || panelEnabled}
+							><Plug class="size-4" /></span
+						>
+						<div class="panel-titles">
+							<span class="field-label">External agents (MCP)</span>
+							<span class="panel-state" data-testid="mcp-runtime-state">
+								{#if mcpEnabled}
+									On.
+								{:else if panelEnabled}
+									<!-- Honest rather than tidy: the panel cannot run without the
+									     surface, so it is up regardless of this row. Claiming "off"
+									     next to a listening port would be the same class of lie the
+									     old shared switch told. -->
+									On, because the agent panel needs it.
+								{:else}
+									Off.
+								{/if}
+							</span>
+						</div>
+					</div>
+
+					<p class="panel-help">
+						Lets your own Claude Code or Cursor sessions reach this app. They get the same
+						abilities as the agent panel: read your chats, write and refine drafts, and file a
+						proposed send that waits for you here.
+					</p>
+					<p class="panel-help">
+						<strong>They can never send, and never approve their own proposal.</strong> An outside
+						agent prepares; you approve in this window. That is structural, not a setting.
+					</p>
+					<p class="panel-help">
+						Turning the agent panel off no longer turns this off — the two are separate
+						switches now, so an external session you set up keeps working.
+					</p>
+
+					<div class="panel-controls">
+						<Button
+							size="sm"
+							variant={mcpEnabled ? 'outline' : 'default'}
+							data-testid="mcp-toggle"
+							onclick={() => toggleMcp(!mcpEnabled)}
+						>
+							{#if mcpEnabled}
+								Turn external agents off
+							{:else}
+								Turn external agents on
+							{/if}
+						</Button>
+						{#if saved === 'mcp_enabled'}
+							<span class="panel-saved"><Check class="size-3.5" /> Saved</span>
+						{/if}
+					</div>
+
+					<p class="panel-help" data-testid="mcp-apply-note">
+						Takes effect immediately — no restart. Turning it off closes the connection and
+						deletes the token, so any external session you set up will need the new one.
+					</p>
 				</div>
 
 				<!--

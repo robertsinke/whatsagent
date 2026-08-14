@@ -67,6 +67,7 @@ import {
 import { getDraft } from './store/drafts.js';
 import { getChat } from './store/chats.js';
 import {
+	getMcpEnabledSetting,
 	getPanelSettings,
 	getSetting,
 	listSettings,
@@ -257,8 +258,10 @@ export type ResolvedPanelConfig = {
  * silently re-pointed at whatever the owner last saved. An enabled row naming a
  * harness this build does not have is a configuration mistake, not a crash: it
  * returns no config and a warning the caller logs, which leaves the panel
- * reporting itself unavailable — and, because the surface follows the panel,
+ * reporting itself unavailable — and, unless something else armed the surface,
  * leaves `/mcp` closed rather than minting a token for tools nothing can reach.
+ * Since MCPX-2 "something else" includes the owner's own `mcp_enabled` row: an
+ * unusable panel no longer closes a surface external agents were promised.
  */
 export function resolvePanelConfig(
 	options: Pick<CreateAppOptions, 'panel'>,
@@ -546,8 +549,17 @@ export function createApp(options: CreateAppOptions = {}): App {
 	function reconcilePanelRuntime(): void {
 		const { config, warning } = resolvePanelConfig(options, getPanelSettings(db));
 		if (warning) console.warn(warning);
+		// MCPX-2 — three terms, in precedence order. An explicit `mcp:` answer
+		// short-circuits everything (`?? `). Otherwise the env flag, the owner's
+		// own `mcp_enabled` row, or a settings-born panel each arm it: panel-on
+		// IMPLIES mcp-on because the panel has no tools without the surface, but
+		// the implication does not run backwards — turning the panel off leaves
+		// `mcp_enabled` alone, which is the whole point of the second row.
 		const mcpEnabled =
-			mcpOptionOverride(options) ?? (isMcpEnabled(options) || (config?.fromSettings ?? false));
+			mcpOptionOverride(options) ??
+			(isMcpEnabled(options) ||
+				getMcpEnabledSetting(db) ||
+				(config?.fromSettings ?? false));
 
 		// Tear down when the panel is going away, losing its tools, or changing
 		// what it runs. A rebuild cancels too: leaving the old manager alive would
@@ -610,15 +622,31 @@ export function createApp(options: CreateAppOptions = {}): App {
 	reconcilePanelRuntime();
 
 	/**
-	 * PANEL-S2 — what `set-setting` calls after writing a panel row.
+	 * PANEL-S2 — what `set-setting` calls after writing a runtime row (see
+	 * `RUNTIME_SETTINGS` there).
 	 *
-	 * An explicit `options.panel` opts out: it is a developer flag, not a saved
-	 * preference, and `resolvePanelConfig` returns it whatever the rows say, so
-	 * reconciling would be a no-op that still cancels an in-flight dev turn on
-	 * every unrelated settings write.
+	 * MCPX-2 REMOVED THE `if (options.panel) return;` OPT-OUT. It existed to stop
+	 * an unrelated settings write from cancelling an in-flight dev turn, but with
+	 * `mcp_enabled` in the set it would also make the owner's MCP toggle a no-op
+	 * for the whole life of any process started with an explicit `panel` option.
+	 *
+	 * Safe because the dev turn cannot be cancelled by an unrelated write anyway.
+	 * Teardown at the top of `reconcilePanelRuntime` is gated on
+	 * `panelSession && (!config || !mcpEnabled || !unchanged)`, and:
+	 *   - with an explicit `options.panel`, `resolvePanelConfig` returns the same
+	 *     config every time, so `config` is never null and its harness/model
+	 *     always match `armedPanel`;
+	 *   - `panelSession` and `armedPanel` are assigned together and cleared
+	 *     together, so whenever `panelSession` is set `armedPanel` is too and
+	 *     `unchanged` is therefore true. (The plan said "`unchanged` is true"
+	 *     unconditionally; it is not — with no session ever built `armedPanel` is
+	 *     null and `unchanged` is false. The `panelSession &&` gate is what makes
+	 *     the conclusion hold.)
+	 * So the only thing that can tear a dev panel down here is `mcpEnabled`
+	 * genuinely flipping — which now means the owner switched off a row that was
+	 * the sole reason the surface was armed. That is the toggle working.
 	 */
 	routeDeps.applyPanelSettings = () => {
-		if (options.panel) return;
 		reconcilePanelRuntime();
 	};
 

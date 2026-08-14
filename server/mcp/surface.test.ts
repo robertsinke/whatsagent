@@ -6,6 +6,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createApp, type App } from '../index.js';
 import { openDatabase, type AppDatabase } from '../store/db.js';
+import { setSetting } from '../store/settings.js';
 import { upsertChat } from '../store/chats.js';
 import { upsertDraft } from '../store/drafts.js';
 import { getDraft } from '../store/drafts.js';
@@ -46,6 +47,38 @@ async function startApp(mcp: boolean | { enabled?: boolean; token?: string } = t
 		host: '127.0.0.1',
 		staticDir: null,
 		mcp
+	});
+	await app.start();
+	return app;
+}
+
+/**
+ * MCPX-2 — the same app, but with settings rows written BEFORE `createApp` and
+ * the `mcp` option deliberately absent.
+ *
+ * Both parts matter. The reconcile runs during `createApp`, so a row written
+ * afterwards would be testing the live-reconcile path (covered in
+ * `panel-runtime.test.ts`) rather than boot. And passing any `mcp` value at all
+ * — even `true` — sets `mcpOptionOverride` and short-circuits the row, which is
+ * precisely the precedence these tests are about.
+ */
+async function startAppWithSettings(
+	rows: Record<string, string>,
+	env?: { WHATSAGENT_MCP?: string },
+	mcp?: boolean | { enabled?: boolean }
+): Promise<App> {
+	dataDir = mkdtempSync(join(tmpdir(), 'whatsagent-mcp-'));
+	db = openDatabase({ dataDir });
+	for (const [key, value] of Object.entries(rows)) setSetting(db, key, value);
+	if (env?.WHATSAGENT_MCP !== undefined) process.env.WHATSAGENT_MCP = env.WHATSAGENT_MCP;
+	app = createApp({
+		db,
+		dataDir,
+		events: new EventBus(),
+		port: 0,
+		host: '127.0.0.1',
+		staticDir: null,
+		...(mcp === undefined ? {} : { mcp })
 	});
 	await app.start();
 	return app;
@@ -132,6 +165,51 @@ describe('MCP surface — disabled', () => {
 			body: '{}'
 		});
 		expect(unknown.status).toBe(404);
+	});
+});
+
+describe('MCP surface — the mcp_enabled row (MCPX-2)', () => {
+	it('arms the surface on its own, with no panel row and no option', async () => {
+		delete process.env.WHATSAGENT_MCP;
+		await startAppWithSettings({ mcp_enabled: 'true' });
+		expect(app!.mcp).not.toBeNull();
+		expect(existsSync(mcpTokenPath(dataDir!))).toBe(true);
+
+		const probe = await fetch(`${app!.url}${MCP_PATH}`, {
+			method: 'POST',
+			headers: {
+				Origin: app!.url,
+				'Content-Type': 'application/json',
+				Accept: 'application/json, text/event-stream'
+			},
+			body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} })
+		});
+		await probe.arrayBuffer();
+		// 401, not 404: the route exists and is merely refusing this bearer. A
+		// disabled surface falls through to the unknown-route 404 instead.
+		expect(probe.status).toBe(401);
+	});
+
+	it('an explicit mcp: false still wins over the row', async () => {
+		delete process.env.WHATSAGENT_MCP;
+		await startAppWithSettings({ mcp_enabled: 'true', panel_enabled: 'true' }, undefined, false);
+		expect(app!.mcp).toBeNull();
+		expect(existsSync(mcpTokenPath(dataDir!))).toBe(false);
+	});
+
+	it('WHATSAGENT_MCP=1 still arms the surface with the row off', async () => {
+		await startAppWithSettings({ mcp_enabled: 'false' }, { WHATSAGENT_MCP: '1' });
+		expect(app!.mcp).not.toBeNull();
+		expect(existsSync(mcpTokenPath(dataDir!))).toBe(true);
+	});
+
+	it('panel-on still implies mcp-on with the mcp row absent', async () => {
+		delete process.env.WHATSAGENT_MCP;
+		// A settings-born panel is unusable without its tools, so the implication
+		// survives the split — it just no longer runs backwards.
+		await startAppWithSettings({ panel_enabled: 'true', panel_harness: 'claude' });
+		expect(app!.mcp).not.toBeNull();
+		expect(existsSync(mcpTokenPath(dataDir!))).toBe(true);
 	});
 });
 

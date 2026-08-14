@@ -72,7 +72,12 @@ if (!url || !out) {
 const PORT = Number(process.env.SHOT_PORT ?? 9333);
 const WIDTH = Number(process.env.SHOT_WIDTH ?? 1280);
 const HEIGHT = Number(process.env.SHOT_HEIGHT ?? 900);
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+// MCPX-2: overridable, because a machine without Google Chrome installed made
+// this script spawn-ENOENT and the only visible symptom was a stack trace about
+// a path nobody chose. Puppeteer's cached "Chrome for Testing" works fine —
+// point SHOT_CHROME at it (find it under ~/.cache/puppeteer/chrome/).
+const CHROME =
+	process.env.SHOT_CHROME ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const profile = mkdtempSync(join(tmpdir(), 'whatsagent-shot-'));
 
 /** Map a KeySpec ("Tab", "Shift+Tab", "ArrowRight", "a") to CDP key fields. */

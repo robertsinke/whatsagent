@@ -25,6 +25,24 @@ export const MEMORY_SETTING = 'memory';
 export const PANEL_ENABLED_SETTING = 'panel_enabled';
 export const PANEL_HARNESS_SETTING = 'panel_harness';
 export const PANEL_MODEL_SETTING = 'panel_model';
+/**
+ * MCPX-2 — the owner's opt-in for the `/mcp` surface itself, independent of the
+ * agent panel.
+ *
+ * Before this row existed the surface followed `panel_enabled`, so turning the
+ * in-app panel off ran `removeMcpTokenFile` and destroyed the credential an
+ * external Claude Code / Cursor session was configured with — silently, with no
+ * error anywhere. The two are separate capabilities: the panel is a window, this
+ * is a network surface other processes hold a token for.
+ *
+ * The implication only runs one way: panel-on still implies MCP-on (the panel is
+ * unusable without its tools), MCP-on implies nothing about the panel.
+ *
+ * This row is ALSO the headless gate (MCPX-4): with the app closed there is no
+ * process to ask, so that path reads this same row straight from the database.
+ * Keep it a plain boolean about the MCP surface — not a panel sub-setting.
+ */
+export const MCP_ENABLED_SETTING = 'mcp_enabled';
 export const DEFAULT_MIN_SPACING_MS = 0;
 export const DEFAULT_MAX_SPACING_MS = 1_000;
 
@@ -110,6 +128,17 @@ export function validateSettingValue(key: string, raw: string): SettingValidatio
 			return {
 				ok: false,
 				message: `${PANEL_ENABLED_SETTING} must be 'true' or 'false'`,
+				allowed: ['true', 'false']
+			};
+		}
+		return { ok: true, normalized: lower };
+	}
+	if (key === MCP_ENABLED_SETTING) {
+		const lower = value.trim().toLowerCase();
+		if (lower !== 'true' && lower !== 'false') {
+			return {
+				ok: false,
+				message: `${MCP_ENABLED_SETTING} must be 'true' or 'false'`,
 				allowed: ['true', 'false']
 			};
 		}
@@ -222,6 +251,18 @@ export function getPanelSettings(db: AppDatabase): {
 	};
 }
 
+/**
+ * MCPX-2 — the `/mcp` surface's own row, read fail-safe: only the exact string
+ * `'true'` arms it, so a missing or corrupt row leaves a network surface closed
+ * rather than open. Same polarity as `getPanelSettings().enabled`.
+ *
+ * Read directly from the DB (no process required) because MCPX-4's headless
+ * entry point gates on this same call with the app not running.
+ */
+export function getMcpEnabledSetting(db: AppDatabase): boolean {
+	return getSetting(db, MCP_ENABLED_SETTING) === 'true';
+}
+
 /** Settings API view: persisted values plus normalized runtime defaults. */
 export function listEffectiveSettings(db: AppDatabase): Record<string, string> {
 	const settings = listSettings(db);
@@ -239,6 +280,9 @@ export function listEffectiveSettings(db: AppDatabase): Record<string, string> {
 		// the panel on, so the Settings toggle renders off for a missing or
 		// corrupt row rather than claiming a capability that is not running.
 		[PANEL_ENABLED_SETTING]: settings[PANEL_ENABLED_SETTING] === 'true' ? 'true' : 'false',
+		// MCPX-2: its own row, same fail-safe polarity, reported independently —
+		// the external-MCP toggle must not render on just because the panel is.
+		[MCP_ENABLED_SETTING]: settings[MCP_ENABLED_SETTING] === 'true' ? 'true' : 'false',
 		// Calendar: public fields only. The encrypted app password never leaves
 		// the process — see redactCalendarSecrets / getCalendarCredentials.
 		...calendar

@@ -22,6 +22,7 @@ import {
 } from './messages.js';
 import { enqueueOutbox, listPendingOutbox } from './outbox.js';
 import {
+	getMcpEnabledSetting,
 	getOutboxPacingSettings,
 	getPanelSettings,
 	getSetting,
@@ -562,6 +563,52 @@ describe('agent panel settings (PANEL-S1)', () => {
 		});
 		setSetting(database, 'panel_model', 'claude-opus-5');
 		expect(getPanelSettings(database).model).toBe('claude-opus-5');
+	});
+});
+
+describe('external MCP setting (MCPX-2)', () => {
+	it('accepts only true/false for mcp_enabled, normalizing case and padding', () => {
+		expect(validateSettingValue('mcp_enabled', 'true')).toEqual({
+			ok: true,
+			normalized: 'true'
+		});
+		expect(validateSettingValue('mcp_enabled', ' FALSE ')).toEqual({
+			ok: true,
+			normalized: 'false'
+		});
+		for (const bad of ['', 'yes', '1', 'on', 'enabled']) {
+			const result = validateSettingValue('mcp_enabled', bad);
+			expect(result.ok, bad).toBe(false);
+			if (!result.ok) expect(result.allowed).toEqual(['true', 'false']);
+		}
+	});
+
+	it('round-trips through setSetting and reads back off when unset', () => {
+		const database = openTempDb();
+		expect(getMcpEnabledSetting(database)).toBe(false);
+		expect(listEffectiveSettings(database)).toMatchObject({ mcp_enabled: 'false' });
+		setSetting(database, 'mcp_enabled', 'true');
+		expect(getMcpEnabledSetting(database)).toBe(true);
+		expect(listEffectiveSettings(database)).toMatchObject({ mcp_enabled: 'true' });
+	});
+
+	it('treats a corrupt row as off — a network surface never opens by accident', () => {
+		const database = openTempDb();
+		setSetting(database, 'mcp_enabled', 'TRUE');
+		expect(getMcpEnabledSetting(database)).toBe(false);
+		expect(listEffectiveSettings(database)).toMatchObject({ mcp_enabled: 'false' });
+	});
+
+	it('is independent of panel_enabled in both directions', () => {
+		const database = openTempDb();
+		setSetting(database, 'panel_enabled', 'true');
+		// The IMPLICATION panel-on → mcp-on lives in the runtime reconcile, not in
+		// the rows: this row means only what the owner wrote in it, which is what
+		// MCPX-4's headless gate reads with no process running.
+		expect(getMcpEnabledSetting(database)).toBe(false);
+		setSetting(database, 'mcp_enabled', 'true');
+		setSetting(database, 'panel_enabled', 'false');
+		expect(getMcpEnabledSetting(database)).toBe(true);
 	});
 });
 

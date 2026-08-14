@@ -243,6 +243,55 @@ describe('PANEL-S2 — disabling the panel from Settings', () => {
 		expect(existsSync(mcpTokenPath(dataDir!))).toBe(false);
 	});
 
+	/**
+	 * MCPX-2 — THE HAZARD, as a test.
+	 *
+	 * Before the split, `mcpEnabled` followed `panel_enabled`, so this exact
+	 * sequence ran `removeMcpTokenFile(dataDir)` and deleted the credential the
+	 * owner's external Claude Code session was configured with. No error, no
+	 * event, nothing in the UI — the next external call simply 404'd. The panel
+	 * still goes away here; the surface must not.
+	 */
+	it('turning the panel off leaves an independently-enabled /mcp armed, token and all', async () => {
+		delete process.env.WHATSAGENT_MCP;
+		await startApp();
+		expect((await putSetting('mcp_enabled', 'true')).status).toBe(200);
+		await enablePanel('opencode');
+		const token = app!.mcp!.token;
+		const tokenPath = mcpTokenPath(dataDir!);
+		expect(existsSync(tokenPath)).toBe(true);
+
+		expect((await putSetting('panel_enabled', 'false')).status).toBe(200);
+		await settle();
+
+		// The panel is gone — that is what the owner asked for.
+		expect((await agentStatus()).available).toBe(false);
+		// The surface is not. 401 means the route is still mounted and merely
+		// wants a bearer; 404 would mean it had been torn down.
+		expect(await mcpProbeStatus()).toBe(401);
+		expect(app!.mcp).not.toBeNull();
+		// The credential survived, unrotated: an external session already holding
+		// this token keeps working, which is the whole point.
+		expect(app!.mcp!.token).toBe(token);
+		expect(existsSync(tokenPath)).toBe(true);
+	});
+
+	it('turning mcp_enabled off closes the surface without a restart', async () => {
+		delete process.env.WHATSAGENT_MCP;
+		await startApp();
+		expect((await putSetting('mcp_enabled', 'true')).status).toBe(200);
+		// Proves RUNTIME_SETTINGS in `set-setting` includes the row: without it the
+		// write would persist and the surface would stay exactly as it was.
+		expect(await mcpProbeStatus()).toBe(401);
+		expect(getSetting(db!, 'mcp_enabled')).toBe('true');
+
+		expect((await putSetting('mcp_enabled', 'false')).status).toBe(200);
+		await settle();
+		expect(await mcpProbeStatus()).toBe(404);
+		expect(app!.mcp).toBeNull();
+		expect(existsSync(mcpTokenPath(dataDir!))).toBe(false);
+	});
+
 	it('re-enabling mints a fresh token, and the old one no longer authenticates', async () => {
 		delete process.env.WHATSAGENT_MCP;
 		await startApp();
