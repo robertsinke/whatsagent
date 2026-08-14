@@ -97,6 +97,20 @@ export const FIXTURE_GROUP_TS = '1000000001';
 /** Alt phone for incidental lid-mapping update coverage. */
 export const FIXTURE_ALT_PHONE = '31600000006';
 
+/**
+ * NEWCHAT-1 — phone-normalization table values. Reserved/unassigned ranges
+ * (US 555, UK 07700 900xxx drama range), never dialable.
+ */
+export const FIXTURE_US_PHONE = '15550000001';
+export const FIXTURE_UK_PHONE = '447700900001';
+/** The E.164 ceiling — exactly 15 digits, for the length-bound test. */
+export const FIXTURE_MAX_E164 = '999999999999999';
+
+/** NEWCHAT-1 — start-chat dedupe pair (a person known only under a LID). */
+export const FIXTURE_NEWCHAT_LID = '100000000000005';
+/** LID WhatsApp itself reports back from a number lookup. */
+export const FIXTURE_NEWCHAT_REPORTED_LID = '100000000000006';
+
 /** Display names — not real contacts. */
 export const FIXTURE_OWNER_NAME = 'Alex';
 export const FIXTURE_SPLIT_NAME = 'Casey Quinn';

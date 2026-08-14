@@ -106,6 +106,12 @@ export type RoutesDeps = {
 	memory?: Memory;
 	/** Optional channel history deepener for thin voice samples. */
 	deepenHistory?: (chatJid: string, count?: number) => Promise<unknown>;
+	/**
+	 * NEWCHAT-1 — single-address reachability check, absent when no channel is
+	 * attached (same pattern as {@link downloadMedia} / {@link deepenHistory}).
+	 * `start-chat` is its only caller; it is not a lookup surface.
+	 */
+	checkRegistered?: (jid: string) => Promise<{ registered: boolean; jid: string | null }>;
 	/** Preview-only draft refinement through the configured provider. */
 	refineDraft?: (request: RefineDraftRequest) => Promise<RefinementAttempt>;
 	/**
@@ -835,6 +841,14 @@ async function handleApi(
 			items = items.filter((c) => c.kind === 'group');
 		}
 		json(res, 200, { items });
+		return;
+	}
+
+	// NEWCHAT-1 — open a 1:1 chat with a number that has never messaged the
+	// owner. Local write only; nothing goes on the wire here.
+	if (path === '/api/chats' && method === 'POST') {
+		const body = await readJsonBody(req);
+		await dispatchAction(deps, res, 'start-chat', body ?? {});
 		return;
 	}
 

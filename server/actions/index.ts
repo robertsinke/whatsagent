@@ -36,6 +36,7 @@ import { regeneratePairingAction } from './regenerate-pairing.js';
 import { saveVoiceAction } from './save-voice.js';
 import { sendAction } from './send.js';
 import { setSendModeAction } from './set-send-mode.js';
+import { startChatAction } from './start-chat.js';
 import { setSettingAction } from './set-setting.js';
 import { skipDraftAction } from './skip-draft.js';
 import { suggestVoiceNoteAction } from './suggest-voice-note.js';
@@ -77,6 +78,7 @@ const actions: ActionDefinition<unknown>[] = [
 	saveVoiceAction as ActionDefinition<unknown>,
 	sendAction as ActionDefinition<unknown>,
 	setSendModeAction as ActionDefinition<unknown>,
+	startChatAction as ActionDefinition<unknown>,
 	setSettingAction as ActionDefinition<unknown>,
 	skipDraftAction as ActionDefinition<unknown>,
 	suggestVoiceNoteAction as ActionDefinition<unknown>

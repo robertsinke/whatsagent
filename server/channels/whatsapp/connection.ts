@@ -34,6 +34,7 @@ export type WhatsAppSocket = Partial<WhatsAppSendSocket> & {
 		oldestMsgKey: WAMessageKey,
 		oldestMsgTimestamp: number
 	): Promise<string>;
+	onWhatsApp?(...jids: string[]): Promise<{ jid: string; exists: boolean }[] | undefined>;
 };
 
 export type SocketFactory = (config: UserFacingSocketConfig) => WhatsAppSocket;
@@ -229,6 +230,22 @@ export class WhatsAppConnection implements Channel {
 			chatId,
 			count
 		);
+	}
+
+	/**
+	 * NEWCHAT-1 — is this address on WhatsApp, and under which jid?
+	 *
+	 * ONE address per call, by design. Baileys' `onWhatsApp` is variadic and
+	 * this wrapper deliberately is not: bulk number lookups are a documented
+	 * account-ban pattern, and the only legitimate caller here is a number the
+	 * owner deliberately typed into `start-chat`.
+	 */
+	async checkRegistered(jid: string): Promise<{ registered: boolean; jid: string | null }> {
+		const onWhatsApp = this.#socket?.onWhatsApp;
+		if (!onWhatsApp) throw new Error('WhatsApp lookup is unavailable while disconnected');
+		const results = await onWhatsApp.call(this.#socket, jid);
+		const hit = results?.[0];
+		return hit?.exists ? { registered: true, jid: hit.jid ?? null } : { registered: false, jid: null };
 	}
 
 	/**
