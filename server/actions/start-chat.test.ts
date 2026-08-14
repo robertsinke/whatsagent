@@ -20,6 +20,12 @@ import { linkContactIdentity, upsertContact } from '../store/contacts.js';
 import { openDatabase, type AppDatabase } from '../store/db.js';
 import { upsertMessage } from '../store/messages.js';
 import { listOutbox } from '../store/outbox.js';
+import {
+	FIXTURE_NEWCHAT_LID,
+	FIXTURE_NEWCHAT_REPORTED_LID,
+	FIXTURE_PHONE,
+	FIXTURE_PHONE_JID
+} from '../../shared/test-fixtures.js';
 
 let dataDir: string | undefined;
 let db: AppDatabase | undefined;
@@ -37,8 +43,8 @@ afterEach(() => {
 	dataDir = undefined;
 });
 
-const PHONE = '+31 6 1234 5678';
-const PHONE_JID = '31612345678@s.whatsapp.net';
+const PHONE = `+${FIXTURE_PHONE}`;
+const PHONE_JID = FIXTURE_PHONE_JID;
 
 function makeDeps(overrides: Partial<RoutesDeps> = {}): RoutesDeps {
 	return {
@@ -99,7 +105,7 @@ describe('start-chat', () => {
 		// stored under an opaque `@lid` jid; inserting the phone jid would grow a
 		// second conversation for the same human.
 		const database = openTempDb();
-		const LID_JID = '99887766554433@lid';
+		const LID_JID = `${FIXTURE_NEWCHAT_LID}@lid`;
 		linkContactIdentity(database, {
 			lidJid: LID_JID,
 			phoneJid: PHONE_JID,
@@ -148,7 +154,7 @@ describe('start-chat', () => {
 
 	it('adopts the jid WhatsApp reports rather than the one derived from the number', async () => {
 		const database = openTempDb();
-		const REPORTED = '55443322110099@lid';
+		const REPORTED = `${FIXTURE_NEWCHAT_REPORTED_LID}@lid`;
 		const result = await startChat(
 			makeDeps({ checkRegistered: async () => ({ registered: true, jid: REPORTED }) })
 		);
