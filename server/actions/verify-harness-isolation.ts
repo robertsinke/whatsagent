@@ -45,6 +45,8 @@ export function createVerifyHarnessIsolationAction(
 ): ActionDefinition<VerifyHarnessIsolationInput> {
 	return {
 		name: 'verify-harness-isolation',
+		description:
+			'Spawn claude or codex to measure its tool surface (harness, surface drafting|panel). Costs CLI/model calls; frontend only.',
 		callers: ['frontend'],
 		jsonSchema: {
 			type: 'object',

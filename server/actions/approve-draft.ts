@@ -46,6 +46,8 @@ export type ApproveDraftInput = {
  */
 export const approveDraftAction: ActionDefinition<ApproveDraftInput> = {
 	name: 'approve-draft',
+	description:
+		'Approve the draft for chatJid into the paced outbox. Owner confirmation; never a tool.',
 	callers: ['frontend'],
 	jsonSchema: {
 		type: 'object',

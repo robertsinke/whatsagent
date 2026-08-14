@@ -35,6 +35,7 @@ const MAX_TURN_CHARS = 4_000;
  */
 export const agentTurnAction: ActionDefinition<AgentTurnInput> = {
 	name: 'agent-turn',
+	description: 'Run one owner panel turn with text. Costs a model call; frontend only.',
 	callers: ['frontend'],
 	jsonSchema: {
 		type: 'object',

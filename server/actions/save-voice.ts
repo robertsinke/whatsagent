@@ -33,6 +33,8 @@ export type SaveVoiceInput = {
  */
 export const saveVoiceAction: ActionDefinition<SaveVoiceInput> = {
 	name: 'save-voice',
+	description:
+		'Save voice document content for stem with baseHash optimistic lock. Frontend only.',
 	callers: ['frontend'],
 	jsonSchema: {
 		type: 'object',

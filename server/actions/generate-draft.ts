@@ -8,6 +8,8 @@ export type GenerateDraftInput = { chatJid: string };
 
 export const generateDraftAction: ActionDefinition<GenerateDraftInput> = {
 	name: 'generate-draft',
+	description:
+		'Generate a reply draft for chatJid (1:1 WhatsApp JID). Costs a model call; does not send.',
 	callers: ['frontend', 'tool'],
 	jsonSchema: {
 		type: 'object',

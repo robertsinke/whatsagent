@@ -91,6 +91,8 @@ export function createInstallProviderAction(
 ): ActionDefinition<InstallProviderInput> {
 	return {
 		name: 'install-provider',
+		description:
+			'Install the pinned claude or codex CLI via the vendor installer. Frontend only.',
 		callers: ['frontend'],
 		jsonSchema: {
 			type: 'object',

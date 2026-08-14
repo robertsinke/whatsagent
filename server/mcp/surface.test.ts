@@ -11,6 +11,7 @@ import { upsertDraft } from '../store/drafts.js';
 import { getDraft } from '../store/drafts.js';
 import { EventBus } from '../api/events.js';
 import { actionRegistry, listActionsForCaller } from '../actions/index.js';
+import { MCP_SERVER_INSTRUCTIONS } from '../agent/panel/harness.js';
 import { mcpTokenPath } from './token.js';
 import { isMcpEnabled, mcpOptionOverride, MCP_PATH } from './surface.js';
 
@@ -227,6 +228,7 @@ describe('MCP surface — registry tools', () => {
 			}
 			for (const tool of listed.tools) {
 				const action = actionRegistry.get(tool.name)!;
+				expect(tool.description).toBe(action.description);
 				expect(tool.inputSchema).toMatchObject({
 					type: 'object',
 					...(action.jsonSchema.properties
@@ -234,6 +236,10 @@ describe('MCP surface — registry tools', () => {
 						: {})
 				});
 			}
+			const instructions = client.getInstructions();
+			expect(instructions).toBe(MCP_SERVER_INSTRUCTIONS);
+			expect(instructions?.length).toBeGreaterThan(0);
+			expect(instructions).toMatch(/propose/);
 		} finally {
 			await client.close();
 		}

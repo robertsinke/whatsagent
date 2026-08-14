@@ -26,6 +26,8 @@ export type SkipDraftInput = { chatJid: string };
  */
 export const skipDraftAction: ActionDefinition<SkipDraftInput> = {
 	name: 'skip-draft',
+	description:
+		'Skip the draft for chatJid. If an approved send is still queued, a tool call cancels it and notifies the owner.',
 	callers: ['frontend', 'tool'],
 	jsonSchema: {
 		type: 'object',

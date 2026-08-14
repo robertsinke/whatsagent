@@ -13,6 +13,7 @@ import {
 	listActionsForCaller,
 	type ActionRegistry
 } from '../actions/index.js';
+import { MCP_SERVER_INSTRUCTIONS } from '../agent/panel/harness.js';
 import type { RoutesDeps } from '../api/routes.js';
 import { validateHostAndBearer } from '../api/security.js';
 
@@ -89,13 +90,13 @@ export function createMcpSurface(options: {
 function createRegistryServer(registry: ActionRegistry, deps: RoutesDeps): Server {
 	const server = new Server(
 		{ name: 'whatsagent', version: '0.0.1' },
-		{ capabilities: { tools: {} } }
+		{ capabilities: { tools: {} }, instructions: MCP_SERVER_INSTRUCTIONS }
 	);
 
 	server.setRequestHandler(ListToolsRequestSchema, async () => {
 		const tools: Tool[] = listActionsForCaller(registry, 'tool').map((action) => ({
 			name: action.name,
-			description: `WhatsApp agent action \`${action.name}\`.`,
+			description: action.description,
 			inputSchema: toToolInputSchema(action.jsonSchema)
 		}));
 		return { tools };

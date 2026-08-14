@@ -11,6 +11,7 @@ export type RegeneratePairingInput = Record<string, never>;
  */
 export const regeneratePairingAction: ActionDefinition<RegeneratePairingInput> = {
 	name: 'regenerate-pairing',
+	description: 'Restart WhatsApp pairing / auth. Frontend only; does not send messages.',
 	callers: ['frontend'],
 	jsonSchema: {
 		type: 'object',

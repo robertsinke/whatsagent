@@ -8,6 +8,7 @@ export type LoadMediaInput = { messageId: string };
 /** On-demand media fetch — never bulk-prefetched. */
 export const loadMediaAction: ActionDefinition<LoadMediaInput> = {
 	name: 'load-media',
+	description: 'Fetch media for one messageId on demand. Not a bulk download.',
 	callers: ['frontend', 'tool'],
 	jsonSchema: {
 		type: 'object',

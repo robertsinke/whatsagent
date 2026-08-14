@@ -17,6 +17,7 @@ export type RejectCalendarEventInput = { id: number };
  */
 export const rejectCalendarEventAction: ActionDefinition<RejectCalendarEventInput> = {
 	name: 'reject-calendar-event',
+	description: 'Reject pending calendar proposal id. Does not write to Google Calendar.',
 	callers: ['frontend', 'tool'],
 	jsonSchema: {
 		type: 'object',

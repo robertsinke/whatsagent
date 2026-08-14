@@ -16,6 +16,8 @@ export type SendInput = {
  */
 export const sendAction: ActionDefinition<SendInput> = {
 	name: 'send',
+	description:
+		'Enqueue composer text to chatJid through the paced outbox. Owner click only; agents use propose-send.',
 	callers: ['frontend'],
 	jsonSchema: {
 		type: 'object',

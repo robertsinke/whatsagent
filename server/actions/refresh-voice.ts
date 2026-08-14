@@ -6,6 +6,8 @@ export type RefreshVoiceInput = { stem: string };
 
 export const refreshVoiceAction: ActionDefinition<RefreshVoiceInput> = {
 	name: 'refresh-voice',
+	description:
+		'Rebuild voice models from recent chats for stem (currently global). Costs a model call.',
 	callers: ['frontend', 'tool'],
 	jsonSchema: {
 		type: 'object',

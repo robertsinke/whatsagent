@@ -26,6 +26,8 @@ const MAX_PENDING_PROPOSALS_PER_CHAT = 3;
  */
 export const proposeReactionAction: ActionDefinition<ProposeReactionInput> = {
 	name: 'propose-reaction',
+	description:
+		'Propose reacting with emoji to messageId. Writes an inert proposal the owner must confirm in the app; this tool never puts anything on the wire.',
 	callers: ['tool'],
 	jsonSchema: {
 		type: 'object',

@@ -12,6 +12,8 @@ export type DiscardVoiceSuggestionInput = { stem: string; id: string };
  */
 export const discardVoiceSuggestionAction: ActionDefinition<DiscardVoiceSuggestionInput> = {
 	name: 'discard-voice-suggestion',
+	description:
+		'Discard pending voice suggestion id for stem (currently global). Sidecar only; does not change the voice document.',
 	callers: ['frontend', 'tool'],
 	jsonSchema: {
 		type: 'object',

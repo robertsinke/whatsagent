@@ -34,6 +34,8 @@ const MAX_PENDING_PROPOSALS_PER_CHAT = 3;
  */
 export const proposeSendAction: ActionDefinition<ProposeSendInput> = {
 	name: 'propose-send',
+	description:
+		'Propose sending text to chatJid (WhatsApp JID, e.g. alice@s.whatsapp.net). Writes an inert proposal the owner must confirm in the app; this tool never puts anything on the wire.',
 	callers: ['tool'],
 	jsonSchema: {
 		type: 'object',

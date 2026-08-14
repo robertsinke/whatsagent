@@ -49,6 +49,8 @@ const MAX_LIMIT = 60;
  */
 export const getMessagesAction: ActionDefinition<GetMessagesInput> = {
 	name: 'get-messages',
+	description:
+		'Read messages for chatJid (WhatsApp JID like alice@s.whatsapp.net); default 25 (max 60), page older with beforeTs/beforeId.',
 	callers: ['frontend', 'tool'],
 	jsonSchema: {
 		type: 'object',

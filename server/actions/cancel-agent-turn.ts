@@ -23,6 +23,7 @@ export type CancelAgentTurnInput = Record<string, never>;
  */
 export const cancelAgentTurnAction: ActionDefinition<CancelAgentTurnInput> = {
 	name: 'cancel-agent-turn',
+	description: 'Cancel the in-flight panel turn. Frontend only.',
 	callers: ['frontend'],
 	jsonSchema: { type: 'object', properties: {}, additionalProperties: false },
 	parse() {

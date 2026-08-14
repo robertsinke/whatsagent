@@ -71,6 +71,16 @@ export type ActionResult = ActionErrorResult | ActionJsonResult;
  */
 export type ActionDefinition<TInput = unknown> = {
 	name: string;
+	/**
+	 * Tool-facing copy. Required — an optional field rots silently across the
+	 * registry; tsc is the only thing that keeps new actions honest. Imperative,
+	 * ≤300 chars, 1–2 sentences. Sentence 1 states the domain effect plus the
+	 * argument hint that prevents a wasted call (JID format, pagination default).
+	 * Every `propose-*` ends with the verbatim tail
+	 * "Writes an inert proposal the owner must confirm in the app; this tool never puts anything on the wire."
+	 * Tools that cost a model call say so.
+	 */
+	description: string;
 	callers: readonly ActionCaller[];
 	parse: (raw: unknown) => ActionParseResult<TInput>;
 	run: (input: TInput, ctx: ActionContext) => Promise<ActionResult> | ActionResult;

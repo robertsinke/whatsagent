@@ -5,6 +5,8 @@ export type DeepenHistoryInput = { chatJid: string; count: number };
 
 export const deepenHistoryAction: ActionDefinition<DeepenHistoryInput> = {
 	name: 'deepen-history',
+	description:
+		'Fetch older WhatsApp history for chatJid into the local store; count defaults to 50 (max 200). Needs a live channel.',
 	callers: ['frontend', 'tool'],
 	jsonSchema: {
 		type: 'object',

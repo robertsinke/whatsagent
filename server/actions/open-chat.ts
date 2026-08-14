@@ -33,6 +33,8 @@ export type OpenChatInput = { chatJid: string };
  */
 export const openChatAction: ActionDefinition<OpenChatInput> = {
 	name: 'open-chat',
+	description:
+		'Focus the conversation pane on chatJid (1:1 or group JID). Does not mark read and does not send.',
 	callers: ['frontend', 'tool'],
 	jsonSchema: {
 		type: 'object',

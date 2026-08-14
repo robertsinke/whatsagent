@@ -27,6 +27,7 @@ export type GetDraftInput = { chatJid: string };
  */
 export const getDraftAction: ActionDefinition<GetDraftInput> = {
 	name: 'get-draft',
+	description: 'Return the current draft for chatJid if one exists; does not generate one.',
 	callers: ['frontend', 'tool'],
 	jsonSchema: {
 		type: 'object',

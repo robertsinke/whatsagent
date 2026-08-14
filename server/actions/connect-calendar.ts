@@ -46,6 +46,8 @@ export function createConnectCalendarAction(
 ): ActionDefinition<ConnectCalendarInput> {
 	return {
 		name: 'connect-calendar',
+		description:
+			'Save Google Calendar CalDAV credentials (serverUrl, email, App Password) and optionally probe. Frontend only.',
 		callers: ['frontend'],
 		jsonSchema: {
 			type: 'object',
