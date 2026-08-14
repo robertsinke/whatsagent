@@ -166,12 +166,18 @@ describe('start-chat', () => {
 		expect(listChats(database)[0]?.name).toBe('Alice Doe');
 	});
 
-	it('caps the tool caller at the empty-chat limit but not the frontend', async () => {
-		const database = openTempDb();
-		for (let i = 0; i < MAX_AGENT_EMPTY_CHATS; i += 1) {
+	function seedEmptyChats(database: AppDatabase, n: number): void {
+		for (let i = 0; i < n; i += 1) {
 			upsertChat(database, { jid: `empty-${i}@s.whatsapp.net`, kind: '1:1', last_msg_at: 1 });
 		}
-		// A chat that HAS a message must not count toward the cap.
+	}
+
+	it('does not count chats that have messages toward the cap', async () => {
+		// The discriminating case: one short of the cap in EMPTY chats, plus a
+		// chat with a message. If the message exclusion were dropped, the count
+		// would hit the cap and this 201 would be a 409.
+		const database = openTempDb();
+		seedEmptyChats(database, MAX_AGENT_EMPTY_CHATS - 1);
 		upsertChat(database, { jid: 'busy@s.whatsapp.net', kind: '1:1', last_msg_at: 2 });
 		upsertMessage(database, {
 			id: 'busy-1',
@@ -181,6 +187,17 @@ describe('start-chat', () => {
 			type: 'text',
 			text: 'hi'
 		});
+
+		const result = await startChat(makeDeps(), PHONE, 'tool');
+
+		expect(result).toMatchObject({ status: 201 });
+	});
+
+	it('caps the tool caller at the empty-chat limit but not the frontend', async () => {
+		const database = openTempDb();
+		seedEmptyChats(database, MAX_AGENT_EMPTY_CHATS);
+		// A group with no messages is not the agent's doing and is not counted.
+		upsertChat(database, { jid: 'empty-group@g.us', kind: 'group', last_msg_at: 2 });
 
 		const refused = await startChat(makeDeps(), PHONE, 'tool');
 		expect(refused).toMatchObject({ kind: 'error', status: 409 });
