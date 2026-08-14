@@ -530,6 +530,30 @@ upsertMessage(db, {
 	text: 'got the note'
 });
 
+/**
+ * NEWCHAT-1 — a 1:1 chat with ZERO messages, the state `start-chat` leaves
+ * behind. Real data never contains one (ingest only ever creates a chat
+ * alongside a message), so this is the only way to look at the empty chat-list
+ * preview line, the empty conversation pane, and a proposal that has no
+ * messages to render against.
+ */
+const EMPTY_CHAT = 'preview-empty@s.whatsapp.net';
+upsertChat(db, {
+	jid: EMPTY_CHAT,
+	name: 'Noor Aziz',
+	kind: '1:1',
+	// `listChats` orders `last_msg_at IS NULL` first, so a null here would sort
+	// the chat to the bottom — which is why `start-chat` sets it to now.
+	last_msg_at: at(),
+	unread: 0
+});
+insertProposal(db, {
+	chatJid: EMPTY_CHAT,
+	text: 'Hi Noor — Robert here. Following up on the workshop dates.',
+	basisMsgId: null,
+	now: Date.now()
+});
+
 const fakeProvider: DraftProvider = {
 	draft: async (): Promise<DraftResult> => ({ kind: 'draft', text: 'Preview draft — no provider was called.' })
 };

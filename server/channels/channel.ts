@@ -44,5 +44,16 @@ export interface Channel {
 	resetAuth?(): Promise<void>;
 	/** Optional channel-specific request for older messages (voice bootstrap deepening). */
 	deepenHistory?(chatId: string, count?: number): Promise<unknown>;
+	/**
+	 * NEWCHAT-1 — optional channel-side check that an address is reachable,
+	 * returning the jid the channel itself reports (which may differ from the
+	 * one derived from the number, e.g. LID addressing).
+	 *
+	 * Single-address only, deliberately: one lookup for a number the owner
+	 * typed is not enumeration, and bulk number enumeration is a documented
+	 * ban-risk pattern. Do not add a batch variant, and do not call this from
+	 * anywhere but `start-chat`.
+	 */
+	checkRegistered?(jid: string): Promise<{ registered: boolean; jid: string | null }>;
 }
 import type { Message } from '../store/messages.js';
