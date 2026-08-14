@@ -14,6 +14,7 @@ export type DismissCancellationNoticeInput = { id: number };
 export const dismissCancellationNoticeAction: ActionDefinition<DismissCancellationNoticeInput> =
 	{
 		name: 'dismiss-cancellation-notice',
+		description: 'Dismiss cancellation notice id after the owner has seen it. Frontend only.',
 		callers: ['frontend'],
 		jsonSchema: {
 			type: 'object',

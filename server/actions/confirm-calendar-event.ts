@@ -46,6 +46,8 @@ export function createConfirmCalendarEventAction(
 ): ActionDefinition<ConfirmCalendarEventInput> {
 	return {
 		name: 'confirm-calendar-event',
+		description:
+			'Confirm calendar proposal id (base_hash required) and PUT to Google Calendar. Owner click only.',
 		callers: ['frontend'],
 		jsonSchema: {
 			type: 'object',

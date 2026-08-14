@@ -10,6 +10,8 @@ export type RefineDraftInput = {
 
 export const refineDraftAction: ActionDefinition<RefineDraftInput> = {
 	name: 'refine-draft',
+	description:
+		'Refine the draft for chatJid (intent regenerate|shorter|longer|more_formal|less_formal). Costs a model call; does not send.',
 	callers: ['frontend', 'tool'],
 	jsonSchema: {
 		type: 'object',

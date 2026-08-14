@@ -16,6 +16,8 @@ export type ReactInput = {
  */
 export const reactAction: ActionDefinition<ReactInput> = {
 	name: 'react',
+	description:
+		'Enqueue a reaction (messageId, emoji) through the paced outbox. Owner click only; agents use propose-reaction.',
 	callers: ['frontend'],
 	jsonSchema: {
 		type: 'object',

@@ -39,6 +39,8 @@ export const MAX_PENDING_CALENDAR_PROPOSALS = 3;
  */
 export const proposeCalendarEventAction: ActionDefinition<ProposeCalendarEventInput> = {
 	name: 'propose-calendar-event',
+	description:
+		'Propose a calendar event with summary and ISO-8601 start/end (optional location, chatJid). Writes an inert proposal the owner must confirm in the app; this tool never puts anything on the wire.',
 	callers: ['tool'],
 	jsonSchema: {
 		type: 'object',

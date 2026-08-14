@@ -15,6 +15,8 @@ export type EditDraftInput = { chatJid: string; text: string };
  */
 export const editDraftAction: ActionDefinition<EditDraftInput> = {
 	name: 'edit-draft',
+	description:
+		'Replace the draft text for chatJid. Does not send; marks the draft as agent-written.',
 	callers: ['frontend', 'tool'],
 	jsonSchema: {
 		type: 'object',

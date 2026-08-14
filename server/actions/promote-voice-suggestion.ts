@@ -28,6 +28,8 @@ export type PromoteVoiceSuggestionInput = { stem: string; id: string };
  */
 export const promoteVoiceSuggestionAction: ActionDefinition<PromoteVoiceSuggestionInput> = {
 	name: 'promote-voice-suggestion',
+	description:
+		'Promote voice suggestion id for stem into the durable voice document. Owner click only.',
 	callers: ['frontend'],
 	jsonSchema: {
 		type: 'object',

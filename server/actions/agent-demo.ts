@@ -23,6 +23,8 @@ export type AgentDemoInput = {
  */
 export const agentDemoAction: ActionDefinition<AgentDemoInput> = {
 	name: 'agent-demo',
+	description:
+		'Play a gated in-app demo of panel events. Dev-only (WHATSAGENT_DEV_EVENTS); does not send.',
 	callers: ['frontend'],
 	jsonSchema: {
 		type: 'object',

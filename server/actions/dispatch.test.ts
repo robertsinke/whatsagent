@@ -1346,3 +1346,27 @@ describe('open-chat (PANEL-S4)', () => {
 		expect(result).toMatchObject({ kind: 'error', status: 400, error: 'Expected { chatJid }' });
 	});
 });
+
+const R9_PROPOSE_TAIL =
+	'Writes an inert proposal the owner must confirm in the app; this tool never puts anything on the wire.';
+
+describe('action descriptions (MCPX-1)', () => {
+	it('gives every tool-visible action a non-empty ≤300-char description', () => {
+		const tools = listActionsForCaller(actionRegistry, 'tool');
+		expect(tools.length).toBeGreaterThan(0);
+		for (const action of tools) {
+			expect(action.description.trim().length).toBeGreaterThan(0);
+			expect(action.description.length).toBeLessThanOrEqual(300);
+		}
+	});
+
+	it('ends every propose-* description with the R9 tail verbatim', () => {
+		const propose = [...actionRegistry.values()].filter((a) => a.name.startsWith('propose-'));
+		expect(propose.map((a) => a.name).sort()).toEqual(
+			['propose-calendar-event', 'propose-reaction', 'propose-send'].sort()
+		);
+		for (const action of propose) {
+			expect(action.description.endsWith(R9_PROPOSE_TAIL)).toBe(true);
+		}
+	});
+});

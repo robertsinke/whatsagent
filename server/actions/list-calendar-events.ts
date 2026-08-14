@@ -45,6 +45,8 @@ export function createListCalendarEventsAction(
 ): ActionDefinition<ListCalendarEventsInput> {
 	return {
 		name: 'list-calendar-events',
+		description:
+			'List Google Calendar events; default now through +7 days, 50 rows (max 200), page with offset. Pass ISO-8601 start/end.',
 		callers: ['frontend', 'tool'],
 		jsonSchema: {
 			type: 'object',

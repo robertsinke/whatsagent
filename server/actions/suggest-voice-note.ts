@@ -31,6 +31,8 @@ export type SuggestVoiceNoteInput = { stem: string; text: string };
  */
 export const suggestVoiceNoteAction: ActionDefinition<SuggestVoiceNoteInput> = {
 	name: 'suggest-voice-note',
+	description:
+		'File a voice-document suggestion for stem (currently global) with text. Owner must promote it; this does not rewrite voice.',
 	callers: ['tool'],
 	jsonSchema: {
 		type: 'object',

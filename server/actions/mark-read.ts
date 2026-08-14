@@ -11,6 +11,8 @@ export type MarkReadInput = { chatJid: string };
  */
 export const markReadAction: ActionDefinition<MarkReadInput> = {
 	name: 'mark-read',
+	description:
+		'Advance the local read cursor for chatJid. Does not send a WhatsApp read receipt.',
 	callers: ['frontend', 'tool'],
 	jsonSchema: {
 		type: 'object',

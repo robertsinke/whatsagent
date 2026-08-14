@@ -12,6 +12,7 @@ export type SetSendModeInput = {
  */
 export const setSendModeAction: ActionDefinition<SetSendModeInput> = {
 	name: 'set-send-mode',
+	description: 'Set live sending on or off (live boolean). Arms every outbound path; frontend only.',
 	callers: ['frontend'],
 	jsonSchema: {
 		type: 'object',

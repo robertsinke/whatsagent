@@ -47,6 +47,8 @@ const MAX_LIMIT = 100;
  */
 export const listChatsAction: ActionDefinition<ListChatsInput> = {
 	name: 'list-chats',
+	description:
+		'List chats with optional filter all|needs-reply|groups; default 30 rows (max 100), page with offset.',
 	callers: ['frontend', 'tool'],
 	jsonSchema: {
 		type: 'object',

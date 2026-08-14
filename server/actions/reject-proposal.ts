@@ -17,6 +17,7 @@ export type RejectProposalInput = { id: number };
  */
 export const rejectProposalAction: ActionDefinition<RejectProposalInput> = {
 	name: 'reject-proposal',
+	description: "Reject pending proposal id so it leaves the owner's queue. Does not send.",
 	callers: ['frontend', 'tool'],
 	jsonSchema: {
 		type: 'object',

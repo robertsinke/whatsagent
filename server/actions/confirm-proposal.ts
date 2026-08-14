@@ -39,6 +39,8 @@ export type ConfirmProposalInput = {
  */
 export const confirmProposalAction: ActionDefinition<ConfirmProposalInput> = {
 	name: 'confirm-proposal',
+	description:
+		'Confirm proposal id (base_hash required) and enqueue the outbox send or reaction. Owner click only.',
 	callers: ['frontend'],
 	jsonSchema: {
 		type: 'object',

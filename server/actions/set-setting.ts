@@ -66,6 +66,8 @@ const RUNTIME_SETTINGS: ReadonlySet<string> = new Set([
  */
 export const setSettingAction: ActionDefinition<SetSettingInput> = {
 	name: 'set-setting',
+	description:
+		'Persist setting key/value (panel, provider, dry-run). Frontend only; can arm send mode and MCP.',
 	callers: ['frontend'],
 	jsonSchema: {
 		type: 'object',

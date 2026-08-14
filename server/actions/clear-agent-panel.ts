@@ -17,6 +17,7 @@ export type ClearAgentPanelInput = Record<string, never>;
  */
 export const clearAgentPanelAction: ActionDefinition<ClearAgentPanelInput> = {
 	name: 'clear-agent-panel',
+	description: 'Wipe the panel transcript. Frontend only.',
 	callers: ['frontend'],
 	jsonSchema: { type: 'object', properties: {}, additionalProperties: false },
 	parse() {

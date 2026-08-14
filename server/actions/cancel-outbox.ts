@@ -7,6 +7,7 @@ export type CancelOutboxInput = { id: number };
 /** Cancel a pending outbox row — only ever reduces sending. */
 export const cancelOutboxAction: ActionDefinition<CancelOutboxInput> = {
 	name: 'cancel-outbox',
+	description: 'Cancel pending outbox row id. Only reduces sending; never enqueues.',
 	callers: ['frontend', 'tool'],
 	jsonSchema: {
 		type: 'object',
