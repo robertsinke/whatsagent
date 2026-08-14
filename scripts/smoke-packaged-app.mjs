@@ -39,8 +39,9 @@
  * no window, and no data directory touched. A missing module fails at import,
  * before any of this app's own code runs, so import is where to catch it.
  */
-import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -177,6 +178,98 @@ if (failures.length > 0) {
 	process.exit(1);
 }
 
+// MCPX-4 — the stdio MCP entry point, exercised the way the owner's MCP client
+// actually launches it: the bundle's own binary as Node, the hardcoded asar
+// path, a scratch data dir. This is the ONLY place that path is really run.
+// `npm test` spawns the TypeScript source, which cannot tell us whether
+// better-sqlite3 and the MCP SDK resolve *inside the asar* — the exact class of
+// failure this whole script exists for.
+const stdioEntry = join(asar, 'dist', 'server', 'server', 'mcp', 'stdio.js');
+const scratch = mkdtempSync(join(tmpdir(), 'whatsagent-smoke-mcp-'));
+try {
+	// Migrate the scratch dir with the BUNDLE's own migrations and arm the same
+	// `mcp_enabled` row the Settings toggle writes, so the entry point is asked
+	// the real question rather than a startup refusal.
+	execFileSync(
+		electron,
+		[
+			'-e',
+			`
+			const { openDatabase } = require(${JSON.stringify(join(asar, 'dist', 'server', 'server', 'store', 'db.js'))});
+			const db = openDatabase({ dataDir: ${JSON.stringify(scratch)} });
+			db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('mcp_enabled', 'true');
+			db.close();
+			`
+		],
+		{ env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'pipe', timeout: 60_000 }
+	);
+
+	const initialize = JSON.stringify({
+		jsonrpc: '2.0',
+		id: 1,
+		method: 'initialize',
+		params: {
+			protocolVersion: '2025-06-18',
+			capabilities: {},
+			clientInfo: { name: 'smoke:packaged', version: '0' }
+		}
+	});
+	// Spawned rather than `execFileSync`, and killed once the frame arrives: a
+	// healthy MCP server does NOT exit after answering, so waiting for exit
+	// would turn a pass into a timeout.
+	const answer = await new Promise((resolveFrame, rejectFrame) => {
+		const child = spawn(electron, [stdioEntry, '--data-dir', scratch], {
+			env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+			stdio: ['pipe', 'pipe', 'pipe']
+		});
+		let stdout = '';
+		let stderr = '';
+		const done = (value) => {
+			clearTimeout(timer);
+			child.kill('SIGKILL');
+			resolveFrame(value);
+		};
+		const timer = setTimeout(() => {
+			child.kill('SIGKILL');
+			rejectFrame(new Error(`no initialize response in 60s. stderr: ${stderr.slice(0, 400)}`));
+		}, 60_000);
+		child.stderr.on('data', (c) => {
+			stderr += c.toString();
+		});
+		child.stdout.on('data', (c) => {
+			stdout += c.toString();
+			// stdout is newline-delimited JSON-RPC and nothing else — the entry
+			// point redirects every stdout console method to stderr so this holds.
+			for (const line of stdout.split('\n')) {
+				if (!line.trim().startsWith('{')) continue;
+				try {
+					const frame = JSON.parse(line);
+					if (frame.id === 1) done(frame);
+				} catch {
+					// Partial line; wait for the rest.
+				}
+			}
+		});
+		child.on('error', (err) => {
+			clearTimeout(timer);
+			rejectFrame(err);
+		});
+		child.stdin.write(`${initialize}\n`);
+	});
+	if (answer?.result?.serverInfo?.name !== 'whatsagent') {
+		console.error('smoke:packaged FAIL — the stdio MCP entry point did not answer initialize:');
+		console.error(`  ${JSON.stringify(answer).slice(0, 500)}`);
+		process.exit(1);
+	}
+} catch (err) {
+	console.error('smoke:packaged FAIL — the stdio MCP entry point did not run inside the bundle:');
+	console.error(`  ${String(err.message).slice(0, 300)}`);
+	if (err.stderr) console.error(`  ${String(err.stderr).slice(0, 500)}`);
+	process.exit(1);
+} finally {
+	rmSync(scratch, { recursive: true, force: true });
+}
+
 if (selfTest) {
 	console.error('smoke:packaged FAIL — --self-test passed, which means the check is not checking.');
 	process.exit(1);
@@ -184,5 +277,5 @@ if (selfTest) {
 
 console.log(
 	`smoke:packaged PASS — v${result.version}: ${result.total} dependencies present, SPA bundled, ` +
-		'compiled server imports inside the bundle'
+		'compiled server imports inside the bundle, stdio MCP entry answers initialize'
 );

@@ -12,6 +12,20 @@ export type OpenDatabaseOptions = {
 	dataDir?: string;
 	/** DB filename within the data dir. Default: `whatsagent.db`. */
 	filename?: string;
+	/**
+	 * MCPX-4 — run pending migrations on open. Default `true`, so every existing
+	 * caller is unchanged.
+	 *
+	 * The one caller that passes `false` is the headless MCP stdio entry point
+	 * (`server/mcp/stdio.ts`). Its path into `app.asar` is hardcoded in the
+	 * owner's MCP client config, so after an auto-update it runs whatever the
+	 * bundle now holds — and it can be launched while the desktop app is also
+	 * running. Two processes racing `migrate()` on the owner's live WhatsApp
+	 * database is not a risk worth taking for a read-mostly side entrance:
+	 * it refuses and tells the owner to launch the app once instead. See
+	 * `docs/solutions/2026-07-26-migration-numbering-and-high-water-mark.md`.
+	 */
+	migrate?: boolean;
 };
 
 const DB_FILENAME = 'whatsagent.db';
@@ -107,8 +121,34 @@ export function openDatabase(options: OpenDatabaseOptions = {}): AppDatabase {
 	db.pragma('journal_mode = WAL');
 	db.pragma('foreign_keys = ON');
 
-	migrate(db);
+	if (options.migrate !== false) migrate(db);
 	return db;
+}
+
+/**
+ * The highest migration version this code carries — the high-water mark a
+ * database must be at for this build to read it safely.
+ */
+export function codeSchemaVersion(): number {
+	return MIGRATIONS.reduce((max, m) => (m.version > max ? m.version : max), 0);
+}
+
+/**
+ * The highest migration version this database has recorded.
+ *
+ * Returns 0 when `schema_version` does not exist — which is the normal state of
+ * a database opened with `migrate: false` that has never been migrated, and
+ * must not throw: the caller's whole job is to compare and refuse.
+ */
+export function readSchemaVersion(db: AppDatabase): number {
+	const table = db
+		.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_version'")
+		.get();
+	if (!table) return 0;
+	const row = db.prepare('SELECT MAX(version) AS v FROM schema_version').get() as {
+		v: number | null;
+	};
+	return row.v ?? 0;
 }
 
 export function migrate(db: AppDatabase): void {
