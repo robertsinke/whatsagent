@@ -299,6 +299,29 @@ describe('MCP surface — runtime discovery file (MCPX-3)', () => {
 		expect(statSync(mcpRuntimePath(dataDir!)).mode & 0o777).toBe(0o600);
 	});
 
+	it('is absent before start(), so it never advertises the undialable port 0', async () => {
+		dataDir = mkdtempSync(join(tmpdir(), 'whatsagent-mcp-'));
+		db = openDatabase({ dataDir });
+		app = createApp({
+			db,
+			dataDir,
+			events: new EventBus(),
+			port: 0,
+			host: '127.0.0.1',
+			staticDir: null,
+			mcp: true
+		});
+		// `reconcilePanelRuntime()` has already run inside `createApp` and the
+		// surface is armed — but the OS has not assigned a port yet. A file here
+		// would carry `port: 0` and a LIVE pid, so a reader's `kill(pid, 0)`
+		// liveness check would pass and it would dial an unusable URL.
+		expect(app.mcp).not.toBeNull();
+		expect(existsSync(mcpRuntimePath(dataDir))).toBe(false);
+
+		await app.start();
+		expect(readMcpRuntimeFile(dataDir)!.port).toBe(app.port);
+	});
+
 	it('is gone after close()', async () => {
 		await startApp(true);
 		const path = mcpRuntimePath(dataDir!);

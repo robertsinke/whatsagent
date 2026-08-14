@@ -631,9 +631,17 @@ export function createApp(options: CreateAppOptions = {}): App {
 	 * Disable (or a boot with MCP off) must remove, not leave a stale pointer
 	 * at a dead process. Write only when the surface is armed; `listeningPort`
 	 * is still the requested value until `server.on('listening')`.
+	 *
+	 * The file therefore NEVER carries `port: 0`, and a reader may treat it as
+	 * dialable without checking. The packaged app requests port 0, so between
+	 * `reconcilePanelRuntime()` and the listening handler the port is not yet
+	 * known — and a `createApp` whose `start()` never runs would otherwise leave
+	 * an undialable file on disk whose pid IS live, defeating the liveness
+	 * check. Not writing is the honest state: no file means no reachable
+	 * surface, which is exactly what a reader should conclude.
 	 */
 	function syncMcpRuntimeFile(): void {
-		if (!mcpInfo) {
+		if (!mcpInfo || listeningPort === 0) {
 			removeMcpRuntimeFile(dataDir);
 			return;
 		}
