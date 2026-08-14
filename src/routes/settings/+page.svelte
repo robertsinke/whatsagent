@@ -26,6 +26,10 @@
 		type VoiceSuggestion
 	} from '$lib/client/api.js';
 	import { ApiError, type AgentStatus, type ProvidersResponse } from '$lib/client/types.js';
+	import {
+		buildClaudeMcpAddCommand,
+		buildExternalMcpConfig
+	} from '$lib/components/app/mcp-config-snippet.js';
 	// OSS-P3.4 — the provider + model control is shared with first-run setup.
 	// Do not re-implement it here; the two screens must not drift apart.
 	import ProviderPicker from '$lib/components/app/ProviderPicker.svelte';
@@ -154,6 +158,26 @@
 	 * reports that state honestly rather than showing "off" next to a live port.
 	 */
 	const mcpEnabled = $derived(values.mcp_enabled === 'true');
+	const mcpLaunch = $derived(agentStatus?.mcp ?? null);
+	const mcpJsonSnippet = $derived(
+		mcpLaunch
+			? buildExternalMcpConfig({
+					command: mcpLaunch.command,
+					entryPath: mcpLaunch.entryPath,
+					dataDir: mcpLaunch.dataDir
+				})
+			: ''
+	);
+	const mcpClaudeSnippet = $derived(
+		mcpLaunch
+			? buildClaudeMcpAddCommand({
+					command: mcpLaunch.command,
+					entryPath: mcpLaunch.entryPath,
+					dataDir: mcpLaunch.dataDir
+				})
+			: ''
+	);
+	let mcpCopyFlash = $state<'json' | 'claude' | null>(null);
 	const runningHarnessLabel = $derived(
 		agentStatus?.available && panelEnabled
 			? (PANEL_HARNESSES.find((h) => h.value === values.panel_harness)?.label ?? null)
@@ -304,6 +328,20 @@
 	async function toggleMcp(next: boolean) {
 		values.mcp_enabled = next ? 'true' : 'false';
 		await save('mcp_enabled');
+	}
+
+	async function copyMcpSnippet(which: 'json' | 'claude') {
+		const text = which === 'json' ? mcpJsonSnippet : mcpClaudeSnippet;
+		if (!text) return;
+		try {
+			await navigator.clipboard.writeText(text);
+			mcpCopyFlash = which;
+			setTimeout(() => {
+				if (mcpCopyFlash === which) mcpCopyFlash = null;
+			}, 1500);
+		} catch {
+			// Leave the block visible for manual selection.
+		}
 	}
 
 	function applyVoiceDocument(doc: VoiceView) {
@@ -636,7 +674,7 @@
 			}
 			// PANEL-S2: the write reconfigured the runtime server-side, so re-ask
 			// what is running rather than deriving it here from what we just wrote.
-			if (key.startsWith('panel_')) void loadAgentStatus();
+			if (key.startsWith('panel_') || key === 'mcp_enabled') void loadAgentStatus();
 		} catch (err) {
 			error = err instanceof Error ? err.message : String(err);
 		}
@@ -947,13 +985,13 @@
 					</div>
 
 					<p class="panel-help">
-						Lets your own Claude Code or Cursor sessions reach this app. They get the same
-						abilities as the agent panel: read your chats, write and refine drafts, and file a
-						proposed send that waits for you here.
+						Lets your own Claude Code or Cursor sessions reach this app. They can read chats,
+						write and refine drafts, start a chat with a number that has never messaged you, and
+						file a proposed send that waits for you here.
 					</p>
 					<p class="panel-help">
-						<strong>They can never send, and never approve their own proposal.</strong> An outside
-						agent prepares; you approve in this window. That is structural, not a setting.
+						<strong>They can never send, react, approve, or confirm.</strong> Prep now, approve
+						later — including when this window is closed. That is structural, not a setting.
 					</p>
 					<p class="panel-help">
 						Turning the agent panel off no longer turns this off — the two are separate
@@ -982,6 +1020,51 @@
 						Takes effect immediately — no restart. Turning it off closes the connection and
 						deletes the token, so any external session you set up will need the new one.
 					</p>
+
+					{#if mcpLaunch}
+						<div class="mcp-snippet" data-testid="mcp-config-snippet">
+							<p class="panel-help">
+								Paste this once. It works whether or not WhatsAgent is open, and it carries no
+								secret — the entry point reads the credential itself.
+							</p>
+							{#if !mcpLaunch.entryReady && mcpLaunch.command.includes('/Applications/WhatsAgent.app')}
+								<p class="panel-warn" data-testid="mcp-stale-bundle">
+									The app currently at <code>/Applications/WhatsAgent.app</code> does not include
+									this entry point. A config generated today will not serve until you install a
+									build that does; an older bundle fails looking for <code>stdio.js</code>.
+								</p>
+							{/if}
+							<label class="mcp-snippet-label" for="mcp-json-snippet">Cursor / mcp.json</label>
+							<pre
+								id="mcp-json-snippet"
+								class="mcp-snippet-block"
+								data-testid="mcp-json-snippet">{mcpJsonSnippet}</pre>
+							<Button
+								size="sm"
+								variant="outline"
+								data-testid="mcp-copy-json"
+								onclick={() => void copyMcpSnippet('json')}
+							>
+								{mcpCopyFlash === 'json' ? 'Copied' : 'Copy JSON'}
+							</Button>
+							<label class="mcp-snippet-label" for="mcp-claude-snippet">Claude Code</label>
+							<pre
+								id="mcp-claude-snippet"
+								class="mcp-snippet-block"
+								data-testid="mcp-claude-snippet">{mcpClaudeSnippet}</pre>
+							<Button
+								size="sm"
+								variant="outline"
+								data-testid="mcp-copy-claude"
+								onclick={() => void copyMcpSnippet('claude')}
+							>
+								{mcpCopyFlash === 'claude' ? 'Copied' : 'Copy command'}
+							</Button>
+							<p class="panel-help">
+								More detail, including what fails when, is in <code>docs/external-agents.md</code>.
+							</p>
+						</div>
+					{/if}
 				</div>
 
 				<!--
@@ -1801,6 +1884,32 @@
 	.panel-hint {
 		font-size: 0.72rem;
 		color: var(--ink-50);
+	}
+
+	.mcp-snippet {
+		display: flex;
+		flex-direction: column;
+		gap: 0.45rem;
+		padding-top: 0.15rem;
+	}
+	.mcp-snippet-label {
+		font-size: 0.72rem;
+		color: var(--ink-70);
+		font-weight: 600;
+	}
+	.mcp-snippet-block {
+		margin: 0;
+		padding: 0.5rem 0.55rem;
+		border-radius: var(--radius-sm);
+		background: var(--surface);
+		border: 1px solid var(--hairline-soft);
+		font-size: 0.68rem;
+		line-height: 1.45;
+		color: var(--ink-90);
+		overflow-x: auto;
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+		font-family: var(--font-mono, ui-monospace, monospace);
 	}
 
 	/* W4-U10 / P3.4 — voice inspector + editor tab */

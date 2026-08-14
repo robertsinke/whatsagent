@@ -98,6 +98,14 @@ WhatsApp Desktop pairing identity. The runtime also resolves the live WhatsApp
 Web protocol version with a tested fallback. `npm run check` fails if a Baileys
 upgrade changes the patched layout, so the shim cannot silently disappear.
 
+## External agents (Claude Code, Cursor)
+
+Your own Claude Code or Cursor session can talk to this app over MCP. Turn
+**External agents (MCP)** on in Settings and paste the copy-paste block.
+The agent can read, draft, start a chat, and file a proposal; it cannot send,
+react, approve, or confirm. Details, including what changes when the app is
+closed: [docs/external-agents.md](docs/external-agents.md).
+
 ## First run
 
 An empty, unlinked app opens a three-step welcome flow instead of the chat

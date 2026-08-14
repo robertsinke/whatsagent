@@ -14,7 +14,15 @@ const AVAILABLE: AgentStatus = {
 	running: false,
 	sessionId: null,
 	messageId: null,
-	harness: 'opencode'
+	harness: 'opencode',
+	mcp: {
+		enabled: true,
+		command: '/Applications/WhatsAgent.app/Contents/MacOS/WhatsAgent',
+		entryPath:
+			'/Applications/WhatsAgent.app/Contents/Resources/app.asar/dist/server/server/mcp/stdio.js',
+		dataDir: '/tmp/whatsagent-test',
+		entryReady: true
+	}
 };
 
 afterEach(() => {

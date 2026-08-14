@@ -2,7 +2,7 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { extname, join, normalize, sep } from 'node:path';
 import type { DraftTextSource } from '../../shared/approval-hash.js';
-import type { AppDatabase } from '../store/db.js';
+import { getDefaultDataDir, type AppDatabase } from '../store/db.js';
 import { getChat, listChats } from '../store/chats.js';
 import { getDraft } from '../store/drafts.js';
 import { getMessage, listMessagesPage, type Message } from '../store/messages.js';
@@ -39,6 +39,7 @@ import type { DiscoveredProvider } from '../providers/discovery.js';
 import type { ProviderInfo, ProviderModelOption } from '../../shared/provider-types.js';
 import { actionRegistry, dispatch } from '../actions/index.js';
 import { writeActionResult } from '../actions/respond.js';
+import { resolveMcpLaunchPaths } from '../mcp/entry-path.js';
 import { MCP_PATH, type McpSurface } from '../mcp/surface.js';
 
 /**
@@ -511,11 +512,22 @@ async function handleApi(
 	 */
 	if (path === '/api/agent/status' && method === 'GET') {
 		const panel = deps.panelSession;
+		const launch = resolveMcpLaunchPaths();
 		json(res, 200, {
 			available: Boolean(panel),
 			...(panel
 				? panel.status()
-				: { running: false, sessionId: null, messageId: null, harness: null })
+				: { running: false, sessionId: null, messageId: null, harness: null }),
+			// MCPX-5 — launch paths for the Settings copy-paste. NEVER the token:
+			// the discovery file exists so the visible config carries no secret.
+			// The stdio entry reads mcp.token itself. Do not add it here.
+			mcp: {
+				enabled: Boolean(deps.mcp),
+				command: launch.command,
+				entryPath: launch.entryPath,
+				dataDir: deps.dataDir ?? getDefaultDataDir(),
+				entryReady: launch.entryReady
+			}
 		});
 		return;
 	}

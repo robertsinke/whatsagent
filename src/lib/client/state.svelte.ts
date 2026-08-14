@@ -70,7 +70,15 @@ const UNAVAILABLE_AGENT: AgentStatus = {
 	running: false,
 	sessionId: null,
 	messageId: null,
-	harness: null
+	harness: null,
+	mcp: {
+		enabled: false,
+		command: '/Applications/WhatsAgent.app/Contents/MacOS/WhatsAgent',
+		entryPath:
+			'/Applications/WhatsAgent.app/Contents/Resources/app.asar/dist/server/server/mcp/stdio.js',
+		dataDir: '',
+		entryReady: false
+	}
 };
 
 const EMPTY_SESSION: SessionView = {

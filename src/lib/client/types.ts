@@ -161,6 +161,15 @@ export type Draft = {
  * MCP surface is off, which is the default: the panel is unusable without tools
  * and says so rather than accepting turns that go nowhere.
  */
+export type McpOnboardingStatus = {
+	enabled: boolean;
+	command: string;
+	entryPath: string;
+	dataDir: string;
+	/** False when the bundle this snippet points at does not contain stdio.js. */
+	entryReady: boolean;
+};
+
 export type AgentStatus = {
 	/**
 	 * PANEL-S2 — the whole configuration answer. The Settings toggle reconciles
@@ -172,6 +181,8 @@ export type AgentStatus = {
 	sessionId: string | null;
 	messageId: string | null;
 	harness: string | null;
+	/** MCPX-5 — copy-paste launch paths. Never includes the token. */
+	mcp: McpOnboardingStatus;
 };
 
 /**
@@ -180,12 +191,12 @@ export type AgentStatus = {
  * is absent here rather than typed and undefined at runtime — the caller
  * preserves the one it already holds.
  */
-export type AgentCancelResult = Omit<AgentStatus, 'available'> & {
+export type AgentCancelResult = Omit<AgentStatus, 'available' | 'mcp'> & {
 	cancelled: boolean;
 };
 
 /** PANEL-S3 — wipe the in-memory panel transcript. */
-export type AgentClearResult = Omit<AgentStatus, 'available'> & {
+export type AgentClearResult = Omit<AgentStatus, 'available' | 'mcp'> & {
 	cleared: boolean;
 	cancelled: boolean;
 	nextSessionId: string;
