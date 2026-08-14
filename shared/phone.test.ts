@@ -24,8 +24,14 @@ describe('normalizePhone', () => {
 	it('rejects a bare national number rather than guessing a country', () => {
 		// Leading trunk prefix — the country is genuinely unknown here, and
 		// assuming one messages a stranger.
-		expect(normalizePhone('06 1234 5678')).toEqual({ ok: false, reason: 'not_a_number' });
-		expect(normalizePhone('(020) 7946 0958')).toEqual({ ok: false, reason: 'not_a_number' });
+		expect(normalizePhone('06 1234 5678')).toEqual({
+			ok: false,
+			reason: 'missing_country_code'
+		});
+		expect(normalizePhone('(020) 7946 0958')).toEqual({
+			ok: false,
+			reason: 'missing_country_code'
+		});
 	});
 
 	it('rejects empty input', () => {

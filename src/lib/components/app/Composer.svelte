@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { tick } from 'svelte';
 	import { CornerDownLeft, X } from '@lucide/svelte';
 	import * as InputGroup from '$lib/components/ui/input-group/index.js';
 	import { Spinner } from '$lib/components/ui/spinner/index.js';
@@ -35,6 +36,8 @@
 		refineError = null,
 		generating = false,
 		generateError = null,
+		hasMessages = true,
+		focusNonce = 0,
 		onapprove,
 		onskip,
 		onconfirmstale,
@@ -73,6 +76,9 @@
 		refineError?: string | null;
 		generating?: boolean;
 		generateError?: string | null;
+		hasMessages?: boolean;
+		/** Bump after starting a chat so the composer takes keyboard focus. */
+		focusNonce?: number;
 		onapprove?: (text?: string) => boolean | void | Promise<boolean | void>;
 		onskip?: () => void;
 		onconfirmstale?: (text?: string) => boolean | void | Promise<boolean | void>;
@@ -88,6 +94,12 @@
 	} = $props();
 
 	let busy = $state(false);
+	let textareaEl: HTMLTextAreaElement | null = $state(null);
+
+	$effect(() => {
+		if (focusNonce === 0) return;
+		void tick().then(() => textareaEl?.focus());
+	});
 	const replyAuthor = $derived(
 		replyTo ? (replyTo.from_me ? 'You' : senderLabel(replyTo.sender)) : ''
 	);
@@ -181,6 +193,7 @@
 		{refineError}
 		{generating}
 		{generateError}
+		{hasMessages}
 		{onapprove}
 		{onskip}
 		{onconfirmstale}
@@ -212,6 +225,8 @@
 				<InputGroup.Textarea
 					class="field-sizing-content max-h-48 min-h-16"
 					name="message"
+					data-testid="composer-input"
+					bind:ref={textareaEl}
 					{placeholder}
 					{disabled}
 					bind:value

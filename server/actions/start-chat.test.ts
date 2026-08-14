@@ -148,7 +148,11 @@ describe('start-chat', () => {
 		const database = openTempDb();
 		const result = await startChat(makeDeps(), '06 1234 5678');
 
-		expect(result).toMatchObject({ kind: 'error', status: 400 });
+		expect(result).toMatchObject({
+			kind: 'error',
+			status: 400,
+			extra: { reason: 'missing_country_code' }
+		});
 		expect(listChats(database)).toHaveLength(0);
 	});
 

@@ -19,6 +19,12 @@ export function draftPanelBranch(options: {
 	/** PL-U3 Half B — the draft is not the text the owner read. */
 	textConflict?: unknown;
 	agentEligible: boolean;
+	/**
+	 * NEWCHAT-2 — a 1:1 with no messages has nothing to draft from. Generate
+	 * would 409; do not offer the button. Defaults to true so existing callers
+	 * that already know there is history stay on the generate path.
+	 */
+	hasMessages?: boolean;
 }): DraftPanelBranch {
 	// Ranked above `stale` deliberately: both prompts can be live at once, and
 	// the stale prompt's own button queues the current draft. If that branch
@@ -29,6 +35,6 @@ export function draftPanelBranch(options: {
 	if (options.draft && isVisibleDraftStatus(options.draft.status as DraftStatus)) {
 		return 'visible';
 	}
-	if (options.agentEligible) return 'generate';
+	if (options.agentEligible && options.hasMessages !== false) return 'generate';
 	return 'hidden';
 }
