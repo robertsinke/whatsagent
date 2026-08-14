@@ -285,14 +285,19 @@ describe('mcp stdio entry point', () => {
 			const behind = codeSchemaVersion();
 			db!.prepare('DELETE FROM schema_version WHERE version = ?').run(behind);
 			const tablesBefore = tableNames(db!);
+			// Close before spawning, and re-open after. An open handle serves its
+			// own WAL snapshot, so asserting through it could report "unchanged"
+			// about a database the child had in fact migrated — which would make
+			// the strongest assertion in this suite the one most able to lie.
+			db!.close();
 
 			const { code, stderr } = await runToExit(dir);
 
 			expect(code).toBe(1);
 			expect(stderr).toContain('Launch WhatsAgent once so it can migrate');
-			// Refusing must leave the schema exactly as it was.
-			expect(recordedVersion(db!)).toBe(behind - 1);
-			expect(tableNames(db!)).toEqual(tablesBefore);
+			db = openDatabase({ dataDir: dir, migrate: false });
+			expect(recordedVersion(db)).toBe(behind - 1);
+			expect(tableNames(db)).toEqual(tablesBefore);
 		},
 		SPAWN_TIMEOUT_MS
 	);

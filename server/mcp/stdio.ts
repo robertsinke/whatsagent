@@ -83,6 +83,9 @@ import { callRegistryTool, listRegistryTools } from './surface.js';
  */
 const PROBE_TIMEOUT_MS = 3_000;
 
+/** How long a failed probe suppresses re-dialling the same discovery file. */
+const REJECTED_PROBE_TTL_MS = 5_000;
+
 const SERVER_NAME = 'whatsagent';
 
 type AttachedLink = { client: Client; key: string };
@@ -166,8 +169,17 @@ class ModeRouter {
 	readonly #dataDir: string;
 	#attached: AttachedLink | null = null;
 	#headless: Headless | null = null;
-	/** Discovery-file identity already probed and rejected — do not re-dial it. */
-	#rejectedKey: string | null = null;
+	/**
+	 * Discovery-file identity already probed and rejected, with the time it was
+	 * rejected. Cached so a stale file does not cost a network dial on every
+	 * request — but EXPIRING, because the rejection may be a race rather than a
+	 * verdict: `createApp` writes the runtime file from `reconcilePanelRuntime()`
+	 * before `server.on('listening')` whenever the port is not ephemeral, so
+	 * there is a window in which the file is real and `/mcp` is not yet
+	 * answering. Caching that forever would strand the session in headless mode
+	 * for the whole life of an app it could have attached to.
+	 */
+	#rejected: { key: string; at: number } | null = null;
 
 	constructor(dataDir: string) {
 		this.#dataDir = dataDir;
@@ -200,7 +212,7 @@ class ModeRouter {
 		if (this.#attached) return this.#attached;
 
 		const runtime = readMcpRuntimeFile(this.#dataDir);
-		if (runtime && runtimeKey(runtime) !== this.#rejectedKey && processAlive(runtime.pid)) {
+		if (runtime && this.#worthProbing(runtimeKey(runtime)) && processAlive(runtime.pid)) {
 			const link = await probeAttached(this.#dataDir);
 			if (link) {
 				// One writer is the point: hand the database back before proxying.
@@ -209,9 +221,14 @@ class ModeRouter {
 				this.#attached = link;
 				return link;
 			}
-			this.#rejectedKey = runtimeKey(runtime);
+			this.#rejected = { key: runtimeKey(runtime), at: Date.now() };
 		}
 		return this.#headless!;
+	}
+
+	#worthProbing(key: string): boolean {
+		if (this.#rejected === null || this.#rejected.key !== key) return true;
+		return Date.now() - this.#rejected.at >= REJECTED_PROBE_TTL_MS;
 	}
 
 	async close(): Promise<void> {
