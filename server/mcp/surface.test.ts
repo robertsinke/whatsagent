@@ -14,6 +14,11 @@ import { EventBus } from '../api/events.js';
 import { actionRegistry, listActionsForCaller } from '../actions/index.js';
 import { MCP_SERVER_INSTRUCTIONS } from '../agent/panel/harness.js';
 import { mcpTokenPath } from './token.js';
+import {
+	mcpRuntimePath,
+	readMcpRuntimeFile,
+	writeMcpRuntimeFile
+} from './runtime.js';
 import { isMcpEnabled, mcpOptionOverride, MCP_PATH } from './surface.js';
 
 const REFUSED = [
@@ -276,6 +281,86 @@ describe('MCP surface — auth', () => {
 		const path = app!.mcp!.tokenPath;
 		expect(existsSync(path)).toBe(true);
 		expect(statSync(path).mode & 0o777).toBe(0o600);
+	});
+});
+
+describe('MCP surface — runtime discovery file (MCPX-3)', () => {
+	it('exists after start with the real port and the live token, at 0600', async () => {
+		await startApp(true);
+		const runtime = readMcpRuntimeFile(dataDir!);
+		expect(runtime).not.toBeNull();
+		expect(runtime!.port).toBe(app!.port);
+		expect(runtime!.port).not.toBe(0);
+		expect(runtime!.token).toBe(app!.mcp!.token);
+		expect(runtime!.url).toBe(`${app!.url}${MCP_PATH}`);
+		expect(runtime!.host).toBe('127.0.0.1');
+		expect(runtime!.pid).toBe(process.pid);
+		expect(runtime!.dataDir).toBe(dataDir);
+		expect(statSync(mcpRuntimePath(dataDir!)).mode & 0o777).toBe(0o600);
+	});
+
+	it('is gone after close()', async () => {
+		await startApp(true);
+		const path = mcpRuntimePath(dataDir!);
+		expect(existsSync(path)).toBe(true);
+		await app!.close();
+		app = undefined;
+		db = undefined;
+		expect(existsSync(path)).toBe(false);
+	});
+
+	it('follows the mcp_enabled toggle while running', async () => {
+		delete process.env.WHATSAGENT_MCP;
+		await startAppWithSettings({ mcp_enabled: 'true' });
+		expect(readMcpRuntimeFile(dataDir!)).not.toBeNull();
+		expect(readMcpRuntimeFile(dataDir!)!.token).toBe(app!.mcp!.token);
+
+		const off = await fetch(`${app!.url}/api/settings`, {
+			method: 'PUT',
+			headers: { 'Content-Type': 'application/json', Origin: app!.url },
+			body: JSON.stringify({ key: 'mcp_enabled', value: 'false' })
+		});
+		expect(off.status).toBe(200);
+		expect(existsSync(mcpRuntimePath(dataDir!))).toBe(false);
+		expect(app!.mcp).toBeNull();
+
+		const on = await fetch(`${app!.url}/api/settings`, {
+			method: 'PUT',
+			headers: { 'Content-Type': 'application/json', Origin: app!.url },
+			body: JSON.stringify({ key: 'mcp_enabled', value: 'true' })
+		});
+		expect(on.status).toBe(200);
+		const runtime = readMcpRuntimeFile(dataDir!);
+		expect(runtime).not.toBeNull();
+		expect(runtime!.port).toBe(app!.port);
+		expect(runtime!.port).not.toBe(0);
+		expect(runtime!.token).toBe(app!.mcp!.token);
+	});
+
+	it('removes a pre-planted stale file at a boot with MCP off', async () => {
+		dataDir = mkdtempSync(join(tmpdir(), 'whatsagent-mcp-'));
+		writeMcpRuntimeFile(dataDir, {
+			pid: 1,
+			startedAt: 1,
+			host: '127.0.0.1',
+			port: 9,
+			url: 'http://127.0.0.1:9/mcp',
+			token: 's'.repeat(64),
+			dataDir
+		});
+		expect(existsSync(mcpRuntimePath(dataDir))).toBe(true);
+		db = openDatabase({ dataDir });
+		app = createApp({
+			db,
+			dataDir,
+			events: new EventBus(),
+			port: 0,
+			host: '127.0.0.1',
+			staticDir: null,
+			mcp: false
+		});
+		await app.start();
+		expect(existsSync(mcpRuntimePath(dataDir!))).toBe(false);
 	});
 });
 

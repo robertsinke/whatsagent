@@ -29,7 +29,8 @@ import { chatViewFor } from './api/chat-view.js';
 import { createRequestHandler, type RoutesDeps } from './api/routes.js';
 import { createSessionState } from './api/session.js';
 import { buildAllowedOrigins, validateOriginAndHost } from './api/security.js';
-import { createMcpSurface, isMcpEnabled, mcpOptionOverride } from './mcp/surface.js';
+import { removeMcpRuntimeFile, writeMcpRuntimeFile } from './mcp/runtime.js';
+import { createMcpSurface, isMcpEnabled, mcpOptionOverride, MCP_PATH } from './mcp/surface.js';
 import { ensureMcpToken, removeMcpTokenFile } from './mcp/token.js';
 import {
 	createPanelHarness,
@@ -415,6 +416,7 @@ export function createApp(options: CreateAppOptions = {}): App {
 			: (options.staticDir ?? defaultStaticDir());
 
 	let listeningPort = requestedPort;
+	const startedAt = Date.now();
 
 	const getAllowedOrigins = () => buildAllowedOrigins(listeningPort);
 
@@ -617,6 +619,33 @@ export function createApp(options: CreateAppOptions = {}): App {
 					: '[panel] agent panel requested but the MCP surface is off — the panel has no tools and will report itself unavailable. Pass `mcp: true` (or WHATSAGENT_MCP=1) alongside the explicit panel option; the Settings toggle enables both together.'
 			);
 		}
+
+		syncMcpRuntimeFile();
+	}
+
+	/**
+	 * MCPX-3 — the packaged app binds port 0 and the token rotates every launch,
+	 * so an external agent has no static URL or credential. This file is the
+	 * discovery seam Unit D reads. Token is account-adjacent: never log it.
+	 *
+	 * Disable (or a boot with MCP off) must remove, not leave a stale pointer
+	 * at a dead process. Write only when the surface is armed; `listeningPort`
+	 * is still the requested value until `server.on('listening')`.
+	 */
+	function syncMcpRuntimeFile(): void {
+		if (!mcpInfo) {
+			removeMcpRuntimeFile(dataDir);
+			return;
+		}
+		writeMcpRuntimeFile(dataDir, {
+			pid: process.pid,
+			startedAt,
+			host,
+			port: listeningPort,
+			url: `http://${host}:${listeningPort}${MCP_PATH}`,
+			token: mcpInfo.token,
+			dataDir
+		});
 	}
 
 	reconcilePanelRuntime();
@@ -742,6 +771,8 @@ export function createApp(options: CreateAppOptions = {}): App {
 			listeningPort = addr.port;
 		}
 		started = true;
+		// The only place `listeningPort` is the OS-assigned port, not 0.
+		syncMcpRuntimeFile();
 	});
 
 	async function start(): Promise<void> {
@@ -846,6 +877,7 @@ export function createApp(options: CreateAppOptions = {}): App {
 
 	async function close(): Promise<void> {
 		closing = true;
+		removeMcpRuntimeFile(dataDir);
 		channelUnsub?.();
 		if (reflectTimer) clearInterval(reflectTimer);
 		reflectTimer = undefined;
