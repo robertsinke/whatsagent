@@ -35,6 +35,10 @@ export const PRIVATE_DATA_HOME_PATH_ALLOWLIST = [
 	'.slayzone/lib.sh',
 	'.slayzone/require-visual-evidence.sh',
 	'.slayzone/wave-done-ping.sh',
+	// The blocked-worker counterpart of wave-done-ping.sh. Same symlink shape,
+	// same reason: a worker that CANNOT finish never pings, so this closes the
+	// asymmetry where the loop was loud about success and silent about stuck.
+	'.slayzone/wave-blocked-ping.sh',
 	// Absolute hook command paths; .claude/ is stripped from the export.
 	'.claude/settings.json',
 	// Names worktree roots / role-file paths; .slayzone/ stripped from export.
