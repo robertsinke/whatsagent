@@ -216,6 +216,10 @@ export type ListMessagesPageOptions = {
 	beforeTs?: number;
 	/** Tie-break when multiple messages share `beforeTs`. */
 	beforeId?: string;
+	/** Exclusive lower bound: return messages newer than this timestamp. */
+	afterTs?: number;
+	/** Tie-break when multiple messages share `afterTs`. */
+	afterId?: string;
 	/**
 	 * U5 — load a page *centered* on this message id, so an off-page
 	 * jump-to-quote can fetch around its target. Mutually exclusive with
@@ -231,7 +235,8 @@ export type ListMessagesPageOptions = {
 
 /**
  * Newest-first page of messages for a chat (client reverses for display).
- * When `beforeTs` is omitted, returns the latest `limit` messages.
+ * When `beforeTs` and `afterTs` are omitted, returns the latest `limit` messages.
+ * The `afterTs`/`afterId` mode returns oldest-first for incremental consumers.
  *
  * U5: when `focusMsgId` is set, returns up to `limit` rows centered on the
  * target — roughly half older, half newer. The target is always included when
@@ -252,6 +257,8 @@ export function listMessagesPage(
 	const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
 	const beforeTs = options.beforeTs;
 	const beforeId = options.beforeId;
+	const afterTs = options.afterTs;
+	const afterId = options.afterId;
 	const focusMsgId = options.focusMsgId;
 
 	if (focusMsgId !== undefined) {
@@ -293,7 +300,28 @@ export function listMessagesPage(
 	}
 
 	let rows: MessageRow[];
-	if (beforeTs !== undefined && beforeId !== undefined) {
+	if (afterTs !== undefined && afterId !== undefined) {
+		rows = db
+			.prepare(
+				`SELECT * FROM messages
+				 WHERE chat_jid = ?
+				   AND (ts > ? OR (ts = ? AND id > ?))
+				 ORDER BY ts ASC, id ASC
+				 LIMIT ?`
+			)
+			.all(chatJid, afterTs, afterTs, afterId, limit) as MessageRow[];
+		return rows.map(mapMessage);
+	} else if (afterTs !== undefined) {
+		rows = db
+			.prepare(
+				`SELECT * FROM messages
+				 WHERE chat_jid = ? AND ts > ?
+				 ORDER BY ts ASC, id ASC
+				 LIMIT ?`
+			)
+			.all(chatJid, afterTs, limit) as MessageRow[];
+		return rows.map(mapMessage);
+	} else if (beforeTs !== undefined && beforeId !== undefined) {
 		rows = db
 			.prepare(
 				`SELECT * FROM messages

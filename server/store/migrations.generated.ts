@@ -439,5 +439,9 @@ CREATE INDEX IF NOT EXISTS idx_calendar_proposals_status
 ALTER TABLE outbox ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE outbox ADD COLUMN last_error TEXT;
 ALTER TABLE outbox ADD COLUMN failed_at INTEGER;
+` },
+	{ version: 17, name: "017-message-cursor-index.sql", sql: `-- Incremental message reads by chat and stable (timestamp, id) cursor.
+CREATE INDEX IF NOT EXISTS idx_messages_chat_ts_id
+  ON messages(chat_jid, ts, id);
 ` }
 ]);

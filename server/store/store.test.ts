@@ -74,6 +74,10 @@ describe('migrations', () => {
 			'wa_auth_creds',
 			'wa_auth_keys'
 		]);
+		const cursorIndex = database
+			.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_messages_chat_ts_id'")
+			.get() as { name?: string } | undefined;
+		expect(cursorIndex?.name).toBe('idx_messages_chat_ts_id');
 	});
 
 	it('re-running migrations is a no-op', () => {
@@ -284,6 +288,32 @@ describe('chats + messages', () => {
 			updated_at: 3
 		});
 		expect(listMessageReactions(database, 'team@g.us', 'not-here-yet')).toEqual([]);
+	});
+});
+
+describe('listMessagesPage — incremental cursor', () => {
+	const JID = 'cursor@s.whatsapp.net';
+
+	it('returns only messages after the exclusive (ts, id) cursor', () => {
+		const database = openTempDb();
+		upsertChat(database, { jid: JID, kind: '1:1', last_msg_at: 300 });
+		const rows: Array<[string, number]> = [['a', 100], ['b', 100], ['c', 101], ['d', 102]];
+		for (const [id, ts] of rows) {
+			upsertMessage(database, { id, chat_jid: JID, from_me: false, ts, text: id });
+		}
+
+		expect(listMessagesPage(database, JID, { afterTs: 100, afterId: 'a', limit: 10 }).map((m) => m.id))
+			.toEqual(['b', 'c', 'd']);
+		expect(listMessagesPage(database, JID, { afterTs: 101, limit: 10 }).map((m) => m.id))
+			.toEqual(['d']);
+		expect(listMessagesPage(database, 'other@s.whatsapp.net', { afterTs: 0, limit: 10 })).toEqual([]);
+	});
+
+	it('returns an empty page after the tail', () => {
+		const database = openTempDb();
+		upsertChat(database, { jid: JID, kind: '1:1', last_msg_at: 100 });
+		upsertMessage(database, { id: 'a', chat_jid: JID, from_me: false, ts: 100, text: 'a' });
+		expect(listMessagesPage(database, JID, { afterTs: 100, afterId: 'a', limit: 10 })).toEqual([]);
 	});
 });
 

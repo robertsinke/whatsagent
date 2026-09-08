@@ -904,10 +904,16 @@ async function handleApi(
 		const limit = parsePositiveInt(url.searchParams.get('limit'), 50);
 		const beforeTsRaw = url.searchParams.get('beforeTs');
 		const beforeId = url.searchParams.get('beforeId') ?? undefined;
+		const afterTsRaw = url.searchParams.get('afterTs');
+		const afterId = url.searchParams.get('afterId') ?? undefined;
 		const focusMsgId = url.searchParams.get('focusMsgId') ?? undefined;
 		const beforeTs =
 			beforeTsRaw !== null && beforeTsRaw !== ''
 				? Number.parseInt(beforeTsRaw, 10)
+				: undefined;
+		const afterTs =
+			afterTsRaw !== null && afterTsRaw !== ''
+				? Number.parseInt(afterTsRaw, 10)
 				: undefined;
 		// `focusMsgId` and `beforeTs` are mutually exclusive paging modes — the
 		// former centers a page on a target (U5 jump-to-quote), the latter pages
@@ -931,7 +937,9 @@ async function handleApi(
 			chatJid: jid,
 			limit,
 			...(beforeTs !== undefined && Number.isFinite(beforeTs) ? { beforeTs } : {}),
-			...(beforeId ? { beforeId } : {})
+			...(beforeId ? { beforeId } : {}),
+			...(afterTs !== undefined && Number.isFinite(afterTs) ? { afterTs } : {}),
+			...(afterId ? { afterId } : {})
 		});
 		return;
 	}

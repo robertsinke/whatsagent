@@ -83,12 +83,21 @@ export const api = {
 	 */
 	messages: (
 		jid: string,
-		options: { limit?: number; beforeTs?: number; beforeId?: string; focusMsgId?: string } = {}
+		options: {
+			limit?: number;
+			beforeTs?: number;
+			beforeId?: string;
+			afterTs?: number;
+			afterId?: string;
+			focusMsgId?: string;
+		} = {}
 	) => {
 		const params = new URLSearchParams();
 		if (options.limit) params.set('limit', String(options.limit));
 		if (options.beforeTs !== undefined) params.set('beforeTs', String(options.beforeTs));
 		if (options.beforeId) params.set('beforeId', options.beforeId);
+		if (options.afterTs !== undefined) params.set('afterTs', String(options.afterTs));
+		if (options.afterId) params.set('afterId', options.afterId);
 		if (options.focusMsgId) params.set('focusMsgId', options.focusMsgId);
 		const query = params.toString();
 		return request<{ items: Message[] }>(

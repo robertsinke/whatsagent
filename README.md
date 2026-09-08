@@ -106,6 +106,18 @@ The agent can read, draft, start a chat, and file a proposal; it cannot send,
 react, approve, or confirm. Details, including what changes when the app is
 closed: [docs/external-agents.md](docs/external-agents.md).
 
+For scriptable read access, `scripts/whatsagent-cli.mjs` speaks the same stdio
+MCP surface and emits one JSON object on stdout:
+
+```bash
+node scripts/whatsagent-cli.mjs chats --limit 30
+node scripts/whatsagent-cli.mjs messages --chat-jid 4915550100@s.whatsapp.net --limit 60
+# Incremental read after a saved high-water mark:
+node scripts/whatsagent-cli.mjs messages --chat-jid 4915550100@s.whatsapp.net --after-ts 1700000000 --after-id MESSAGE_ID
+```
+
+It is read-only and supports the MCP server's headless `--data-dir` option.
+
 ## First run
 
 An empty, unlinked app opens a three-step welcome flow instead of the chat

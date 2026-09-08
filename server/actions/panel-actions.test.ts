@@ -215,6 +215,21 @@ describe('get-messages', () => {
 		expect(body.has_more).toBe(true);
 	});
 
+	it('the cursor pages forward without rereading older messages', async () => {
+		const deps = makeDeps();
+		seed(db!);
+		const result = (await dispatch(
+			actionRegistry,
+			'get-messages',
+			{ chatJid: DIRECT, limit: 3, afterTs: 103, afterId: 'm3' },
+			{ caller: 'tool', deps }
+		)) as { body: { items: { id: string }[]; next_after_ts: number; next_after_id: string } };
+		expect(result.body.items.map((m) => m.id)).toEqual(['m4', 'm5', 'm6']);
+		expect(result.body.next_after_ts).toBe(106);
+		expect(result.body.next_after_id).toBe('m6');
+
+	});
+
 	it('the cursor actually pages backward', async () => {
 		const deps = makeDeps();
 		seed(db!);
