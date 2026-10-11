@@ -98,6 +98,14 @@ const SERVER_NAME = 'whatsagent';
 const MCP_DISABLED_REFUSAL =
 	'whatsagent: external agents are switched off. Open WhatsAgent → Settings → External agents (MCP) to turn them on.';
 
+/**
+ * Clients cache `initialize`, so the mode paragraph passed to the `Server`
+ * constructor stays the startup wording for the life of the session. This
+ * line is the handoff: the first tool result after `current()` attaches.
+ * It is a note on that result — nothing here sends.
+ */
+const ATTACHED_LIVE_NOTE = 'WhatsAgent is now open. Approvals happen live.';
+
 type AttachedLink = { client: Client; key: string };
 
 type Headless = { db: AppDatabase; deps: RoutesDeps };
@@ -190,6 +198,11 @@ class ModeRouter {
 	 * for the whole life of an app it could have attached to.
 	 */
 	#rejected: { key: string; at: number } | null = null;
+	/**
+	 * Set when this session first leaves headless for the running app.
+	 * Consumed by the next `tools/call` result, then cleared.
+	 */
+	#announceAttached = false;
 
 	constructor(dataDir: string) {
 		this.#dataDir = dataDir;
@@ -247,6 +260,9 @@ class ModeRouter {
 				// wait proxies here instead of opening a second headless
 				// connection. The close still waits for the in-flight draft
 				// chain — closing under it leaves the row stuck in `drafting`.
+				// The instructions from startup still say the app is closed;
+				// the next tool result carries the one-line correction.
+				this.#announceAttached = true;
 				this.#attached = link;
 				const stale = this.#headless;
 				this.#headless = null;
@@ -256,6 +272,16 @@ class ModeRouter {
 			this.#rejected = { key: runtimeKey(runtime), at: Date.now() };
 		}
 		return await this.#liveHeadless();
+	}
+
+	/**
+	 * The one-line attach note, once. `tools/list` must not consume it:
+	 * only the next tool result tells the client the app is open.
+	 */
+	consumeAttachedNote(): string | null {
+		if (!this.#announceAttached) return null;
+		this.#announceAttached = false;
+		return ATTACHED_LIVE_NOTE;
 	}
 
 	#worthProbing(key: string): boolean {
@@ -301,10 +327,16 @@ function createStdioServer(router: ModeRouter): Server {
 	server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
 		const link = await router.current();
 		if (isAttached(link)) {
-			return (await link.client.callTool({
+			const result = (await link.client.callTool({
 				name: request.params.name,
 				arguments: request.params.arguments ?? {}
 			})) as CallToolResult;
+			const note = router.consumeAttachedNote();
+			if (!note) return result;
+			return {
+				...result,
+				content: [...(result.content ?? []), { type: 'text', text: note }]
+			};
 		}
 		// Same builder the HTTP surface uses, so `caller: 'tool'` policy, the
 		// dispatch call and the result encoding are one implementation — R9's

@@ -243,12 +243,22 @@ describe('mcp stdio entry point', () => {
 			});
 			await app.start();
 
-			await client.callTool({
+			const result = await client.callTool({
 				name: 'edit-draft',
 				arguments: { chatJid: ALICE, text: 'after the app came up' }
 			});
 
 			expect(seen).toContain('draft-updated');
+			// initialize still says the app is closed; this result is the handoff.
+			expect(textOf(result)).toContain('WhatsAgent is now open. Approvals happen live.');
+			expect(client.getInstructions() ?? '').toContain('WhatsAgent is CLOSED');
+
+			const later = await client.callTool({
+				name: 'edit-draft',
+				arguments: { chatJid: ALICE, text: 'still attached' }
+			});
+			expect(textOf(later)).not.toContain('Approvals happen live');
+			expect(listOutbox(db!)).toHaveLength(0);
 		},
 		SPAWN_TIMEOUT_MS
 	);
