@@ -433,6 +433,24 @@ describe('start-chat is wired to the live channel (NEWCHAT-1)', () => {
 		expect(res.status).toBe(503);
 		expect(getChat(db, `${FIXTURE_US_PHONE}@s.whatsapp.net`)).toBeUndefined();
 	});
+
+	it('uses an injected checkRegistered when no channel is attached', async () => {
+		dataDir = mkdtempSync(join(tmpdir(), 'whatsagent-runtime-'));
+		db = openDatabase({ dataDir });
+		const checkRegistered = vi.fn(async (jid: string) => ({ registered: true, jid }));
+		app = createApp({ db, port: 0, staticDir: null, checkRegistered });
+		await app.start();
+
+		const res = await fetch(`${app.url}/api/chats`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', Origin: app.url },
+			body: JSON.stringify({ phone: `+${FIXTURE_US_PHONE}` })
+		});
+
+		expect(res.status).toBe(201);
+		expect(checkRegistered).toHaveBeenCalledWith(`${FIXTURE_US_PHONE}@s.whatsapp.net`);
+		expect(getChat(db, `${FIXTURE_US_PHONE}@s.whatsapp.net`)).toMatchObject({ kind: '1:1' });
+	});
 });
 
 describe('assertSupportedPlatform', () => {

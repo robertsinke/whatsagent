@@ -424,7 +424,13 @@ export class AppState {
 		// flip `loadingMessages` — ConversationPane unmounts the stream while
 		// loading is true, which would yank the owner's scroll position even
 		// when the message array is preserved below.
-		const preserveWindow = !chatChanged && this.messages.length > 0;
+		// The window only counts if it belongs to this jid. `focus-chat` sets
+		// `selectedJid` before its fetch returns, and `startChatFromList` then
+		// opens the same jid again. Without this check that second open keeps
+		// the previous chat's messages under the new header.
+		const windowIsThisChat =
+			this.messages.length === 0 || this.messages.every((m) => m.chat_jid === jid);
+		const preserveWindow = !chatChanged && this.messages.length > 0 && windowIsThisChat;
 		if (!preserveWindow) this.loadingMessages = true;
 		this.stalePrompt = null;
 		// Chat-scoped like the stale prompt: without this the contested text from

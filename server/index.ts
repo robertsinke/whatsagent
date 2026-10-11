@@ -93,6 +93,12 @@ export type CreateAppOptions = {
 	staticDir?: string | null;
 	/** Optional WhatsApp (or other) channel — started when provided. */
 	channel?: Channel;
+	/**
+	 * NEWCHAT-1 lookup without attaching a channel. Production takes this from
+	 * `channel.checkRegistered`. The UI preview injects a local answer so
+	 * start-chat can create a row without opening a WhatsApp socket.
+	 */
+	checkRegistered?: (jid: string) => Promise<{ registered: boolean; jid: string | null }>;
 	/** Override the D2 on-demand media fetch (tests). */
 	downloadMedia?: (messageId: string) => Promise<unknown>;
 	/** App-data dir (media cache root). Defaults to the DB's data dir. */
@@ -458,13 +464,15 @@ export function createApp(options: CreateAppOptions = {}): App {
 			? (chatJid, count) => options.channel!.deepenHistory!(chatJid, count)
 			: undefined,
 		// NEWCHAT-1 — `start-chat` refuses to create a chat for a number it cannot
-		// confirm is on WhatsApp, so without this line the action is permanently
-		// dep-absent in production and the feature does not exist outside its
-		// tests. Absent when no channel is attached, which is the honest state:
-		// the check needs a live socket.
-		checkRegistered: options.channel?.checkRegistered
-			? (jid) => options.channel!.checkRegistered!(jid)
-			: undefined,
+		// confirm is on WhatsApp. Production takes the check from the live
+		// channel; without that method the action stays dep-absent. An explicit
+		// `options.checkRegistered` is the UI preview's local answer, so the
+		// new-chat dialog can be exercised without a WhatsApp socket.
+		checkRegistered:
+			options.checkRegistered ??
+			(options.channel?.checkRegistered
+				? (jid) => options.channel!.checkRegistered!(jid)
+				: undefined),
 		activeProvider: options.activeProvider,
 		providerDiscovery: options.providerDiscovery
 	};

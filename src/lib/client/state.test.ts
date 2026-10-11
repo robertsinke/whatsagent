@@ -1358,6 +1358,46 @@ describe('AppState focus-chat (PANEL-S4)', () => {
 		// The chat row the list renders still carries its unread count.
 		expect(state.chats.find((c) => c.jid === JID)?.unread).toBe(3);
 	});
+
+	it('drops the previous chat window when a second open follows focus-chat', async () => {
+		const next = 'new@s.whatsapp.net';
+		const state = new AppState();
+		state.chats = [
+			chatRow(),
+			chatRow({ jid: next, display_jid: next, name: null })
+		];
+		let release = () => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.includes('/messages?')) {
+				if (url.includes(encodeURIComponent(next))) {
+					await gate;
+					return jsonResponse({ items: [] });
+				}
+				return jsonResponse({ items: [inbound('m1', 1)] });
+			}
+			if (url.endsWith('/draft')) return jsonResponse({ error: 'Not found' }, 404);
+			throw new Error(`Unexpected request: ${url}`);
+		});
+
+		await state.openChat(JID);
+		expect(state.messages.map((m) => m.id)).toEqual(['m1']);
+
+		// focus-chat sets selectedJid and starts the fetch. The explicit open
+		// that follows must not treat Maya's window as the new chat's.
+		const fromEvent = state.openChat(next);
+		await vi.waitFor(() => expect(state.selectedJid).toBe(next));
+		const fromCaller = state.openChat(next);
+		release();
+		await fromEvent;
+		await fromCaller;
+
+		expect(state.selectedJid).toBe(next);
+		expect(state.messages).toEqual([]);
+	});
 });
 
 /**

@@ -21,6 +21,9 @@
  *     Attaches the fake channel and drives the real session state machine to
  *     that state. Without it there is no channel and the session stays at
  *     `initializing` with a populated chat list — the pre-OSS-P3.4 behaviour.
+ *     That populated shell answers start-chat with a local "registered" result
+ *     so the new-chat dialog can open a row. No WhatsApp socket is opened.
+ *     Session modes do not: they wipe the fixtures for the first-run screens.
  *   PREVIEW_PROVIDERS=real|all|none|ollama-down|mismatch
  *     Stubs provider discovery. `none` is the first-run case that matters:
  *     nothing detected, three install links, pairing still reachable.
@@ -808,8 +811,13 @@ const app = createApp({
   host: '127.0.0.1',
   staticDir: join(process.cwd(), 'build'),
   // Either no channel, or the fake one — neither opens a WhatsApp socket and
-  // neither touches the owner's stored credentials.
+  // neither touches the owner's stored credentials. The populated shell (no
+  // session mode) still answers start-chat locally so the new-chat dialog can
+  // open a row. Session modes stay dep-absent: they are the first-run screens.
   channel: sessionMode ? createPreviewChannel(sessionMode) : undefined,
+  ...(!sessionMode
+    ? { checkRegistered: async (jid: string) => ({ registered: true, jid }) }
+    : {}),
   draftProvider: fakeProvider,
   providerName: 'claude',
   activeProvider: {

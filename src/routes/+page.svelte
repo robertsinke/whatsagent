@@ -103,6 +103,9 @@
 	}
 
 	async function startChatFromList(chat: Chat) {
+		// Same as openChat: text typed for the previous chat must not travel
+		// into the box now aimed at the new number. Clear before focus.
+		composerValue = '';
 		app.ingestChat(chat);
 		await api.openChat(chat.jid);
 		await app.openChat(chat.jid);
