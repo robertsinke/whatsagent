@@ -88,6 +88,14 @@ const REJECTED_PROBE_TTL_MS = 5_000;
 
 const SERVER_NAME = 'whatsagent';
 
+/**
+ * The only text a disabled `mcp_enabled` row may produce. Startup and a live
+ * session that is switched off mid-flight share it, so a client cannot tell
+ * the two refusals apart — and a later edit cannot let them drift.
+ */
+const MCP_DISABLED_REFUSAL =
+	'whatsagent: external agents are switched off. Open WhatsAgent → Settings → External agents (MCP) to turn them on.';
+
 type AttachedLink = { client: Client; key: string };
 
 type Headless = { db: AppDatabase; deps: RoutesDeps };
@@ -200,11 +208,27 @@ class ModeRouter {
 		const db = openHeadlessDatabase(this.#dataDir);
 		if (!getMcpEnabledSetting(db)) {
 			db.close();
-			throw new HeadlessRefusal(
-				'whatsagent: external agents are switched off. Open WhatsAgent → Settings → External agents (MCP) to turn them on.'
-			);
+			throw new HeadlessRefusal(MCP_DISABLED_REFUSAL);
 		}
 		return { db, deps: await createHeadlessDeps(db, this.#dataDir) };
+	}
+
+	/**
+	 * Headless deps for this call, re-reading `mcp_enabled` first.
+	 *
+	 * The row is the owner's switch. It is checked at open, and again on every
+	 * later call: turning External agents off must stop a session that is
+	 * already running. Anything other than exactly enabled closes that
+	 * database, drops the cache, and fails with the startup refusal. The stale
+	 * deps are not served.
+	 */
+	async #liveHeadless(): Promise<Headless> {
+		if (!this.#headless) this.#headless = await this.#openHeadless();
+		if (getMcpEnabledSetting(this.#headless.db)) return this.#headless;
+		const stale = this.#headless;
+		this.#headless = null;
+		stale.db.close();
+		throw new HeadlessRefusal(MCP_DISABLED_REFUSAL);
 	}
 
 	/** The link to use for this request, re-probing when still headless. */
@@ -223,7 +247,7 @@ class ModeRouter {
 			}
 			this.#rejected = { key: runtimeKey(runtime), at: Date.now() };
 		}
-		return this.#headless!;
+		return await this.#liveHeadless();
 	}
 
 	#worthProbing(key: string): boolean {

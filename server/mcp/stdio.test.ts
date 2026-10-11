@@ -333,6 +333,31 @@ describe('mcp stdio entry point', () => {
 	);
 
 	it(
+		'stops a live headless session when mcp_enabled is switched off',
+		async () => {
+			const dir = seedDataDir();
+			const client = await connect(dir);
+
+			await client.callTool({
+				name: 'edit-draft',
+				arguments: { chatJid: ALICE, text: 'while external agents were on' }
+			});
+			expect(getDraft(db!, ALICE)?.text).toBe('while external agents were on');
+
+			setSetting(db!, MCP_ENABLED_SETTING, 'false');
+
+			await expect(
+				client.callTool({
+					name: 'edit-draft',
+					arguments: { chatJid: ALICE, text: 'must not land after the switch' }
+				})
+			).rejects.toThrow(/External agents \(MCP\)/);
+			expect(getDraft(db!, ALICE)?.text).toBe('while external agents were on');
+		},
+		SPAWN_TIMEOUT_MS
+	);
+
+	it(
 		'refuses a data dir with no database, creating nothing',
 		async () => {
 			const empty = mkdtempSync(join(tmpdir(), 'whatsagent-stdio-empty-'));
