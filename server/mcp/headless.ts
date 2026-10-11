@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import type { ActionResult } from '../actions/index.js';
-import { draftChat } from '../agent/drafter.js';
+import { draftChat, type AgentDraftHooks } from '../agent/drafter.js';
+import type { Memory } from '../agent/memory/memory.js';
 import { NullMemory } from '../agent/memory/null-memory.js';
 import { refineDraft } from '../agent/refiner.js';
 import { EventBus } from '../api/events.js';
@@ -21,6 +22,7 @@ import {
 } from '../store/db.js';
 import { getDraft } from '../store/drafts.js';
 import { listSettings } from '../store/settings.js';
+import type { DraftTextSource } from '../../shared/approval-hash.js';
 import {
 	DEFAULT_DRAFT_PROVIDER,
 	normalizeDraftProviderName,
@@ -109,6 +111,47 @@ function resolveProviderName(settings: Readonly<Record<string, string>>): DraftP
 }
 
 /**
+ * One explicit headless generation, including the rate-limit backoff the
+ * scheduler applies in `#run`.
+ *
+ * `draftChat` does not throw on `rate_limit`. It deletes the row and returns
+ * `{ kind: 'rate_limited' }`. Treating that return as done leaves the draft
+ * gone. Each such result waits `retryAfterMs` and calls again — one follow-up
+ * per result, the same reschedule the scheduler arms with `#schedule`. The
+ * loop stops when the row is approved or already drafting, and on every other
+ * result (`ready`, `failed`, `no_reply_needed`, …). A rate limit is not one of
+ * those endings.
+ */
+async function draftHeadlessChat(run: {
+	db: AppDatabase;
+	provider: DraftProvider;
+	providerName: string;
+	memory: Memory;
+	chatJid: string;
+	requestedBy: DraftTextSource;
+	hooks: AgentDraftHooks;
+}): Promise<void> {
+	for (;;) {
+		const row = getDraft(run.db, run.chatJid);
+		if (row && (row.status === 'approved' || row.status === 'drafting')) return;
+		const result = await draftChat({
+			db: run.db,
+			provider: run.provider,
+			providerName: run.providerName,
+			memory: run.memory,
+			chatJid: run.chatJid,
+			ownerRequested: true,
+			requestedBy: run.requestedBy,
+			hooks: run.hooks
+		});
+		if (result.kind !== 'rate_limited') return;
+		await new Promise<void>((resolve) => {
+			setTimeout(resolve, result.retryAfterMs);
+		});
+	}
+}
+
+/**
  * `RoutesDeps` for a process with no WhatsApp channel and no window.
  *
  * Present: `db`, a subscriber-less `EventBus` (emits go nowhere, which is
@@ -123,29 +166,32 @@ function resolveProviderName(settings: Readonly<Record<string, string>>): DraftP
  */
 export async function createHeadlessDeps(
 	db: AppDatabase,
-	dataDir: string
+	dataDir: string,
+	overrides: { provider?: DraftProvider } = {}
 ): Promise<RoutesDeps> {
 	const events = new EventBus();
 	const settings = listSettings(db);
 	const providerName = resolveProviderName(settings);
 	const memory = new NullMemory();
 
-	let factoryOptions = {};
-	try {
-		factoryOptions = providerFactoryOptionsFromDiscovery(
-			await createDefaultProviderDiscovery().snapshot()
-		);
-	} catch {
-		// Same degradation as `startServer`: a failed probe means bare CLI names
-		// off PATH, not "drafting is off".
-	}
+	let provider = overrides.provider;
+	if (!provider) {
+		let factoryOptions = {};
+		try {
+			factoryOptions = providerFactoryOptionsFromDiscovery(
+				await createDefaultProviderDiscovery().snapshot()
+			);
+		} catch {
+			// Same degradation as `startServer`: a failed probe means bare CLI names
+			// off PATH, not "drafting is off".
+		}
 
-	let provider: DraftProvider | undefined;
-	try {
-		provider = createDraftProvider({ ...settings, provider: providerName }, factoryOptions);
-	} catch {
-		// No provider → `generate-draft` / `refine-draft` return their existing
-		// 503, exactly as they do in the app when the provider fails to build.
+		try {
+			provider = createDraftProvider({ ...settings, provider: providerName }, factoryOptions);
+		} catch {
+			// No provider → `generate-draft` / `refine-draft` return their existing
+			// 503, exactly as they do in the app when the provider fails to build.
+		}
 	}
 
 	return {
@@ -178,8 +224,9 @@ export async function createHeadlessDeps(
 		 * approved or in-flight draft" — are restated here, and `draftChat`
 		 * re-enforces R8 itself on the owner-requested branch.
 		 *
-		 * Fire-and-forget, matching the seam's synchronous `boolean` contract:
-		 * `true` means accepted, and the caller re-reads the draft row.
+		 * The seam stays synchronous: `true` means accepted, and the caller
+		 * re-reads the draft row. The run itself awaits `draftChat` and, on
+		 * `rate_limited`, waits and tries again. That result is not success.
 		 */
 		generateDraft: provider
 			? (chatJid, requestedBy) => {
@@ -189,13 +236,12 @@ export async function createHeadlessDeps(
 					if (draft && (draft.status === 'approved' || draft.status === 'drafting')) {
 						return false;
 					}
-					void draftChat({
+					void draftHeadlessChat({
 						db,
 						provider,
 						providerName,
 						memory,
 						chatJid,
-						ownerRequested: true,
 						requestedBy: requestedBy ?? 'system',
 						hooks: {
 							onDraftUpdated: (updated) =>
