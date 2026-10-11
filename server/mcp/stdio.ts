@@ -69,8 +69,10 @@ import { getMcpEnabledSetting } from '../store/settings.js';
 import {
 	annotateHeadlessResult,
 	createHeadlessDeps,
+	headlessStillEnabled,
 	HeadlessRefusal,
-	openHeadlessDatabase
+	openHeadlessDatabase,
+	releaseHeadlessDatabase
 } from './headless.js';
 import { readMcpRuntimeFile, type McpRuntimeFile } from './runtime.js';
 import { callRegistryTool, listRegistryTools } from './surface.js';
@@ -218,16 +220,17 @@ class ModeRouter {
 	 *
 	 * The row is the owner's switch. It is checked at open, and again on every
 	 * later call: turning External agents off must stop a session that is
-	 * already running. Anything other than exactly enabled closes that
-	 * database, drops the cache, and fails with the startup refusal. The stale
-	 * deps are not served.
+	 * already running. Anything other than exactly enabled waits for the
+	 * in-flight draft chain, closes that database, drops the cache, and fails
+	 * with the startup refusal. The stale deps are not served.
 	 */
 	async #liveHeadless(): Promise<Headless> {
 		if (!this.#headless) this.#headless = await this.#openHeadless();
-		if (getMcpEnabledSetting(this.#headless.db)) return this.#headless;
-		const stale = this.#headless;
-		this.#headless = null;
-		stale.db.close();
+		const session = this.#headless;
+		// Not exactly enabled: same refusal as startup. The close waits for
+		// an in-flight draft chain so the row is not left in `drafting`.
+		if (await headlessStillEnabled(session.db)) return session;
+		if (this.#headless === session) this.#headless = null;
 		throw new HeadlessRefusal(MCP_DISABLED_REFUSAL);
 	}
 
@@ -240,9 +243,14 @@ class ModeRouter {
 			const link = await probeAttached(this.#dataDir);
 			if (link) {
 				// One writer is the point: hand the database back before proxying.
-				this.#headless?.db.close();
-				this.#headless = null;
+				// Publish the link first so a request that arrives during the
+				// wait proxies here instead of opening a second headless
+				// connection. The close still waits for the in-flight draft
+				// chain — closing under it leaves the row stuck in `drafting`.
 				this.#attached = link;
+				const stale = this.#headless;
+				this.#headless = null;
+				if (stale) await releaseHeadlessDatabase(stale.db);
 				return link;
 			}
 			this.#rejected = { key: runtimeKey(runtime), at: Date.now() };
@@ -257,7 +265,9 @@ class ModeRouter {
 
 	async close(): Promise<void> {
 		await this.#attached?.client.close().catch(() => {});
-		this.#headless?.db.close();
+		const stale = this.#headless;
+		this.#headless = null;
+		if (stale) await releaseHeadlessDatabase(stale.db);
 	}
 }
 

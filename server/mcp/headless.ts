@@ -12,7 +12,7 @@ import {
 	providerFactoryOptionsFromDiscovery
 } from '../providers/discovery.js';
 import type { DraftProvider } from '../providers/provider.js';
-import { getChat } from '../store/chats.js';
+import { getChat, setChatAgentState } from '../store/chats.js';
 import {
 	codeSchemaVersion,
 	getDatabasePath,
@@ -20,8 +20,8 @@ import {
 	readSchemaVersion,
 	type AppDatabase
 } from '../store/db.js';
-import { getDraft } from '../store/drafts.js';
-import { listSettings } from '../store/settings.js';
+import { getDraft, upsertDraft } from '../store/drafts.js';
+import { getMcpEnabledSetting, listSettings } from '../store/settings.js';
 import type { DraftTextSource } from '../../shared/approval-hash.js';
 import {
 	DEFAULT_DRAFT_PROVIDER,
@@ -111,6 +111,129 @@ function resolveProviderName(settings: Readonly<Record<string, string>>): DraftP
 }
 
 /**
+ * better-sqlite3 throws this when a statement runs after `db.close()`.
+ * The message is the whole signal: the error is a `TypeError`, not a SQLite code.
+ */
+const DATABASE_CLOSED = 'database connection is not open';
+
+/**
+ * One in-flight `draftHeadlessChat` chain per chat, keyed by the connection
+ * that owns it. The scheduler keeps one timer per chat for the same reason:
+ * a second start must not run beside the first. After a rate limit the row
+ * is deleted, so the approved-or-drafting guard cannot see the sleeper.
+ */
+const headlessChains = new WeakMap<AppDatabase, Map<string, Promise<void>>>();
+
+/** One close in flight per connection, so the attach handoff and the MCP switch share it. */
+const headlessReleases = new WeakMap<AppDatabase, Promise<void>>();
+
+function chainsFor(db: AppDatabase): Map<string, Promise<void>> {
+	let chains = headlessChains.get(db);
+	if (!chains) {
+		chains = new Map();
+		headlessChains.set(db, chains);
+	}
+	return chains;
+}
+
+function isClosedDatabaseError(error: unknown): boolean {
+	return error instanceof Error && error.message.includes(DATABASE_CLOSED);
+}
+
+/**
+ * A write that fails because the connection is already closed must not leave
+ * the row in `drafting` — that status blocks every later generate. When this
+ * connection can still write, it records `failed` here. When it cannot, a
+ * short-lived connection to the same file does, then closes. That second
+ * connection is only the failure path: the handoff waits for the chain first,
+ * so the successful write lands on this connection before `db.close()`.
+ */
+function failDraftingIfStuck(db: AppDatabase, chatJid: string, hooks: AgentDraftHooks): void {
+	const row = getDraft(db, chatJid);
+	if (!row || row.status !== 'drafting') return;
+	upsertDraft(db, { ...row, status: 'failed', error_code: 'unavailable' });
+	setChatAgentState(db, chatJid, 'failed');
+	const updated = getDraft(db, chatJid);
+	if (updated) hooks.onDraftUpdated?.(updated);
+}
+
+function recoverClosedDraft(
+	db: AppDatabase,
+	dataDir: string,
+	chatJid: string,
+	hooks: AgentDraftHooks
+): void {
+	if (db.open) {
+		try {
+			failDraftingIfStuck(db, chatJid, hooks);
+			return;
+		} catch (error) {
+			if (!isClosedDatabaseError(error)) throw error;
+		}
+	}
+	const repair = openDatabase({ dataDir, migrate: false });
+	repair.pragma(`busy_timeout = ${HEADLESS_BUSY_TIMEOUT_MS}`);
+	try {
+		failDraftingIfStuck(repair, chatJid, hooks);
+	} finally {
+		repair.close();
+	}
+}
+
+/**
+ * Wait until every headless draft chain on this connection has finished,
+ * including a rate-limit sleep. Resolves even when a chain logged a failure,
+ * so the caller can still close.
+ */
+async function waitForHeadlessDrafts(db: AppDatabase): Promise<void> {
+	const chains = headlessChains.get(db);
+	if (!chains) return;
+	while (chains.size > 0) {
+		await Promise.allSettled([...chains.values()]);
+	}
+}
+
+/**
+ * Finish in-flight headless drafts, then close. Both ModeRouter closes — the
+ * headless-to-attached handoff and the live `mcp_enabled` refusal — go through
+ * here, and so does process shutdown. A second call for the same connection
+ * joins the first instead of closing under it.
+ */
+export function releaseHeadlessDatabase(db: AppDatabase): Promise<void> {
+	const existing = headlessReleases.get(db);
+	if (existing) return existing;
+	const run = (async () => {
+		await waitForHeadlessDrafts(db);
+		if (db.open) db.close();
+	})().finally(() => {
+		if (headlessReleases.get(db) === run) headlessReleases.delete(db);
+	});
+	headlessReleases.set(db, run);
+	return run;
+}
+
+/**
+ * REV-1's live check, followed by the same close as the attach handoff.
+ * `true` means the connection stays open because `mcp_enabled` is exactly on.
+ */
+export async function headlessStillEnabled(db: AppDatabase): Promise<boolean> {
+	if (getMcpEnabledSetting(db)) return true;
+	await releaseHeadlessDatabase(db);
+	return false;
+}
+
+type HeadlessDraftRun = {
+	db: AppDatabase;
+	dataDir: string;
+	provider: DraftProvider;
+	providerName: string;
+	memory: Memory;
+	chatJid: string;
+	requestedBy: DraftTextSource;
+	hooks: AgentDraftHooks;
+};
+
+/**
  * One explicit headless generation, including the rate-limit backoff the
  * scheduler applies in `#run`.
  *
@@ -121,33 +244,39 @@ function resolveProviderName(settings: Readonly<Record<string, string>>): DraftP
  * loop stops when the row is approved or already drafting, and on every other
  * result (`ready`, `failed`, `no_reply_needed`, …). A rate limit is not one of
  * those endings.
+ *
+ * A write that throws because the database is already closed is not one of
+ * those endings either. The row is already `drafting` by then; leaving it
+ * there blocks the chat. Record `failed` and stop.
  */
-async function draftHeadlessChat(run: {
-	db: AppDatabase;
-	provider: DraftProvider;
-	providerName: string;
-	memory: Memory;
-	chatJid: string;
-	requestedBy: DraftTextSource;
-	hooks: AgentDraftHooks;
-}): Promise<void> {
+async function draftHeadlessChat(run: HeadlessDraftRun): Promise<void> {
 	for (;;) {
-		const row = getDraft(run.db, run.chatJid);
-		if (row && (row.status === 'approved' || row.status === 'drafting')) return;
-		const result = await draftChat({
-			db: run.db,
-			provider: run.provider,
-			providerName: run.providerName,
-			memory: run.memory,
-			chatJid: run.chatJid,
-			ownerRequested: true,
-			requestedBy: run.requestedBy,
-			hooks: run.hooks
-		});
-		if (result.kind !== 'rate_limited') return;
-		await new Promise<void>((resolve) => {
-			setTimeout(resolve, result.retryAfterMs);
-		});
+		try {
+			const row = getDraft(run.db, run.chatJid);
+			if (row && (row.status === 'approved' || row.status === 'drafting')) return;
+			const result = await draftChat({
+				db: run.db,
+				provider: run.provider,
+				providerName: run.providerName,
+				memory: run.memory,
+				chatJid: run.chatJid,
+				ownerRequested: true,
+				requestedBy: run.requestedBy,
+				hooks: run.hooks
+			});
+			if (result.kind !== 'rate_limited') return;
+			await new Promise<void>((resolve) => {
+				setTimeout(resolve, result.retryAfterMs);
+			});
+		} catch (error) {
+			if (!isClosedDatabaseError(error) && run.db.open) throw error;
+			console.error(
+				'[mcp] headless draft failed',
+				error instanceof Error ? error.message : 'database connection is not open'
+			);
+			recoverClosedDraft(run.db, run.dataDir, run.chatJid, run.hooks);
+			return;
+		}
 	}
 }
 
@@ -225,34 +354,46 @@ export async function createHeadlessDeps(
 		 * re-enforces R8 itself on the owner-requested branch.
 		 *
 		 * The seam stays synchronous: `true` means accepted, and the caller
-		 * re-reads the draft row. The run itself awaits `draftChat` and, on
-		 * `rate_limited`, waits and tries again. That result is not success.
+		 * re-reads the draft row. The run itself is one chain per chat — the
+		 * scheduler's one timer per chat — stored so a later close can wait
+		 * for it. The chain awaits `draftChat` and, on `rate_limited`, waits
+		 * and tries again. That result is not success, and a second
+		 * `generateDraft` during the sleep must not start another chain: the
+		 * row was deleted, so the approved-or-drafting guard cannot see it.
 		 */
 		generateDraft: provider
 			? (chatJid, requestedBy) => {
 					const chat = getChat(db, chatJid);
 					if (!chat || chat.kind !== '1:1') return false;
+					const chains = chainsFor(db);
+					if (chains.has(chatJid)) return false;
 					const draft = getDraft(db, chatJid);
 					if (draft && (draft.status === 'approved' || draft.status === 'drafting')) {
 						return false;
 					}
-					void draftHeadlessChat({
+					const hooks: AgentDraftHooks = {
+						onDraftUpdated: (updated) =>
+							events.emit({ type: 'draft-updated', draft: updated })
+					};
+					const run = draftHeadlessChat({
 						db,
+						dataDir,
 						provider,
 						providerName,
 						memory,
 						chatJid,
 						requestedBy: requestedBy ?? 'system',
-						hooks: {
-							onDraftUpdated: (updated) =>
-								events.emit({ type: 'draft-updated', draft: updated })
-						}
+						hooks
 					}).catch((error: unknown) => {
 						console.error(
 							'[mcp] headless draft failed',
 							error instanceof Error ? error.message : 'error'
 						);
 					});
+					const tracked = run.finally(() => {
+						if (chains.get(chatJid) === tracked) chains.delete(chatJid);
+					});
+					chains.set(chatJid, tracked);
 					return true;
 				}
 			: undefined
