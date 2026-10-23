@@ -80,7 +80,7 @@ import {
 } from './store/settings.js';
 import { cancelStaleDraftOutbox } from './store/outbox.js';
 
-const DEFAULT_PORT = 8787;
+const DEFAULT_PORT = 8789;
 const DEFAULT_HOST = '127.0.0.1';
 export const HISTORY_SYNC_COMPLETE_SETTING = 'whatsapp_history_sync_complete';
 

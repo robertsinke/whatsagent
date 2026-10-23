@@ -64,7 +64,7 @@ npm run dev
 
 | Process | URL | Role |
 | --- | --- | --- |
-| Backend | `http://127.0.0.1:8787` | REST + WebSocket + Baileys + SQLite |
+| Backend | `http://127.0.0.1:8789` | REST + WebSocket + Baileys + SQLite |
 | SPA (Vite) | `http://localhost:5173` | UI; use this origin in development |
 
 Ctrl+C (or SIGTERM) stops both processes cleanly: the runner owns shutdown and forwards the signal to each process group, then escalates to SIGKILL after a short grace period.
@@ -80,7 +80,7 @@ npm run dev:web      # Vite only
 
 ```bash
 npm run build   # svelte-check + strict server typecheck + static build
-npm start       # serves API + the built SPA from build/ on 8787
+npm start       # serves API + the built SPA from build/ on 8789
 ```
 
 In production there is no Vite proxy — the backend serves the SPA and API from one origin.
@@ -304,7 +304,7 @@ belonging to a dev run. It therefore starts unpaired, with no chat history.
 | Symptom | What to check |
 | --- | --- |
 | `Port 5173 is already in use` | Vite uses `strictPort: true` on 5173 (Origin allowlist). Free that port or stop the other Vite. |
-| SPA loads but API/WS fail | Backend up on 8787? Dev origin must be `http://localhost:5173` (strict). |
+| SPA loads but API/WS fail | Backend up on 8789? Dev origin must be `http://localhost:5173` (strict). |
 | `Origin not allowed` / 403 on mutations | Foreign origin or wrong Host — loopback + allowed origins only. |
 | Claude/Codex drafts bill the API | Ensure subscription login; confirm stripped env keys (see above). `total_cost_usd` in Claude CLI output is a usage estimate, not proof of API billing. |
 | Provider / memory / dry-run change ignored | Restart the backend process. |

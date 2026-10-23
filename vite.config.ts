@@ -2,7 +2,7 @@ import tailwindcss from '@tailwindcss/vite';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vitest/config';
 
-const BACKEND_ORIGIN = `http://127.0.0.1:${process.env.PORT ?? 8787}`;
+const BACKEND_ORIGIN = `http://127.0.0.1:${process.env.PORT ?? 8789}`;
 
 export default defineConfig({
 	plugins: [
@@ -19,7 +19,7 @@ export default defineConfig({
 		// The backend explicitly trusts this development origin. Do not drift to
 		// another port or the Origin check becomes either broken or over-broad.
 		strictPort: true,
-		// `vite dev` serves the SPA on 5173 while the API lives on 8787. The backend
+		// `vite dev` serves the SPA on 5173 while the API lives on 8789. The backend
 		// rejects any Origin that isn't its own (localhost CSRF defense), so the dev
 		// proxy must present the backend's origin — in production they are one origin
 		// and this proxy does not exist.
