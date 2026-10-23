@@ -16,11 +16,11 @@ node_modules
 .env.*
 !.env.example
 
-# Contributor-local editor / agent settings (must live in-repo; a global
-# ignore only covers the owner machine). settings.json IS tracked — it holds
-# this repo's local orchestration hooks, and the publish export drops .claude/
-# wholesale, so nothing here reaches the public tree by being versioned.
-.claude/settings.local.json
+# Local-only editor, agent, orchestration, and project-note directories.
+.claude/
+.slayzone/
+.githooks/
+docs/
 .vscode/
 .idea/
 
@@ -34,5 +34,5 @@ coverage/
 # values are the disclosure the gate exists to catch.
 scripts/private-patterns.local
 
-# Stray screenshots dropped at the repo root (evidence under docs/ is fine)
+# Stray screenshots dropped at the repo root
 /*.png
